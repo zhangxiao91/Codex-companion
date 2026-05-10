@@ -73,6 +73,7 @@ class MainActivity : ComponentActivity() {
                 onGitDiff = viewModel::requestGitDiff,
                 onGitFileDiff = viewModel::requestGitFileDiff,
                 onGitCommit = viewModel::requestGitCommit,
+                onGitPush = viewModel::requestGitPush,
                 onApprovalDecision = viewModel::decideApproval,
                 onPromptSend = viewModel::sendPrompt
             )
@@ -92,6 +93,7 @@ private fun CompanionApp(
     onGitDiff: () -> Unit,
     onGitFileDiff: (String) -> Unit,
     onGitCommit: (String, String) -> Unit,
+    onGitPush: () -> Unit,
     onApprovalDecision: (String, String) -> Unit,
     onPromptSend: (String) -> Unit
 ) {
@@ -117,6 +119,7 @@ private fun CompanionApp(
                 onGitDiff = onGitDiff,
                 onGitFileDiff = onGitFileDiff,
                 onGitCommit = onGitCommit,
+                onGitPush = onGitPush,
                 onApprovalDecision = onApprovalDecision,
                 onPromptSend = onPromptSend
             )
@@ -136,6 +139,7 @@ private fun SessionDashboard(
     onGitDiff: () -> Unit,
     onGitFileDiff: (String) -> Unit,
     onGitCommit: (String, String) -> Unit,
+    onGitPush: () -> Unit,
     onApprovalDecision: (String, String) -> Unit,
     onPromptSend: (String) -> Unit
 ) {
@@ -169,7 +173,8 @@ private fun SessionDashboard(
             onStatus = onGitStatus,
             onDiff = onGitDiff,
             onFileDiff = onGitFileDiff,
-            onCommit = onGitCommit
+            onCommit = onGitCommit,
+            onPush = onGitPush
         )
         ApprovalInbox(
             approvals = uiState.pendingApprovals,
@@ -431,12 +436,15 @@ private fun GitPanel(
     onStatus: () -> Unit,
     onDiff: () -> Unit,
     onFileDiff: (String) -> Unit,
-    onCommit: (String, String) -> Unit
+    onCommit: (String, String) -> Unit,
+    onPush: () -> Unit
 ) {
     var commitMessage by remember { mutableStateOf("") }
     var commitStrategy by remember { mutableStateOf("tracked_only") }
     var confirmCommit by remember { mutableStateOf(false) }
+    var confirmPush by remember { mutableStateOf(false) }
     val canCommit = snapshot?.files?.isNotEmpty() == true && connectionStatus == "Online"
+    val canPush = snapshot != null && snapshot.files.isEmpty() && connectionStatus == "Online"
 
     Panel {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -545,6 +553,22 @@ private fun GitPanel(
             ) {
                 Text("Commit")
             }
+            OutlinedButton(
+                modifier = Modifier.fillMaxWidth(),
+                enabled = canPush,
+                onClick = { confirmPush = true }
+            ) {
+                Text("Push")
+            }
+            if (snapshot != null && snapshot.files.isNotEmpty()) {
+                Text(
+                    text = "Push is available only when the worktree is clean.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF8A94A6),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
             snapshot?.takeIf { it.untrackedFileCount > 0 }?.let { currentSnapshot ->
                 Text(
                     text = commitStrategyWarning(currentSnapshot, commitStrategy),
@@ -574,6 +598,17 @@ private fun GitPanel(
             onConfirm = {
                 onCommit(commitMessage, commitStrategy)
                 confirmCommit = false
+            }
+        )
+    }
+
+    if (confirmPush) {
+        PushConfirmDialog(
+            branch = snapshot?.branch ?: selectedSession?.branch ?: "unknown",
+            onDismiss = { confirmPush = false },
+            onConfirm = {
+                onPush()
+                confirmPush = false
             }
         )
     }
@@ -684,6 +719,53 @@ private fun CommitConfirmDialog(
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF176B52))
                     ) {
                         Text("Confirm")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PushConfirmDialog(
+    branch: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(8.dp),
+            color = Color.White
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text("Confirm push", fontWeight = FontWeight.SemiBold)
+                Text(
+                    text = pushConfirmText(branch),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF5E6978)
+                )
+                Text(
+                    text = "Host Bridge will execute push only when write and push actions are explicitly enabled and host policy allows it.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFFB42318)
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton(
+                        modifier = Modifier.weight(1f),
+                        onClick = onDismiss
+                    ) {
+                        Text("Cancel")
+                    }
+                    Button(
+                        modifier = Modifier.weight(1f),
+                        onClick = onConfirm,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF176B52))
+                    ) {
+                        Text("Push")
                     }
                 }
             }
@@ -1008,4 +1090,8 @@ private fun commitStrategyWarning(snapshot: GitSnapshot, commitStrategy: String)
     } else {
         "${snapshot.untrackedFileCount} untracked file(s) will not be included by the current commit strategy."
     }
+}
+
+private fun pushConfirmText(branch: String): String {
+    return "This requests `git push` for branch $branch. The local worktree must be clean and the branch must have an upstream tracking branch."
 }

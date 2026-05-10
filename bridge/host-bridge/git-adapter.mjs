@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 
 const gitWriteActionsEnabled = process.env.GIT_WRITE_ACTIONS_ENABLED === 'true';
+const gitPushActionsEnabled = process.env.GIT_PUSH_ACTIONS_ENABLED === 'true';
 const maxFileDiffBytes = Number.parseInt(process.env.GIT_FILE_DIFF_MAX_BYTES ?? '20000', 10);
 const CommitStrategy = Object.freeze({
   TrackedOnly: 'tracked_only',
@@ -61,14 +62,24 @@ export async function handleGitRequest(session, request) {
   }
 
   if (action === 'push') {
-    if (!gitWriteActionsEnabled) {
-      return createSnapshot(session, action, await readGitSnapshot(repoPath), {
+    const prePushSnapshot = await readGitSnapshot(repoPath);
+    const pushPolicy = evaluatePushPolicy(prePushSnapshot);
+
+    if (!gitWriteActionsEnabled || !gitPushActionsEnabled) {
+      return createSnapshot(session, action, prePushSnapshot, {
         ok: false,
-        message: 'Git push is disabled. Set GIT_WRITE_ACTIONS_ENABLED=true on Host Bridge to enable it.'
+        message: 'Git push is disabled. Set both GIT_WRITE_ACTIONS_ENABLED=true and GIT_PUSH_ACTIONS_ENABLED=true on Host Bridge to enable it.'
       }, undefined, auditId);
     }
 
-    const push = await runGit(repoPath, ['push']);
+    if (!pushPolicy.ok) {
+      return createSnapshot(session, action, prePushSnapshot, {
+        ok: false,
+        message: pushPolicy.message
+      }, undefined, auditId);
+    }
+
+    const push = await runGit(repoPath, ['push', '--porcelain']);
     return createSnapshot(session, action, await readGitSnapshot(repoPath), {
       ok: push.exitCode === 0,
       message: push.output.trim() || push.error.trim()
@@ -82,11 +93,12 @@ export async function handleGitRequest(session, request) {
 }
 
 async function readGitSnapshot(repoPath) {
-  const [status, diffStat, changedFiles, branch] = await Promise.all([
+  const [status, diffStat, changedFiles, branch, upstream] = await Promise.all([
     runGit(repoPath, ['status', '--porcelain=v1', '-b']),
     runGit(repoPath, ['diff', '--stat']),
     runGit(repoPath, ['diff', '--name-only']),
-    runGit(repoPath, ['branch', '--show-current'])
+    runGit(repoPath, ['branch', '--show-current']),
+    runGit(repoPath, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'])
   ]);
 
   const statusLines = status.output.split(/\r?\n/).filter(Boolean);
@@ -97,6 +109,7 @@ async function readGitSnapshot(repoPath) {
   return {
     repo_path: repoPath,
     branch: branch.output.trim() || parseBranch(statusLines[0]) || 'unknown',
+    upstream: upstream.exitCode === 0 ? upstream.output.trim() : '',
     is_git_repo: status.exitCode === 0,
     status_summary: summarizeFiles(files),
     tracked_file_count: files.filter((file) => file.tracked).length,
@@ -123,6 +136,7 @@ function createSnapshot(
     action,
     repo_path: git.repo_path,
     branch: git.branch,
+    upstream: git.upstream,
     is_git_repo: git.is_git_repo,
     status_summary: git.status_summary,
     tracked_file_count: git.tracked_file_count,
@@ -209,6 +223,41 @@ function normalizeCommitStrategy(strategy) {
   return strategy === CommitStrategy.IncludeUntracked
     ? CommitStrategy.IncludeUntracked
     : CommitStrategy.TrackedOnly;
+}
+
+function evaluatePushPolicy(git) {
+  if (!git.is_git_repo) {
+    return {
+      ok: false,
+      message: git.error || 'Git push blocked because the session repository is not a git repo.'
+    };
+  }
+
+  if (!git.branch || git.branch === 'unknown' || git.branch === 'HEAD') {
+    return {
+      ok: false,
+      message: 'Git push blocked because the current branch is unknown or detached.'
+    };
+  }
+
+  if (!git.upstream) {
+    return {
+      ok: false,
+      message: 'Git push blocked because the current branch has no upstream tracking branch.'
+    };
+  }
+
+  if (git.files.length > 0) {
+    return {
+      ok: false,
+      message: `Git push blocked because the worktree is not clean (${git.files.length} changed file(s)). Commit or discard changes first.`
+    };
+  }
+
+  return {
+    ok: true,
+    message: `Push allowed for ${git.branch} -> ${git.upstream}.`
+  };
 }
 
 function summarizeFiles(files) {

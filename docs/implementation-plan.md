@@ -194,7 +194,7 @@ UI 要求：
 - Relay 已有 metadata-only Git action audit，记录 requested/completed、device、action、file path 和结果摘要；当前仍是内存态，未持久化查询。
 - Android 已有 commit message 输入和二次确认 UI；commit 执行默认受 `GIT_WRITE_ACTIONS_ENABLED=true` 保护。
 - Git snapshot 已区分 tracked/untracked files；Android commit confirmation 支持 `tracked_only` 和 `include_untracked` 两种策略。`include_untracked` 只有在 Host Bridge 显式启用 `GIT_WRITE_ACTIONS_ENABLED=true` 后才会执行 `git add -A`。
-- push adapter 已预留，但尚未在 Android 默认暴露。
+- push 已接入 Android 二次确认 UI 和 Host Bridge policy；执行需同时启用 `GIT_WRITE_ACTIONS_ENABLED=true` 与 `GIT_PUSH_ACTIONS_ENABLED=true`，并要求已知 branch、upstream tracking branch 和 clean worktree。
 
 任务：
 
@@ -204,10 +204,10 @@ UI 要求：
 - 支持 file-level diff。（已完成 compact preview）
 - 支持生成 commit message。
 - 支持 commit。（已完成确认 UI、tracked/untracked 提示和显式 commit strategy；执行仍 gated）
-- 支持 push。
+- 支持 push。（已完成确认 UI 和 host policy；执行仍 gated）
 - Android 实现 Git status 页面。（已完成紧凑面板）
 - Android 实现 diff review 页面。（已完成 Git 面板内 compact preview；后续可拆成完整页面）
-- Android 实现 commit/push confirmation flow。（已完成 commit confirmation；push 待做）
+- Android 实现 commit/push confirmation flow。（已完成 commit 和 push confirmation）
 
 验收标准：
 

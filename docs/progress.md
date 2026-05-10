@@ -1577,3 +1577,58 @@ Next recommended step:
 
 1. Add push confirmation with host policy checks.
 2. Add persistent/queryable Git audit storage.
+
+## 2026-05-10: Push confirmation and host policy
+
+Status: completed.
+
+Goal:
+
+- Add a mobile push request path without making push easy to trigger accidentally.
+- Keep real push execution behind host-side policy gates.
+
+Changes:
+
+- Android Git panel now exposes Push only when the latest Git snapshot has a clean worktree.
+- Tapping Push opens a confirmation dialog explaining the branch and host policy requirements.
+- Android sends `git.request` with `action: "push"` only after confirmation.
+- Host Bridge push execution now requires both:
+  - `GIT_WRITE_ACTIONS_ENABLED=true`
+  - `GIT_PUSH_ACTIONS_ENABLED=true`
+- Host Bridge blocks push unless:
+  - the repository is valid,
+  - the current branch is known and not detached,
+  - the branch has an upstream tracking branch,
+  - the worktree is clean.
+- Host Bridge uses `git push --porcelain` when all policy gates pass.
+- `npm run verify:git-flow` now covers the default blocked push path and verifies requested/completed Git audit events.
+- The verify script now removes WebSocket message listeners after matching messages to avoid listener accumulation warnings.
+
+Verification commands:
+
+```powershell
+npm run verify:git-flow
+cd android
+$env:JAVA_HOME='C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot'
+$env:ANDROID_HOME='C:\Users\13372\AppData\Local\Android\Sdk'
+$env:ANDROID_SDK_ROOT=$env:ANDROID_HOME
+$env:Path="$env:JAVA_HOME\bin;$env:ANDROID_HOME\platform-tools;$env:Path"
+.\gradlew.bat :app:assembleDebug
+```
+
+Verification result:
+
+```text
+[verify] Git status, file diff, commit strategy, push policy, and audit flow verified.
+BUILD SUCCESSFUL
+```
+
+Current limitations:
+
+- Push has not been manually tested against a disposable remote with host gates enabled.
+- Git audit events remain in-memory metadata events; they are not persistent/queryable yet.
+
+Next recommended step:
+
+1. Add persistent/queryable Git audit storage.
+2. Add a disposable-remote manual test checklist before enabling push for real repositories.

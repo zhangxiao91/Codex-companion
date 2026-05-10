@@ -137,6 +137,10 @@ class RelayViewModel(
         requestGit("commit", message = message.trim(), commitStrategy = commitStrategy)
     }
 
+    fun requestGitPush() {
+        requestGit("push")
+    }
+
     fun decideApproval(approvalId: String, decision: String) {
         relayClient.sendApprovalDecision(approvalId, decision)
     }

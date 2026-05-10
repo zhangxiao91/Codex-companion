@@ -109,16 +109,36 @@ try {
     throw new Error('Expected commit result to preserve include_untracked strategy.');
   }
 
+  const pushRequestedAudit = waitForGitAudit(client, 'requested', 'push', 5000);
+  const pushCompletedAuditPromise = waitForGitAudit(client, 'completed', 'push', 5000);
+  send(client, MessageType.GitRequest, {
+    session_id: 'mock-session-001',
+    action: 'push'
+  }, deviceToken);
+  const pushSnapshot = await waitForGitSnapshot(client, 'push', 5000);
+  await pushRequestedAudit;
+  const pushCompletedAudit = await pushCompletedAuditPromise;
+  if (pushCompletedAudit.payload.result_ok !== false) {
+    throw new Error('Expected push audit result to be blocked.');
+  }
+  if (pushSnapshot.result?.ok !== false) {
+    throw new Error('Expected push to be disabled by default.');
+  }
+  if (!pushSnapshot.result?.message?.includes('GIT_PUSH_ACTIONS_ENABLED=true')) {
+    throw new Error('Expected push result to mention the host push policy gate.');
+  }
+
   const health = await readHealth(relayPort, deviceToken);
-  if ((health.counts?.git_audit_events ?? 0) < 6) {
-    throw new Error(`Expected at least 6 git audit events, received ${health.counts?.git_audit_events}`);
+  if ((health.counts?.git_audit_events ?? 0) < 8) {
+    throw new Error(`Expected at least 8 git audit events, received ${health.counts?.git_audit_events}`);
   }
 
   await waitForOutput(bridge, 'received git status for mock-session-001', 5000);
   await waitForOutput(bridge, 'received git diff for mock-session-001', 5000);
   await waitForOutput(bridge, 'received git commit for mock-session-001', 5000);
+  await waitForOutput(bridge, 'received git push for mock-session-001', 5000);
   client.close();
-  console.log('[verify] Git status, file diff, and audit flow verified.');
+  console.log('[verify] Git status, file diff, commit strategy, push policy, and audit flow verified.');
 } finally {
   await writeFile(diffFixturePath, originalFixture);
   await rm(untrackedFixturePath, { force: true });
@@ -249,24 +269,31 @@ function waitForGitAudit(socket, phase, action, timeoutMs) {
 
 function waitForMessage(socket, timeoutMs, selector) {
   return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      socket.removeEventListener('message', onMessage);
+    };
     const timer = setTimeout(() => {
+      socket.removeEventListener('message', onMessage);
       reject(new Error('Timed out waiting for WebSocket message.'));
     }, timeoutMs);
 
-    socket.addEventListener('message', (event) => {
+    const onMessage = (event) => {
       const message = decodeMessage(event.data);
       if (message.type === MessageType.Error) {
-        clearTimeout(timer);
+        cleanup();
         reject(new Error(message.payload.detail));
         return;
       }
 
       const selected = selector(message);
       if (selected !== undefined) {
-        clearTimeout(timer);
+        cleanup();
         resolve(selected);
       }
-    });
+    };
+
+    socket.addEventListener('message', onMessage);
   });
 }
 
