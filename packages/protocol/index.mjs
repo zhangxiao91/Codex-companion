@@ -6,6 +6,7 @@ export const MessageType = Object.freeze({
   Error: 'error',
   HostRegister: 'host.register',
   HostHeartbeat: 'host.heartbeat',
+  SessionCreateEphemeral: 'session.create_ephemeral',
   SessionSnapshot: 'session.snapshot',
   SessionSubscribe: 'session.subscribe',
   SessionPrompt: 'session.prompt',

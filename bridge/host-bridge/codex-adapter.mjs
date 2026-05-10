@@ -204,6 +204,25 @@ export class AppServerCodexAdapter {
     ));
   }
 
+  async createEphemeralSession(options = {}) {
+    const response = await this.request('thread/start', {
+      cwd: options.cwd ?? process.cwd(),
+      approvalPolicy: 'never',
+      sandbox: 'read-only',
+      ephemeral: true,
+      threadSource: 'user',
+      serviceName: 'codex-mobile-companion-test',
+      baseInstructions: options.baseInstructions ?? 'You are being used for a Codex Mobile Companion integration test. Keep responses concise.',
+      developerInstructions: options.developerInstructions ?? null,
+      experimentalRawEvents: false,
+      persistExtendedHistory: false
+    });
+
+    const session = mapThreadToSession(response.thread, this.hostId);
+    this.cachedSessions = [session, ...this.cachedSessions.filter((item) => item.session_id !== session.session_id)];
+    return session;
+  }
+
   handleMessage(raw) {
     const message = JSON.parse(raw);
 

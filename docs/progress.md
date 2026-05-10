@@ -360,3 +360,55 @@ npm run verify:live-notification-mapper
 1. 增加测试专用 ephemeral thread 创建，避免 prompt 验证写入真实历史 thread。
 2. 实现 `turn/steer`，用于 active turn 的追加指令。
 3. 让 test client 等待 `turn/completed` 或 assistant delta，验证完整回答链路。
+
+## 2026-05-10: Ephemeral prompt verification
+
+状态：完成。
+
+本次目标：
+
+- 避免 prompt 验证继续写入用户真实历史 thread。
+- 通过 App Server `thread/start` 创建专用 ephemeral test thread。
+- 在 ephemeral thread 上执行 `turn/start` 验证。
+
+完成内容：
+
+- 新增协议消息：`session.create_ephemeral`。
+- Relay 支持将 ephemeral session create 请求路由到指定 Host Bridge。
+- Host Bridge 支持调用 adapter `createEphemeralSession()` 并发布 `session.snapshot`。
+- `AppServerCodexAdapter.createEphemeralSession()` 使用 App Server `thread/start` 创建 ephemeral thread。
+- 新增 `tools/ephemeral-prompt-client/`。
+- `npm run verify:app-server-prompt` 已改为使用 ephemeral thread，不再选择历史 thread。
+- `package.json` 新增 `ephemeral-prompt-client` 脚本。
+
+验证命令：
+
+```powershell
+npm run verify:app-server-prompt
+npm run verify:delivery-strategy
+npm run verify:app-server-timeline
+npm run verify:live-notification-mapper
+```
+
+验证结果摘要：
+
+```text
+[relay] routing ephemeral session create to host local-dev-host
+[bridge] created ephemeral session 019e1063-d4e4-7fe0-bda7-2a3270f29a2b
+[ephemeral-client] ephemeral session visible: 019e1063-d4e4-7fe0-bda7-2a3270f29a2b
+[ephemeral-client] prompt sent: Reply with exactly: OK
+[ephemeral-client] timeline event received: Prompt sent to Codex
+[verify] App Server ephemeral turn/start prompt routed through Relay.
+```
+
+当前限制：
+
+- ephemeral thread 解决了测试污染问题，但真实产品仍需要明确“新建会话”和“向已有会话发送指令”的 UI 区分。
+- 验证仍只等待 `turn_start_requested`，没有等待 `turn/completed`。
+- active turn 场景仍未实现 `turn/steer`。
+
+下一步建议：
+
+1. 实现 active turn 的 `turn/steer`。
+2. 为 prompt 验证增加等待 assistant delta 或 `turn/completed` 的模式。
+3. 将 Relay 的 session/timeline 状态做最小缓存，支持客户端断线重连后恢复。

@@ -59,6 +59,9 @@ function handleMessage(connection, raw) {
       case MessageType.HostHeartbeat:
         handleHostHeartbeat(connection, message);
         break;
+      case MessageType.SessionCreateEphemeral:
+        handleSessionCreateEphemeral(connection, message);
+        break;
       case MessageType.SessionSnapshot:
         handleSessionSnapshot(connection, message);
         break;
@@ -111,6 +114,22 @@ function handleHostHeartbeat(connection, message) {
 
   host.last_seen_at = new Date().toISOString();
   host.status = 'online';
+}
+
+function handleSessionCreateEphemeral(connection, message) {
+  requirePayloadField(message, 'host_id');
+
+  connection.role = SenderRole.Client;
+  state.clients.add(connection);
+
+  const hostConnection = state.hostConnections.get(message.payload.host_id);
+  if (!hostConnection) {
+    sendError(connection, `Host is offline: ${message.payload.host_id}`);
+    return;
+  }
+
+  console.log(`[relay] routing ephemeral session create to host ${message.payload.host_id}`);
+  send(hostConnection, message);
 }
 
 function handleSessionSnapshot(connection, message) {

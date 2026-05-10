@@ -77,6 +77,17 @@ socket.addEventListener('message', async (event) => {
       return;
     }
 
+    if (message.type === MessageType.SessionCreateEphemeral) {
+      if (typeof adapter.createEphemeralSession !== 'function') {
+        return;
+      }
+
+      const session = await adapter.createEphemeralSession(message.payload);
+      console.log(`[bridge] created ephemeral session ${session.session_id}`);
+      send(MessageType.SessionSnapshot, { session });
+      return;
+    }
+
     if (message.type === MessageType.Error) {
       console.error(`[bridge] relay error: ${message.payload.detail}`);
     }

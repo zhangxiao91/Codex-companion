@@ -24,26 +24,26 @@ try {
   await waitForOutput(relay, '[relay] session snapshot', 10000);
 
   const client = spawnProcess(
-    'test-client',
+    'ephemeral-client',
     'node',
-    ['tools/test-client/index.mjs', 'Reply with exactly: OK'],
+    ['tools/ephemeral-prompt-client/index.mjs', 'Reply with exactly: OK'],
     {
       ...process.env,
       RELAY_URL: relayUrl,
-      TEST_CLIENT_EXPECT_EVENT_TYPE: 'turn_start_requested',
-      TEST_CLIENT_TIMEOUT_MS: '60000'
+      EPHEMERAL_CLIENT_TIMEOUT_MS: '60000'
     }
   );
   processes.push(client);
 
   const exitCode = await waitForExit(client, 60000);
   if (exitCode !== 0) {
-    throw new Error(`test-client exited with code ${exitCode}`);
+    throw new Error(`ephemeral-client exited with code ${exitCode}`);
   }
 
+  await waitForOutput(bridge, '[bridge] created ephemeral session', 10000);
   await waitForOutput(bridge, '[bridge] received prompt', 5000);
   await waitForOutput(relay, '[relay] timeline event', 30000);
-  console.log('[verify] App Server turn/start prompt routed through Relay.');
+  console.log('[verify] App Server ephemeral turn/start prompt routed through Relay.');
 } finally {
   for (const child of processes.reverse()) {
     if (!child.killed) {

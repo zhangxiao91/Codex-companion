@@ -195,4 +195,5 @@ Next implementation target:
 2. Historical turns/items are mapped into mobile timeline events through `session.timeline.request`.
 3. Live App Server notifications are mapped into incremental timeline events.
 4. `turn/start` prompt routing is implemented for loaded/resumed threads.
-5. Next: create dedicated ephemeral test threads and add `turn/steer` for active turns.
+5. Dedicated ephemeral test threads are implemented through `thread/start`.
+6. Next: add `turn/steer` for active turns and wait for `turn/completed` in verification.
