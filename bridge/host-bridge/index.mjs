@@ -54,6 +54,23 @@ socket.addEventListener('message', async (event) => {
       return;
     }
 
+    if (message.type === MessageType.SessionTimelineRequest) {
+      const { session_id: sessionId } = message.payload;
+      console.log(`[bridge] received timeline request for ${sessionId}`);
+
+      if (typeof adapter.readTimeline !== 'function') {
+        return;
+      }
+
+      const responses = await adapter.readTimeline(sessionId, {
+        limit: message.payload.limit
+      });
+      for (const response of responses) {
+        socket.send(encodeMessage(response));
+      }
+      return;
+    }
+
     if (message.type === MessageType.Error) {
       console.error(`[bridge] relay error: ${message.payload.detail}`);
     }

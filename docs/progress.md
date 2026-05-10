@@ -173,3 +173,68 @@ npm run verify:app-server-readonly
 1. 实现 `thread/read`，让移动端能看到真实 thread 的 turns/items。
 2. 将 App Server notifications 映射为 timeline events。
 3. 再实现 `turn/start` 或 `turn/steer`，让真实 session 支持手机 prompt。
+
+## 2026-05-10: App Server thread/read timeline MVP
+
+状态：完成。
+
+本次目标：
+
+- 增加客户端请求真实 session timeline 的协议。
+- Host Bridge 通过 App Server `thread/read` 读取真实 thread turns/items。
+- 将 Codex Thread/Turn/ThreadItem 映射为移动端 timeline events。
+- 验证真实历史 thread 可以通过 Relay 返回 timeline。
+
+完成内容：
+
+- 新增协议消息：`session.timeline.request`。
+- Relay 支持将 timeline request 路由到对应 Host Bridge。
+- Host Bridge 支持接收 timeline request 并调用 adapter `readTimeline()`。
+- `MockCodexAdapter` 支持返回 mock timeline。
+- `AppServerCodexAdapter` 支持 `thread/read`，并将 turns/items 映射为 timeline events。
+- 新增 `tools/timeline-client/`。
+- 新增 `npm run verify:app-server-timeline`。
+- Relay 在 websocket send/error 失败时清理连接，减少验证退出时的断连噪音。
+
+当前 timeline 映射支持：
+
+- `turn_started`
+- `turn_completed`
+- `user_prompt`
+- `assistant_message`
+- `plan_update`
+- `reasoning_summary`
+- `command_execution`
+- `file_changed`
+- `tool_call`
+- unknown item fallback
+
+验证命令：
+
+```powershell
+npm run verify:delivery-strategy
+npm run verify:app-server-readonly
+npm run verify:app-server-timeline
+```
+
+验证结果摘要：
+
+```text
+[verify] Delivery Strategy main path verified.
+[verify] App Server read-only adapter listed sessions through Relay.
+[timeline-client] timeline event received: turn_started Turn started
+[verify] App Server thread/read timeline mapped through Relay.
+```
+
+当前限制：
+
+- timeline request 已支持 `limit`，但尚未做分页或游标。
+- Relay 还没有缓存 timeline events。
+- App Server live notifications 仍只打印日志，还没有增量映射成 timeline。
+- App Server adapter 仍未实现 `turn/start` / `turn/steer`，真实 session 尚不能接收手机 prompt。
+
+下一步建议：
+
+1. 增加 timeline event limit/cursor，避免一次性推送过多历史事件。
+2. 将 App Server live notifications 映射为增量 timeline events。
+3. 实现真实 prompt 路由：优先验证 `turn/start`，再评估 active turn 场景下的 `turn/steer`。

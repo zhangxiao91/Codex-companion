@@ -21,6 +21,7 @@
 - WindowsApps app alias 的 `codex --help` 和 `codex --version` 返回 `Access is denied`；VS Code 扩展内置 Codex CLI 可执行，版本为 `codex-cli 0.129.0-alpha.15`。
 - App Server 协议覆盖初判和 loopback 连接验证已完成；`initialize` 与 `thread/list` 可用，首选真实 adapter 是 App Server Adapter，详见 `docs/codex-api-coverage.md`。
 - `AppServerCodexAdapter` 只读 MVP 已完成，可通过 `CODEX_ADAPTER=app-server` 启用，并已验证能通过 Relay 发布真实 Codex threads。
+- `thread/read` timeline MVP 已完成，真实 thread turns/items 可通过 `session.timeline.request` 映射为移动端 timeline events。
 - 详细记录见 `docs/progress.md`。
 
 ## 2. Milestone 0: Research Spike

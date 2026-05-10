@@ -37,7 +37,10 @@ server.on('upgrade', (request, socket, head) => {
 
     connection.on('message', (raw) => handleMessage(connection, raw));
     connection.on('close', () => handleClose(connection));
-    connection.on('error', (error) => console.error('[relay] websocket error', error.message));
+    connection.on('error', (error) => {
+      console.error('[relay] websocket error', error.message);
+      handleClose(connection);
+    });
   });
 });
 
@@ -64,6 +67,9 @@ function handleMessage(connection, raw) {
         break;
       case MessageType.SessionPrompt:
         handleSessionPrompt(connection, message);
+        break;
+      case MessageType.SessionTimelineRequest:
+        handleSessionTimelineRequest(connection, message);
         break;
       case MessageType.TimelineEvent:
         handleTimelineEvent(connection, message);
@@ -164,6 +170,32 @@ function handleSessionPrompt(connection, message) {
   send(hostConnection, message);
 }
 
+function handleSessionTimelineRequest(connection, message) {
+  requirePayloadField(message, 'session_id');
+
+  connection.role = SenderRole.Client;
+  state.clients.add(connection);
+
+  const session = state.sessions.get(message.payload.session_id);
+  if (!session) {
+    sendError(connection, `Unknown session: ${message.payload.session_id}`);
+    return;
+  }
+
+  const subscriptions = state.subscriptions.get(connection) ?? new Set();
+  subscriptions.add(message.payload.session_id);
+  state.subscriptions.set(connection, subscriptions);
+
+  const hostConnection = state.hostConnections.get(session.host_id);
+  if (!hostConnection) {
+    sendError(connection, `Host is offline: ${session.host_id}`);
+    return;
+  }
+
+  console.log(`[relay] routing timeline request to host ${session.host_id}: ${message.payload.session_id}`);
+  send(hostConnection, message);
+}
+
 function handleTimelineEvent(connection, message) {
   requirePayloadField(message, 'event');
   console.log(`[relay] timeline event: ${message.payload.event.title}`);
@@ -200,7 +232,12 @@ function broadcastToClients(message) {
 }
 
 function send(connection, message) {
-  connection.sendText(encodeMessage(message));
+  try {
+    connection.sendText(encodeMessage(message));
+  } catch (error) {
+    console.error('[relay] failed to send websocket message', error.message);
+    handleClose(connection);
+  }
 }
 
 function sendError(connection, detail) {

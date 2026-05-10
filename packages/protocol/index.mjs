@@ -9,6 +9,7 @@ export const MessageType = Object.freeze({
   SessionSnapshot: 'session.snapshot',
   SessionSubscribe: 'session.subscribe',
   SessionPrompt: 'session.prompt',
+  SessionTimelineRequest: 'session.timeline.request',
   TimelineEvent: 'timeline.event'
 });
 
@@ -83,4 +84,3 @@ export function requirePayloadField(message, field) {
     throw new Error(`Message ${message.type} is missing payload.${field}.`);
   }
 }
-
