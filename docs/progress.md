@@ -977,3 +977,72 @@ BUILD SUCCESSFUL
 3. Relay 增加连接数、消息频率和 prompt 长度限制。
 4. Host Bridge 增加 command policy：危险操作仍需审批，且按能力白名单执行。
 5. 对 timeline、health、日志、通知做统一 secret redaction。
+
+## 2026-05-10: Pairing and device-token security hardening
+
+状态：完成。
+
+本次目标：
+
+- 把上一轮共享 dev token 收口为开发期配对模型。
+- 避免手机端长期直接用 `RELAY_DEV_TOKEN` 发 prompt。
+- 给 Android 控制凭据加系统级加密存储。
+
+完成内容：
+
+- Relay 新增 `POST /pair`：
+  - 请求必须带 `X-Relay-Dev-Token` 或 `X-Relay-Auth-Token`。
+  - 成功后返回随机 `device_token`。
+  - Relay 在内存中记录 paired devices。
+- Relay 授权模型调整：
+  - Host 消息使用 pairing token：`host.register`、`host.heartbeat`、`session.snapshot`、`timeline.event`。
+  - Client 控制消息必须使用 device token：`session.subscribe`、`session.timeline.request`、`session.prompt`、`session.create_ephemeral`。
+  - `/health` 支持 pairing token 或 device token 获取详细诊断。
+- Relay 新增基础滥用防护：
+  - `RELAY_MAX_MESSAGE_BYTES`，默认 65536。
+  - `RELAY_MAX_PROMPT_LENGTH`，默认 4000。
+- Android App 新增 Pair 按钮：
+  - Relay URL + Pairing token 保存后，点击 Pair 调用 `/pair`。
+  - 成功后保存 device id/device token，并自动重连。
+  - WebSocket、prompt、Test Connection 优先使用 device token。
+- Android 新增 `SecureTokenStore`，使用 Android Keystore + AES/GCM 加密保存 pairing token 和 device token。
+- Node test/timeline/ephemeral/steer clients 改为读取 `RELAY_DEVICE_TOKEN`。
+- 相关 verify 脚本会先 `/pair`，再用 device token 执行 client 路径。
+- README 和 implementation plan 已更新。
+
+真机测试路径：
+
+1. 电脑启动 Relay：
+   ```powershell
+   $env:RELAY_HOST='0.0.0.0'
+   $env:RELAY_DEV_TOKEN='choose-a-random-dev-token'
+   npm run relay
+   ```
+2. 电脑启动 Bridge：
+   ```powershell
+   $env:RELAY_URL='ws://127.0.0.1:8787'
+   $env:RELAY_DEV_TOKEN='choose-a-random-dev-token'
+   npm run bridge
+   ```
+3. Android App 填：
+   - Relay URL: `ws://<电脑局域网 IP>:8787`
+   - Pairing token: `choose-a-random-dev-token`
+4. 点击 Save。
+5. 点击 Pair，看到 `Paired device ...`。
+6. 点击 Test，看到 `health ok`。
+7. 点击 Connect/Refresh，看到 session 后发送 `总结当前进度`。
+
+当前安全限制：
+
+- `/pair` 仍使用手填共享 pairing token，不是一次性扫码配对。
+- Relay device tokens 仅在内存中，Relay 重启后需要重新 Pair。
+- 还没有 TLS/WSS，不适合离开受信任局域网。
+- 还没有 per-device revoke、审计日志、速率限制和 IP allowlist。
+
+MVP 剩余缺口：
+
+1. Approval request/decision 映射。
+2. Git status/diff/commit/push 最小入口。
+3. Android 系统通知。
+4. Relay/Bridge 自动重连与退避策略。
+5. 真机端到端测试手册和故障排查清单。

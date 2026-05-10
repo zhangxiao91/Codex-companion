@@ -11,6 +11,7 @@ try {
   });
   processes.push(relay);
   await waitForOutput(relay, '[relay] listening', 5000);
+  const deviceToken = await pairDevice(8787, devToken);
 
   const bridge = spawnProcess('bridge', 'node', ['bridge/host-bridge/index.mjs'], {
     ...process.env,
@@ -22,7 +23,7 @@ try {
 
   const client = spawnProcess('test-client', 'node', ['tools/test-client/index.mjs', '总结当前进度'], {
     ...process.env,
-    RELAY_DEV_TOKEN: devToken
+    RELAY_DEVICE_TOKEN: deviceToken
   });
   processes.push(client);
 
@@ -92,4 +93,29 @@ function waitForExit(child, timeoutMs) {
       resolve(code);
     });
   });
+}
+
+async function pairDevice(port, pairingToken) {
+  const response = await fetch(`http://127.0.0.1:${port}/pair`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'X-Relay-Dev-Token': pairingToken
+    },
+    body: JSON.stringify({
+      device_id: 'delivery-strategy-test-client',
+      display_name: 'Delivery Strategy Test Client'
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Pairing failed with HTTP ${response.status}`);
+  }
+
+  const pair = await response.json();
+  if (!pair.device_token) {
+    throw new Error('Pairing response did not include device_token.');
+  }
+
+  return pair.device_token;
 }

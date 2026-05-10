@@ -37,6 +37,8 @@ socket.addEventListener('open', async () => {
     capabilities: ['session.list', 'session.prompt', 'timeline.event']
   });
 
+  console.log('[bridge] registered host capabilities: session.list, session.prompt, timeline.event');
+
   for (const session of adapter.listSessions()) {
     send(MessageType.SessionSnapshot, { session });
   }

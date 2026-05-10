@@ -2,20 +2,24 @@ import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const processes = [];
+const devToken = process.env.RELAY_DEV_TOKEN ?? 'app-server-steer-token';
 
 try {
   const relayPort = '8795';
   const relayUrl = `ws://127.0.0.1:${relayPort}`;
   const relay = spawnProcess('relay', 'node', ['relay/service/server.mjs'], {
     ...process.env,
-    RELAY_PORT: relayPort
+    RELAY_PORT: relayPort,
+    RELAY_DEV_TOKEN: devToken
   });
   processes.push(relay);
   await waitForOutput(relay, '[relay] listening', 5000);
+  const deviceToken = await pairDevice(relayPort, devToken);
 
   const bridge = spawnProcess('bridge', 'node', ['bridge/host-bridge/index.mjs'], {
     ...process.env,
     RELAY_URL: relayUrl,
+    RELAY_DEV_TOKEN: devToken,
     CODEX_ADAPTER: 'app-server',
     CODEX_APP_SERVER_PORT: '8796'
   });
@@ -26,6 +30,7 @@ try {
   const client = spawnProcess('steer-client', 'node', ['tools/steer-client/index.mjs'], {
     ...process.env,
     RELAY_URL: relayUrl,
+    RELAY_DEVICE_TOKEN: deviceToken,
     STEER_CLIENT_TIMEOUT_MS: '60000'
   });
   processes.push(client);
@@ -99,3 +104,27 @@ function waitForExit(child, timeoutMs) {
   });
 }
 
+async function pairDevice(port, pairingToken) {
+  const response = await fetch(`http://127.0.0.1:${port}/pair`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'X-Relay-Dev-Token': pairingToken
+    },
+    body: JSON.stringify({
+      device_id: 'app-server-steer-client',
+      display_name: 'App Server Steer Client'
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Pairing failed with HTTP ${response.status}`);
+  }
+
+  const pair = await response.json();
+  if (!pair.device_token) {
+    throw new Error('Pairing response did not include device_token.');
+  }
+
+  return pair.device_token;
+}

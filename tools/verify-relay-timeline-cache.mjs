@@ -21,6 +21,7 @@ try {
   });
   processes.push(relay);
   await waitForOutput(relay, '[relay] listening', 5000);
+  const deviceToken = await pairDevice(relayPort, devToken);
 
   const host = await connect(relayUrl);
   await send(host, MessageType.HostRegister, {
@@ -58,7 +59,7 @@ try {
     session_id: 'cache-session-001',
     after_cursor: '1',
     cache_only: true
-  });
+  }, deviceToken);
 
   const replayed = await waitForTimelineEvent(client, 5000);
   if (replayed.type !== 'second_cached_event') {
@@ -178,10 +179,35 @@ function waitForTimelineEvent(socket, timeoutMs) {
   });
 }
 
-function send(socket, type, payload) {
+function send(socket, type, payload, token = devToken) {
   socket.send(encodeMessage(createMessage(type, payload, {
     auth: {
-      dev_token: devToken
+      token
     }
   })));
+}
+
+async function pairDevice(port, pairingToken) {
+  const response = await fetch(`http://127.0.0.1:${port}/pair`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'X-Relay-Dev-Token': pairingToken
+    },
+    body: JSON.stringify({
+      device_id: 'cache-test-client',
+      display_name: 'Cache Test Client'
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Pairing failed with HTTP ${response.status}`);
+  }
+
+  const pair = await response.json();
+  if (!pair.device_token) {
+    throw new Error('Pairing response did not include device_token.');
+  }
+
+  return pair.device_token;
 }

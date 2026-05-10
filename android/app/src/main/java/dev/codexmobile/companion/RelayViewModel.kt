@@ -13,7 +13,9 @@ class RelayViewModel(
     private val _uiState = MutableStateFlow(
         RelayUiState(
             relayUrl = settings.relayUrl(),
-            devToken = settings.devToken(),
+            pairingToken = settings.pairingToken(),
+            deviceToken = settings.deviceToken(),
+            deviceId = settings.deviceId(),
             sessions = settings.sessions(),
             selectedSessionId = settings.selectedSessionId(),
             timeline = settings.timeline()
@@ -23,7 +25,7 @@ class RelayViewModel(
 
     fun connect() {
         _uiState.update { it.copy(connectionStatus = "Connecting", lastError = null) }
-        relayClient.connect(_uiState.value.relayUrl, _uiState.value.devToken)
+        relayClient.connect(_uiState.value.relayUrl, _uiState.value.activeAuthToken)
     }
 
     fun saveRelayUrl(url: String) {
@@ -49,21 +51,24 @@ class RelayViewModel(
         connect()
     }
 
-    fun saveRelaySettings(url: String, token: String) {
+    fun saveRelaySettings(url: String, pairingToken: String) {
         val normalizedUrl = url.trim()
         if (!isValidRelayUrl(normalizedUrl)) {
             _uiState.update { it.copy(lastError = "Relay URL must start with ws:// or wss://") }
             return
         }
 
-        val normalizedToken = token.trim()
+        val normalizedToken = pairingToken.trim()
         settings.saveRelayUrl(normalizedUrl)
-        settings.saveDevToken(normalizedToken)
+        settings.savePairingToken(normalizedToken)
+        settings.clearDevicePairing()
         settings.clearSessionCache()
         _uiState.update {
             it.copy(
                 relayUrl = normalizedUrl,
-                devToken = normalizedToken,
+                pairingToken = normalizedToken,
+                deviceToken = "",
+                deviceId = "",
                 connectionStatus = "Disconnected",
                 sessions = emptyList(),
                 selectedSessionId = null,
@@ -78,21 +83,13 @@ class RelayViewModel(
 
     fun testConnection() {
         _uiState.update { it.copy(lastError = null, lastHealthCheck = "Checking ${it.relayUrl}/health") }
-        relayClient.testHealth(_uiState.value.relayUrl, _uiState.value.devToken)
+        relayClient.testHealth(_uiState.value.relayUrl, _uiState.value.activeAuthToken)
     }
 
-    fun saveDevToken(token: String) {
-        val normalizedToken = token.trim()
-        settings.saveDevToken(normalizedToken)
-        _uiState.update {
-            it.copy(
-                devToken = normalizedToken,
-                connectionStatus = "Disconnected",
-                lastError = null,
-                lastHealthCheck = null
-            )
-        }
-        connect()
+    fun pairDevice() {
+        val state = _uiState.value
+        _uiState.update { it.copy(lastError = null, lastHealthCheck = "Pairing device") }
+        relayClient.pairDevice(state.relayUrl, state.pairingToken, state.deviceId)
     }
 
     fun selectSession(sessionId: String) {
@@ -156,6 +153,19 @@ class RelayViewModel(
 
     override fun onHealthCheck(summary: String) {
         _uiState.update { it.copy(lastHealthCheck = summary, lastError = null) }
+    }
+
+    override fun onPairingComplete(deviceId: String, deviceToken: String) {
+        settings.saveDevicePairing(deviceId, deviceToken)
+        _uiState.update {
+            it.copy(
+                deviceId = deviceId,
+                deviceToken = deviceToken,
+                lastHealthCheck = "paired device: ${deviceId.take(8)}",
+                lastError = null
+            )
+        }
+        connect()
     }
 
     override fun onError(message: String) {

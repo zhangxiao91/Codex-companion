@@ -1,3 +1,4 @@
+import { randomBytes, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import {
   MessageType,
@@ -13,6 +14,8 @@ const port = Number.parseInt(process.env.RELAY_PORT ?? '8787', 10);
 const host = process.env.RELAY_HOST ?? '127.0.0.1';
 const timelineCacheLimit = Number.parseInt(process.env.RELAY_TIMELINE_CACHE_LIMIT ?? '200', 10);
 const devToken = process.env.RELAY_DEV_TOKEN ?? '';
+const maxMessageBytes = Number.parseInt(process.env.RELAY_MAX_MESSAGE_BYTES ?? '65536', 10);
+const maxPromptLength = Number.parseInt(process.env.RELAY_MAX_PROMPT_LENGTH ?? '4000', 10);
 
 if (host === '0.0.0.0' && !devToken) {
   console.error('[relay] refusing to listen on 0.0.0.0 without RELAY_DEV_TOKEN');
@@ -26,13 +29,21 @@ const state = {
   clients: new Set(),
   subscriptions: new Map(),
   timelineEvents: new Map(),
+  deviceTokens: new Map(),
   nextTimelineCursor: 1
 };
 
-const server = createServer((request, response) => {
-  if (request.url === '/health') {
+const server = createServer(async (request, response) => {
+  const path = new URL(request.url ?? '/', 'http://relay.local').pathname;
+
+  if (path === '/health') {
     response.writeHead(200, { 'content-type': 'application/json' });
     response.end(JSON.stringify(createHealthPayload(request)));
+    return;
+  }
+
+  if (path === '/pair' && request.method === 'POST') {
+    await handlePairRequest(request, response);
     return;
   }
 
@@ -60,9 +71,14 @@ server.listen(port, host, () => {
 
 function handleMessage(connection, raw) {
   try {
+    if (Buffer.byteLength(raw, 'utf8') > maxMessageBytes) {
+      sendError(connection, `Message is too large. Maximum is ${maxMessageBytes} bytes.`);
+      return;
+    }
+
     const message = decodeMessage(raw);
     if (!isAuthorized(message)) {
-      sendError(connection, 'Unauthorized: missing or invalid RELAY_DEV_TOKEN.');
+      sendError(connection, 'Unauthorized: missing or invalid Relay auth token.');
       return;
     }
 
@@ -133,6 +149,7 @@ function createHealthPayload(request) {
       sessions: state.sessions.size,
       clients: state.clients.size,
       subscriptions: state.subscriptions.size,
+      paired_devices: state.deviceTokens.size,
       cached_timeline_sessions: state.timelineEvents.size,
       cached_timeline_events: cachedTimelineEvents
     },
@@ -149,7 +166,17 @@ function isAuthorized(message) {
     return true;
   }
 
-  return message.auth?.dev_token === devToken;
+  if (isHostMessage(message.type)) {
+    return isAuthorizedToken(message.auth?.dev_token)
+      || isAuthorizedToken(message.auth?.token);
+  }
+
+  if (isClientMessage(message.type)) {
+    return isAuthorizedDeviceToken(message.auth?.device_token)
+      || isAuthorizedDeviceToken(message.auth?.token);
+  }
+
+  return false;
 }
 
 function isHealthRequestAuthorized(request) {
@@ -157,7 +184,117 @@ function isHealthRequestAuthorized(request) {
     return true;
   }
 
-  return request.headers['x-relay-dev-token'] === devToken;
+  const authorization = request.headers.authorization ?? '';
+  const bearerToken = authorization.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : '';
+  return isAuthorizedToken(request.headers['x-relay-dev-token'])
+    || isAuthorizedToken(request.headers['x-relay-auth-token'])
+    || isAuthorizedDeviceToken(request.headers['x-relay-device-token'])
+    || isAuthorizedDeviceToken(request.headers['x-relay-auth-token'])
+    || isAuthorizedDeviceToken(bearerToken);
+}
+
+function isAuthorizedToken(token) {
+  return Boolean(devToken && token === devToken);
+}
+
+function isAuthorizedDeviceToken(token) {
+  if (!token || !state.deviceTokens.has(token)) {
+    return false;
+  }
+
+  state.deviceTokens.get(token).last_seen_at = new Date().toISOString();
+  return true;
+}
+
+function isHostMessage(type) {
+  return type === MessageType.HostRegister
+    || type === MessageType.HostHeartbeat
+    || type === MessageType.SessionSnapshot
+    || type === MessageType.TimelineEvent;
+}
+
+function isClientMessage(type) {
+  return type === MessageType.SessionCreateEphemeral
+    || type === MessageType.SessionSubscribe
+    || type === MessageType.SessionPrompt
+    || type === MessageType.SessionTimelineRequest;
+}
+
+async function handlePairRequest(request, response) {
+  try {
+    if (!devToken) {
+      writeJson(response, 400, {
+        ok: false,
+        error: 'pairing_disabled',
+        detail: 'Set RELAY_DEV_TOKEN before pairing devices.'
+      });
+      return;
+    }
+
+    if (!isAuthorizedToken(request.headers['x-relay-dev-token'])
+      && !isAuthorizedToken(request.headers['x-relay-auth-token'])) {
+      writeJson(response, 401, {
+        ok: false,
+        error: 'unauthorized',
+        detail: 'Missing or invalid pairing token.'
+      });
+      return;
+    }
+
+    const rawBody = await readRequestBody(request, 4096);
+    const body = rawBody ? JSON.parse(rawBody) : {};
+    const deviceId = typeof body.device_id === 'string' && body.device_id.trim()
+      ? body.device_id.trim()
+      : randomUUID();
+    const displayName = typeof body.display_name === 'string' && body.display_name.trim()
+      ? body.display_name.trim().slice(0, 80)
+      : 'Android device';
+    const deviceToken = `cmc_dev_${randomBytes(32).toString('base64url')}`;
+    const pairedAt = new Date().toISOString();
+
+    state.deviceTokens.set(deviceToken, {
+      device_id: deviceId,
+      display_name: displayName,
+      paired_at: pairedAt,
+      last_seen_at: pairedAt
+    });
+
+    console.log(`[relay] paired device: ${deviceId}`);
+    writeJson(response, 200, {
+      ok: true,
+      device_id: deviceId,
+      device_token: deviceToken,
+      paired_at: pairedAt
+    });
+  } catch (error) {
+    writeJson(response, 400, {
+      ok: false,
+      error: 'pairing_failed',
+      detail: error.message
+    });
+  }
+}
+
+function writeJson(response, statusCode, payload) {
+  response.writeHead(statusCode, { 'content-type': 'application/json' });
+  response.end(JSON.stringify(payload));
+}
+
+function readRequestBody(request, limitBytes) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+
+    request.on('data', (chunk) => {
+      body += chunk.toString('utf8');
+      if (Buffer.byteLength(body, 'utf8') > limitBytes) {
+        reject(new Error(`Request body is too large. Maximum is ${limitBytes} bytes.`));
+        request.destroy();
+      }
+    });
+
+    request.on('end', () => resolve(body));
+    request.on('error', reject);
+  });
 }
 
 function handleHostRegister(connection, message) {
@@ -248,6 +385,10 @@ function handleSessionSubscribe(connection, message) {
 function handleSessionPrompt(connection, message) {
   requirePayloadField(message, 'session_id');
   requirePayloadField(message, 'text');
+  if (message.payload.text.length > maxPromptLength) {
+    sendError(connection, `Prompt is too long. Maximum is ${maxPromptLength} characters.`);
+    return;
+  }
 
   connection.role = SenderRole.Client;
   state.clients.add(connection);

@@ -62,6 +62,7 @@ class MainActivity : ComponentActivity() {
                 uiState = uiState,
                 onReconnect = viewModel::connect,
                 onRelaySettingsSave = viewModel::saveRelaySettings,
+                onPairDevice = viewModel::pairDevice,
                 onHealthCheck = viewModel::testConnection,
                 onSessionSelected = viewModel::selectSession,
                 onPromptSend = viewModel::sendPrompt
@@ -75,6 +76,7 @@ private fun CompanionApp(
     uiState: RelayUiState,
     onReconnect: () -> Unit,
     onRelaySettingsSave: (String, String) -> Unit,
+    onPairDevice: () -> Unit,
     onHealthCheck: () -> Unit,
     onSessionSelected: (String) -> Unit,
     onPromptSend: (String) -> Unit
@@ -94,6 +96,7 @@ private fun CompanionApp(
                 uiState = uiState,
                 onReconnect = onReconnect,
                 onRelaySettingsSave = onRelaySettingsSave,
+                onPairDevice = onPairDevice,
                 onHealthCheck = onHealthCheck,
                 onSessionSelected = onSessionSelected,
                 onPromptSend = onPromptSend
@@ -107,6 +110,7 @@ private fun SessionDashboard(
     uiState: RelayUiState,
     onReconnect: () -> Unit,
     onRelaySettingsSave: (String, String) -> Unit,
+    onPairDevice: () -> Unit,
     onHealthCheck: () -> Unit,
     onSessionSelected: (String) -> Unit,
     onPromptSend: (String) -> Unit
@@ -124,6 +128,7 @@ private fun SessionDashboard(
             uiState = uiState,
             onReconnect = onReconnect,
             onRelaySettingsSave = onRelaySettingsSave,
+            onPairDevice = onPairDevice,
             onHealthCheck = onHealthCheck
         )
         SessionSummary(
@@ -175,10 +180,11 @@ private fun HostSummary(
     uiState: RelayUiState,
     onReconnect: () -> Unit,
     onRelaySettingsSave: (String, String) -> Unit,
+    onPairDevice: () -> Unit,
     onHealthCheck: () -> Unit
 ) {
     var relayUrlDraft by remember(uiState.relayUrl) { mutableStateOf(uiState.relayUrl) }
-    var devTokenDraft by remember(uiState.devToken) { mutableStateOf(uiState.devToken) }
+    var pairingTokenDraft by remember(uiState.pairingToken) { mutableStateOf(uiState.pairingToken) }
 
     Panel {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -207,11 +213,20 @@ private fun HostSummary(
             )
             TextField(
                 modifier = Modifier.fillMaxWidth(),
-                value = devTokenDraft,
-                onValueChange = { devTokenDraft = it },
+                value = pairingTokenDraft,
+                onValueChange = { pairingTokenDraft = it },
                 singleLine = true,
-                label = { Text("Dev token") },
+                label = { Text("Pairing token") },
                 visualTransformation = PasswordVisualTransformation()
+            )
+            Text(
+                text = if (uiState.deviceToken.isNotBlank()) {
+                    "Paired device ${uiState.deviceId.take(8)}"
+                } else {
+                    "Not paired"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF5E6978)
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -219,10 +234,13 @@ private fun HostSummary(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Button(
-                    onClick = { onRelaySettingsSave(relayUrlDraft, devTokenDraft) },
+                    onClick = { onRelaySettingsSave(relayUrlDraft, pairingTokenDraft) },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF176B52))
                 ) {
                     Text("Save")
+                }
+                OutlinedButton(onClick = onPairDevice) {
+                    Text("Pair")
                 }
                 OutlinedButton(onClick = onReconnect) {
                     Text(if (uiState.connectionStatus == "Online") "Refresh" else "Connect")

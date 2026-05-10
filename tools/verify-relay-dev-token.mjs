@@ -48,6 +48,36 @@ try {
     throw new Error('Expected authenticated health to include detailed diagnostics.');
   }
 
+  const pairResponse = await fetch(`http://127.0.0.1:${relayPort}/pair`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'X-Relay-Dev-Token': devToken
+    },
+    body: JSON.stringify({
+      device_id: 'verify-android-device',
+      display_name: 'Verify Android Device'
+    })
+  });
+  if (!pairResponse.ok) {
+    throw new Error(`Expected pairing to succeed, received HTTP ${pairResponse.status}`);
+  }
+
+  const pair = await pairResponse.json();
+  if (!pair.ok || !pair.device_token) {
+    throw new Error('Expected pair response to include a device token.');
+  }
+
+  const deviceHealthResponse = await fetch(`http://127.0.0.1:${relayPort}/health`, {
+    headers: {
+      authorization: `Bearer ${pair.device_token}`
+    }
+  });
+  const deviceHealth = await deviceHealthResponse.json();
+  if (typeof deviceHealth.counts?.paired_devices !== 'number') {
+    throw new Error('Expected paired device token to authorize health diagnostics.');
+  }
+
   const host = await connect(relayUrl);
   send(host, MessageType.HostRegister, {
     host_id: 'secure-test-host',
@@ -83,7 +113,7 @@ try {
   send(authenticatedClient, MessageType.SessionPrompt, {
     session_id: 'secure-session-001',
     text: 'must be routed'
-  }, devToken);
+  }, pair.device_token);
   const routedPrompt = await waitForMessage(host, MessageType.SessionPrompt, 5000);
   if (routedPrompt.payload.text !== 'must be routed') {
     throw new Error(`Expected routed prompt, received: ${routedPrompt.payload.text}`);
@@ -194,7 +224,7 @@ function waitForMessage(socket, expectedType, timeoutMs) {
 function send(socket, type, payload, token = '') {
   socket.send(encodeMessage(createMessage(type, payload, token ? {
     auth: {
-      dev_token: token
+      token
     }
   } : {})));
 }

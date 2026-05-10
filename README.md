@@ -106,7 +106,9 @@ npm run bridge
 App 内 Relay 面板需要填写：
 
 - Relay URL: `ws://<电脑局域网 IP>:8787`
-- Dev token: 与 Relay/Bridge 的 `RELAY_DEV_TOKEN` 相同
+- Pairing token: 与 Relay/Bridge 的 `RELAY_DEV_TOKEN` 相同
+
+点击 Save 后点击 Pair，App 会调用 Relay `/pair` 换取随机 device token；后续 WebSocket、Test Connection 和 prompt 都使用 device token。
 
 App 内 Relay 面板的 Test 按钮会请求 `<Relay HTTP URL>/health`。例如 `ws://192.168.1.20:8787` 会检查 `http://192.168.1.20:8787/health`，用于确认手机是否能访问电脑上的 Relay。
 
@@ -125,9 +127,13 @@ npm run check:android-toolchain
 
 当前安全边界仍是开发原型，但已经加入临时 dev token：
 
-- Relay 配置 `RELAY_DEV_TOKEN` 后，所有 WebSocket 协议消息必须携带 `auth.dev_token`。
+- Relay 配置 `RELAY_DEV_TOKEN` 后，Host Bridge 消息必须携带 pairing token。
+- Android/Node client 不能直接用 pairing token 发 prompt，必须先通过 `/pair` 换取 device token。
+- 客户端 WebSocket 消息使用 `auth.token` 携带 device token。
 - Relay 监听 `0.0.0.0` 时必须设置 `RELAY_DEV_TOKEN`，否则拒绝启动。
-- `/health` 在启用 token 后只对带 `X-Relay-Dev-Token` 的请求返回详细诊断；未认证请求只显示可达和认证要求。
+- `/health` 在启用 token 后只对带 device token 或 pairing token 的请求返回详细诊断；未认证请求只显示可达和认证要求。
+- Android 用 Android Keystore 加密保存 pairing token 和 device token。
+- Relay 限制单条 WebSocket 消息大小和 prompt 长度。
 - Relay/Bridge 日志不再打印 prompt 正文，减少本地日志泄露。
 
 后续还需要补强：
@@ -138,3 +144,15 @@ npm run check:android-toolchain
 - 审计日志：记录谁在何时向哪个 session 发送了什么类型的控制动作。
 - 速率限制和连接限制：避免局域网内错误客户端刷爆 Relay。
 - Secret redaction：timeline、health、日志和通知都要做敏感字段过滤。
+
+## MVP Gaps Before Broader Use
+
+真机测试前主链路已经够用：Relay/Bridge 启动、App 配对、看 session/timeline、发 prompt、断线后用 cursor 补事件。
+
+还没完成但属于 MVP 应补能力：
+
+- Approval request/decision：Codex 请求 shell/Git/网络/文件权限时，手机端还不能批准或拒绝。
+- Git status/diff/commit/push：还没有移动端 Git 收尾入口。
+- Android foreground/background 通知：当前需要打开 App 看 timeline，还没有系统通知。
+- Relay/Bridge 重连策略：断线后基础重连能手动触发，自动退避重连还不完整。
+- 真机端到端手册：需要补一份从电脑 IP、防火墙、Relay、Bridge、App 安装到故障排查的测试清单。

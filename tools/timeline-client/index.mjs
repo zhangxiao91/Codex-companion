@@ -7,7 +7,9 @@ import {
 } from '../../packages/protocol/index.mjs';
 
 const relayUrl = process.env.RELAY_URL ?? DEFAULT_RELAY_URL;
-const devToken = process.env.RELAY_DEV_TOKEN ?? process.env.DEV_TOKEN ?? '';
+const authToken = process.env.RELAY_DEVICE_TOKEN
+  ?? process.env.DEV_TOKEN
+  ?? '';
 const timeoutMs = Number.parseInt(process.env.TIMELINE_CLIENT_TIMEOUT_MS ?? '15000', 10);
 const socket = new WebSocket(relayUrl);
 const timer = setTimeout(() => {
@@ -61,5 +63,5 @@ function send(type, payload) {
 }
 
 function authOptions() {
-  return devToken ? { auth: { dev_token: devToken } } : {};
+  return authToken ? { auth: { token: authToken } } : {};
 }

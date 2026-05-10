@@ -22,7 +22,9 @@ data class TimelineItem(
 
 data class RelayUiState(
     val relayUrl: String = RelayClient.DEFAULT_RELAY_URL,
-    val devToken: String = "",
+    val pairingToken: String = "",
+    val deviceToken: String = "",
+    val deviceId: String = "",
     val connectionStatus: String = "Disconnected",
     val sessions: List<CodexSession> = emptyList(),
     val selectedSessionId: String? = null,
@@ -33,4 +35,7 @@ data class RelayUiState(
 ) {
     val selectedSession: CodexSession?
         get() = sessions.firstOrNull { it.sessionId == selectedSessionId }
+
+    val activeAuthToken: String
+        get() = deviceToken.ifBlank { pairingToken }
 }

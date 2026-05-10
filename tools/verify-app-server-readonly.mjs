@@ -2,13 +2,15 @@ import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const processes = [];
+const devToken = process.env.RELAY_DEV_TOKEN ?? 'app-server-readonly-token';
 
 try {
   const relayPort = '8788';
   const relayUrl = `ws://127.0.0.1:${relayPort}`;
   const relay = spawnProcess('relay', 'node', ['relay/service/server.mjs'], {
     ...process.env,
-    RELAY_PORT: relayPort
+    RELAY_PORT: relayPort,
+    RELAY_DEV_TOKEN: devToken
   });
   processes.push(relay);
   await waitForOutput(relay, '[relay] listening', 5000);
@@ -16,6 +18,7 @@ try {
   const bridge = spawnProcess('bridge', 'node', ['bridge/host-bridge/index.mjs'], {
     ...process.env,
     RELAY_URL: relayUrl,
+    RELAY_DEV_TOKEN: devToken,
     CODEX_ADAPTER: 'app-server',
     CODEX_APP_SERVER_PORT: '8792'
   });

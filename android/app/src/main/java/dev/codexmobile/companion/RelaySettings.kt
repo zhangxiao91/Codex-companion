@@ -6,6 +6,7 @@ import org.json.JSONObject
 
 class RelaySettings(context: Context) {
     private val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+    private val secureTokenStore = SecureTokenStore(context)
 
     fun relayUrl(): String = preferences.getString(KEY_RELAY_URL, RelayClient.DEFAULT_RELAY_URL)
         ?: RelayClient.DEFAULT_RELAY_URL
@@ -14,10 +15,26 @@ class RelaySettings(context: Context) {
         preferences.edit().putString(KEY_RELAY_URL, url).apply()
     }
 
-    fun devToken(): String = preferences.getString(KEY_DEV_TOKEN, "") ?: ""
+    fun pairingToken(): String = secureTokenStore.read(KEY_PAIRING_TOKEN)
 
-    fun saveDevToken(token: String) {
-        preferences.edit().putString(KEY_DEV_TOKEN, token).apply()
+    fun savePairingToken(token: String) {
+        secureTokenStore.write(KEY_PAIRING_TOKEN, token)
+    }
+
+    fun clearDevicePairing() {
+        preferences.edit().remove(KEY_DEVICE_ID).apply()
+        secureTokenStore.remove(KEY_DEVICE_TOKEN)
+    }
+
+    fun deviceToken(): String = secureTokenStore.read(KEY_DEVICE_TOKEN)
+
+    fun deviceId(): String = preferences.getString(KEY_DEVICE_ID, "") ?: ""
+
+    fun saveDevicePairing(deviceId: String, token: String) {
+        preferences.edit()
+            .putString(KEY_DEVICE_ID, deviceId)
+            .apply()
+        secureTokenStore.write(KEY_DEVICE_TOKEN, token)
     }
 
     fun selectedSessionId(): String? = preferences.getString(KEY_SELECTED_SESSION_ID, null)
@@ -107,7 +124,9 @@ class RelaySettings(context: Context) {
     private companion object {
         const val PREFERENCES_NAME = "relay_settings"
         const val KEY_RELAY_URL = "relay_url"
-        const val KEY_DEV_TOKEN = "dev_token"
+        const val KEY_PAIRING_TOKEN = "pairing_token"
+        const val KEY_DEVICE_TOKEN = "device_token"
+        const val KEY_DEVICE_ID = "device_id"
         const val KEY_SELECTED_SESSION_ID = "selected_session_id"
         const val KEY_SESSIONS = "sessions"
         const val KEY_TIMELINE = "timeline"

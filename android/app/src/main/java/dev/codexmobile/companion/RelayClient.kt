@@ -1,8 +1,10 @@
 package dev.codexmobile.companion
 
 import java.util.UUID
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
@@ -18,15 +20,16 @@ class RelayClient(
         fun onSessionSnapshot(session: CodexSession)
         fun onTimelineEvent(event: TimelineItem)
         fun onHealthCheck(summary: String)
+        fun onPairingComplete(deviceId: String, deviceToken: String)
         fun onError(message: String)
     }
 
     private var socket: WebSocket? = null
-    private var devToken: String = ""
+    private var authToken: String = ""
 
     fun connect(url: String = DEFAULT_RELAY_URL, token: String = "") {
         close()
-        devToken = token.trim()
+        authToken = token.trim()
         val request = Request.Builder().url(url).build()
         socket = client.newWebSocket(
             request,
@@ -83,9 +86,7 @@ class RelayClient(
         runCatching {
             val requestBuilder = Request.Builder().url(healthUrlFor(url))
             val trimmedToken = token.trim()
-            if (trimmedToken.isNotBlank()) {
-                requestBuilder.header("X-Relay-Dev-Token", trimmedToken)
-            }
+            addAuthHeaders(requestBuilder, trimmedToken)
             val request = requestBuilder.build()
             client.newCall(request).enqueue(
                 object : okhttp3.Callback {
@@ -102,6 +103,58 @@ class RelayClient(
                             }
 
                             listener.onHealthCheck(summarizeHealth(body))
+                        }
+                    }
+                }
+            )
+        }.onFailure { error ->
+            listener.onError(error.message ?: "Invalid Relay URL")
+        }
+    }
+
+    fun pairDevice(url: String = DEFAULT_RELAY_URL, pairingToken: String = "", existingDeviceId: String = "") {
+        runCatching {
+            val token = pairingToken.trim()
+            if (token.isBlank()) {
+                listener.onError("Pairing token is required")
+                return
+            }
+
+            val body = JSONObject()
+                .put("device_id", existingDeviceId.ifBlank { UUID.randomUUID().toString() })
+                .put("display_name", "Android device")
+                .toString()
+                .toRequestBody(JSON_MEDIA_TYPE)
+            val request = Request.Builder()
+                .url(pairUrlFor(url))
+                .header("X-Relay-Dev-Token", token)
+                .post(body)
+                .build()
+
+            client.newCall(request).enqueue(
+                object : okhttp3.Callback {
+                    override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
+                        listener.onError("Pairing failed: ${e.message}")
+                    }
+
+                    override fun onResponse(call: okhttp3.Call, response: Response) {
+                        response.use {
+                            val raw = it.body.string()
+                            if (!it.isSuccessful) {
+                                listener.onError("Pairing failed: HTTP ${it.code}")
+                                return
+                            }
+
+                            val json = JSONObject(raw)
+                            if (!json.optBoolean("ok", false)) {
+                                listener.onError(json.optString("detail", "Pairing failed"))
+                                return
+                            }
+
+                            listener.onPairingComplete(
+                                json.getString("device_id"),
+                                json.getString("device_token")
+                            )
                         }
                     }
                 }
@@ -140,19 +193,37 @@ class RelayClient(
             .put("type", type)
             .put("sent_at", java.time.Instant.now().toString())
             .put("payload", payload)
-        if (devToken.isNotBlank()) {
-            message.put("auth", JSONObject().put("dev_token", devToken))
+        if (authToken.isNotBlank()) {
+            message.put("auth", JSONObject().put("token", authToken))
         }
         socket?.send(message.toString())
     }
 
     private fun healthUrlFor(url: String): String {
+        return httpUrlFor(url, "/health")
+    }
+
+    private fun pairUrlFor(url: String): String {
+        return httpUrlFor(url, "/pair")
+    }
+
+    private fun httpUrlFor(url: String, path: String): String {
         val base = when {
             url.startsWith("ws://") -> url.replaceFirst("ws://", "http://")
             url.startsWith("wss://") -> url.replaceFirst("wss://", "https://")
             else -> throw IllegalArgumentException("Relay URL must start with ws:// or wss://")
         }.trimEnd('/')
-        return "$base/health"
+        return "$base$path"
+    }
+
+    private fun addAuthHeaders(builder: Request.Builder, token: String) {
+        if (token.isBlank()) {
+            return
+        }
+
+        builder
+            .header("Authorization", "Bearer $token")
+            .header("X-Relay-Auth-Token", token)
     }
 
     private fun summarizeHealth(raw: String): String {
@@ -192,5 +263,6 @@ class RelayClient(
 
     companion object {
         const val DEFAULT_RELAY_URL = "ws://10.0.2.2:8787"
+        private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
     }
 }
