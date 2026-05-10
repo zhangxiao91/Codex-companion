@@ -195,6 +195,7 @@ UI 要求：
 - Android 已有 commit message 输入和二次确认 UI；commit 执行默认受 `GIT_WRITE_ACTIONS_ENABLED=true` 保护。
 - Git snapshot 已区分 tracked/untracked files；Android commit confirmation 支持 `tracked_only` 和 `include_untracked` 两种策略。`include_untracked` 只有在 Host Bridge 显式启用 `GIT_WRITE_ACTIONS_ENABLED=true` 后才会执行 `git add -A`。
 - push 已接入 Android 二次确认 UI 和 Host Bridge policy；执行需同时启用 `GIT_WRITE_ACTIONS_ENABLED=true` 与 `GIT_PUSH_ACTIONS_ENABLED=true`，并要求已知 branch、upstream tracking branch 和 clean worktree。
+- push 正向路径已通过 disposable bare remote 自动验证：`npm run verify:git-push-disposable`。
 
 任务：
 

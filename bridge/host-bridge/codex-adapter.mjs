@@ -16,7 +16,10 @@ import {
 export class MockCodexAdapter {
   constructor(hostId) {
     this.hostId = hostId;
-    this.session = createMockSession(hostId);
+    this.session = {
+      ...createMockSession(hostId),
+      repo_path: process.env.MOCK_SESSION_REPO_PATH || process.cwd()
+    };
     this.approvals = new Map([
       [
         'mock-approval-001',

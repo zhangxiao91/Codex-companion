@@ -22,6 +22,7 @@
     "verify:approval-flow": "node tools/verify-approval-flow.mjs",
     "verify:git-audit-storage": "node tools/verify-git-audit-storage.mjs",
     "verify:git-flow": "node tools/verify-git-flow.mjs",
+    "verify:git-push-disposable": "node tools/verify-git-push-disposable.mjs",
     "verify:relay-health": "node tools/verify-relay-health.mjs",
     "verify:relay-timeline-cache": "node tools/verify-relay-timeline-cache.mjs",
     "verify:live-notification-mapper": "node tools/verify-live-notification-mapper.mjs",

@@ -178,6 +178,7 @@ Verification:
 
 ```powershell
 npm run verify:git-flow
+npm run verify:git-push-disposable
 ```
 
 Git audit storage:
@@ -189,4 +190,4 @@ Git audit storage:
 
 Remaining before Git is truly user-facing:
 
-- real-device push dry-run/manual test against a disposable remote
+- real-device Git workflow test from Android against a disposable remote

@@ -1685,3 +1685,54 @@ Next recommended step:
 
 1. Add a disposable-remote manual test checklist before enabling push for real repositories.
 2. Consider Android read-only audit view after real-device Git testing.
+
+## 2026-05-10: Disposable remote push verification
+
+Status: completed.
+
+Goal:
+
+- Verify the positive `git push` path without touching a real repository or real remote.
+- Keep host push gates strict while proving the Relay/Bridge route can execute a safe push.
+
+Changes:
+
+- Mock Host Bridge sessions can now override their repo path with `MOCK_SESSION_REPO_PATH`.
+- Added `npm run verify:git-push-disposable`.
+- The verification script creates:
+  - a temporary working Git repo,
+  - a temporary bare remote,
+  - an initial pushed commit to establish upstream,
+  - a second local commit to be pushed through Relay/Bridge.
+- The script starts Relay and Host Bridge with:
+  - `GIT_WRITE_ACTIONS_ENABLED=true`
+  - `GIT_PUSH_ACTIONS_ENABLED=true`
+  - `MOCK_SESSION_REPO_PATH=<temporary repo>`
+- The script sends `git.request` with `action: "push"` through the same WebSocket protocol Android uses.
+- The script verifies:
+  - pre-push Git status is clean,
+  - push `git.snapshot.result.ok` is true,
+  - completed Git audit event reports `result_ok=true`,
+  - the bare remote has `refs/heads/main` after push.
+
+Verification command:
+
+```powershell
+npm run verify:git-push-disposable
+```
+
+Verification result:
+
+```text
+[verify] Disposable Git push through Relay/Bridge verified.
+```
+
+Current limitations:
+
+- This is an automated Node client verification, not an Android real-device manual test.
+- The remote is local and disposable; network remotes still need a separate manual checklist.
+
+Next recommended step:
+
+1. Add a real-device Git workflow checklist and run it against a disposable remote.
+2. Consider Android read-only audit view after real-device Git testing.
