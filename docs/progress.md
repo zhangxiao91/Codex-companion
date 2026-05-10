@@ -1046,3 +1046,34 @@ MVP 剩余缺口：
 3. Android 系统通知。
 4. Relay/Bridge 自动重连与退避策略。
 5. 真机端到端测试手册和故障排查清单。
+
+## 2026-05-10: Android dashboard scroll fix
+
+Status: completed.
+
+Goal:
+
+- Fix small Android screens where the dashboard could not scroll and bottom prompt/actions were unreachable.
+
+Changes:
+
+- Added vertical scrolling to the top-level `SessionDashboard` content.
+- Replaced the timeline panel `weight(1f)` with a bounded height range so it does not push the prompt composer off-screen.
+- Changed the default Chinese prompt string to Kotlin unicode escapes to avoid Windows encoding corruption.
+
+Verification command:
+
+```powershell
+cd android
+$env:JAVA_HOME='C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot'
+$env:ANDROID_HOME='C:\Users\13372\AppData\Local\Android\Sdk'
+$env:ANDROID_SDK_ROOT=$env:ANDROID_HOME
+$env:Path="$env:JAVA_HOME\bin;$env:ANDROID_HOME\platform-tools;$env:Path"
+.\gradlew.bat :app:assembleDebug
+```
+
+Expected result:
+
+```text
+BUILD SUCCESSFUL
+```

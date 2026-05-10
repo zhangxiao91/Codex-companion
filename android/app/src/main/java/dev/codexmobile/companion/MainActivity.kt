@@ -14,11 +14,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DividerDefaults
@@ -115,11 +118,13 @@ private fun SessionDashboard(
     onSessionSelected: (String) -> Unit,
     onPromptSend: (String) -> Unit
 ) {
-    var prompt by remember { mutableStateOf("总结当前进度") }
+    var prompt by remember { mutableStateOf("\u603b\u7ed3\u5f53\u524d\u8fdb\u5ea6") }
+    val scrollState = rememberScrollState()
 
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(scrollState)
             .padding(horizontal = 16.dp, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
@@ -138,7 +143,7 @@ private fun SessionDashboard(
         )
         TimelineList(
             events = uiState.timeline.filter { it.sessionId == uiState.selectedSessionId },
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.heightIn(min = 220.dp, max = 360.dp)
         )
         PromptComposer(
             value = prompt,
@@ -239,15 +244,12 @@ private fun HostSummary(
                 ) {
                     Text("Save")
                 }
-                OutlinedButton(onClick = onPairDevice) {
-                    Text("Pair")
-                }
-                OutlinedButton(onClick = onReconnect) {
-                    Text(if (uiState.connectionStatus == "Online") "Refresh" else "Connect")
-                }
-                OutlinedButton(onClick = onHealthCheck) {
-                    Text("Test")
-                }
+                CompactActionButton(text = "Pair", onClick = onPairDevice)
+                CompactActionButton(
+                    text = if (uiState.connectionStatus == "Online") "Refresh" else "Connect",
+                    onClick = onReconnect
+                )
+                CompactActionButton(text = "Test", onClick = onHealthCheck)
             }
             if (!uiState.lastHealthCheck.isNullOrBlank()) {
                 Text(
@@ -268,6 +270,16 @@ private fun HostSummary(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun CompactActionButton(text: String, onClick: () -> Unit) {
+    OutlinedButton(
+        onClick = onClick,
+        contentPadding = ButtonDefaults.ContentPadding
+    ) {
+        Text(text)
     }
 }
 
