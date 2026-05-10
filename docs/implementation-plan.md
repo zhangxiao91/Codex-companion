@@ -26,6 +26,7 @@
 - `turn/start` prompt routing 已完成，Host Bridge 会先 resume 未加载 thread，再将移动端 prompt 发送到真实 Codex App Server。
 - prompt 验证已改为创建专用 ephemeral thread，避免污染用户真实历史会话。
 - active turn 的 `turn/steer` prompt routing 已完成，移动端后续指令可以追加到正在运行的 Codex turn。
+- prompt 验证已升级为等待 live `assistant_delta` 或 `turn_completed`，证明移动端可看到真实 Codex 回答事件。
 - 详细记录见 `docs/progress.md`。
 
 ## 2. Milestone 0: Research Spike

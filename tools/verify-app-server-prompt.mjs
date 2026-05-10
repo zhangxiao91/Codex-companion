@@ -30,20 +30,21 @@ try {
     {
       ...process.env,
       RELAY_URL: relayUrl,
-      EPHEMERAL_CLIENT_TIMEOUT_MS: '60000'
+      EPHEMERAL_CLIENT_TIMEOUT_MS: '120000',
+      EPHEMERAL_CLIENT_EXPECT_EVENT_TYPES: 'assistant_delta,turn_completed'
     }
   );
   processes.push(client);
 
-  const exitCode = await waitForExit(client, 60000);
+  const exitCode = await waitForExit(client, 120000);
   if (exitCode !== 0) {
     throw new Error(`ephemeral-client exited with code ${exitCode}`);
   }
 
   await waitForOutput(bridge, '[bridge] created ephemeral session', 10000);
   await waitForOutput(bridge, '[bridge] received prompt', 5000);
-  await waitForOutput(relay, '[relay] timeline event', 30000);
-  console.log('[verify] App Server ephemeral turn/start prompt routed through Relay.');
+  await waitForOutput(client, 'expected timeline event received', 5000);
+  console.log('[verify] App Server ephemeral prompt produced a live assistant/completion event through Relay.');
 } finally {
   for (const child of processes.reverse()) {
     if (!child.killed) {

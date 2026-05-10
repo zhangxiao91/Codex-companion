@@ -10,6 +10,10 @@ const relayUrl = process.env.RELAY_URL ?? DEFAULT_RELAY_URL;
 const hostId = process.env.HOST_ID ?? 'local-dev-host';
 const promptText = process.argv.slice(2).join(' ') || 'Reply with exactly: OK';
 const timeoutMs = Number.parseInt(process.env.EPHEMERAL_CLIENT_TIMEOUT_MS ?? '60000', 10);
+const expectedEventTypes = (process.env.EPHEMERAL_CLIENT_EXPECT_EVENT_TYPES ?? 'turn_start_requested')
+  .split(',')
+  .map((item) => item.trim())
+  .filter(Boolean);
 
 const socket = new WebSocket(relayUrl);
 const timer = setTimeout(() => {
@@ -55,12 +59,18 @@ socket.addEventListener('message', (event) => {
       return;
     }
 
-    if (timelineEvent.type !== 'turn_start_requested') {
+    if (timelineEvent.type === 'error') {
+      console.error(`[ephemeral-client] timeline error: ${timelineEvent.summary}`);
+      process.exit(1);
+    }
+
+    if (!expectedEventTypes.includes(timelineEvent.type)) {
       console.log(`[ephemeral-client] ignoring timeline event: ${timelineEvent.type}`);
       return;
     }
 
-    console.log(`[ephemeral-client] timeline event received: ${timelineEvent.title}`);
+    console.log(`[ephemeral-client] expected timeline event received: ${timelineEvent.type}`);
+    console.log(`[ephemeral-client] title: ${timelineEvent.title}`);
     console.log(`[ephemeral-client] summary: ${timelineEvent.summary}`);
     clearTimeout(timer);
     socket.close();
@@ -76,4 +86,3 @@ socket.addEventListener('error', () => {
 function send(type, payload) {
   socket.send(encodeMessage(createMessage(type, payload)));
 }
-

@@ -468,3 +468,60 @@ npm run verify:live-notification-mapper
 1. 让 prompt 验证等待 `assistant_delta` 或 `turn/completed`，证明完整回答链路。
 2. 为 Relay 增加最小 timeline 缓存和 cursor，支持移动端断线重连。
 3. 实现 approval request/decision 映射，把需要用户处理的事件做成移动端一等入口。
+
+## 2026-05-10: Live assistant event prompt verification
+
+状态：完成。
+
+本次目标：
+
+- 将 prompt 验证从“请求已送达 App Server”升级为“移动端能看到 Codex 的真实回答事件”。
+- 继续使用 ephemeral thread，避免测试污染真实历史会话。
+- 保持旧的 `turn_start_requested` 等待模式可配置，方便快速 smoke test。
+
+完成内容：
+
+- `tools/ephemeral-prompt-client/` 新增 `EPHEMERAL_CLIENT_EXPECT_EVENT_TYPES`。
+- 默认等待目标仍是 `turn_start_requested`，保持手动调用兼容。
+- `npm run verify:app-server-prompt` 改为等待 `assistant_delta` 或 `turn_completed`。
+- 验证超时从 60 秒提高到 120 秒，给真实模型回答留出余量。
+- timeline `error` 事件会让客户端立即失败，避免误判为超时。
+
+验证命令：
+
+```powershell
+npm run verify:app-server-prompt
+npm run verify:delivery-strategy
+npm run verify:live-notification-mapper
+npm run verify:app-server-steer
+npm run verify:app-server-timeline
+```
+
+验证结果摘要：
+
+```text
+[ephemeral-client] prompt sent: Reply with exactly: OK
+[ephemeral-client] ignoring timeline event: turn_start_requested
+[relay] timeline event: Assistant message delta
+[ephemeral-client] expected timeline event received: assistant_delta
+[ephemeral-client] summary: OK
+[verify] App Server ephemeral prompt produced a live assistant/completion event through Relay.
+```
+
+关键发现：
+
+- App Server 会先通过 `turn/start` 返回本地确认事件，再通过 live notification 推送 `assistant_delta`。
+- 当前 `Reply with exactly: OK` 场景下，端到端约 10 秒内可以看到 `assistant_delta`。
+- App Server 仍会输出 remote plugin sync、PowerShell shell snapshot、plugin manifest 等 warning；这些没有影响本次 prompt/live event 验证。
+
+当前限制：
+
+- 验证接受 `assistant_delta` 或 `turn_completed` 任一事件，不检查最终完整文本聚合。
+- delta 类事件仍是逐条转发，尚未做按 item 聚合、节流或重放。
+- Relay 仍不缓存 timeline，客户端必须在线订阅才能看到 live assistant event。
+
+下一步建议：
+
+1. 为 Relay 增加最小 timeline cache/cursor，支持移动端断线重连后补齐 live events。
+2. 将 `assistant_delta` 聚合为移动端可稳定展示的 assistant message 状态。
+3. 实现 approval request/decision 映射，让等待用户处理的 Codex 请求进入移动端主入口。

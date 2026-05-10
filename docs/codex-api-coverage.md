@@ -79,7 +79,7 @@
 | read session | covered | not covered | weak | App Server has `thread/read` and `thread/turns/list`. |
 | start session | covered | covered for batch | possible | App Server has `thread/start`; exec can start non-interactive task. |
 | send prompt to existing session | covered and verified | limited | possible | App Server `turn/start` is verified for idle/resumed or ephemeral threads; `turn/steer` is verified for active turns. |
-| stream status/events | covered | covered for batch | weak | App Server has server notifications for thread/turn/item events. |
+| stream status/events | covered and verified | covered for batch | weak | App Server notifications are mapped to timeline events; prompt verification now waits for live `assistant_delta` or `turn_completed`. |
 | plan updates | covered | likely event-only | weak | App Server has `turn/plan/updated`. |
 | diff updates | covered | likely event-only | weak | App Server has `turn/diff/updated`. |
 | command output | covered | covered | weak | App Server has command/process output notifications. |
@@ -197,4 +197,5 @@ Next implementation target:
 4. `turn/start` prompt routing is implemented for loaded/resumed threads.
 5. Dedicated ephemeral test threads are implemented through `thread/start`.
 6. `turn/steer` for active turns is implemented and verified through an ephemeral test thread.
-7. Next: wait for `assistant_delta` or `turn/completed` in prompt verification.
+7. Prompt verification now waits for live `assistant_delta` or `turn_completed`.
+8. Next: add Relay timeline cache/cursor and aggregate assistant deltas for mobile display.
