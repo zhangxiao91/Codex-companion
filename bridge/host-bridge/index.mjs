@@ -5,18 +5,22 @@ import {
   decodeMessage,
   encodeMessage
 } from '../../packages/protocol/index.mjs';
-import { MockCodexAdapter } from './codex-adapter.mjs';
+import { createCodexAdapter } from './codex-adapter.mjs';
 
 const relayUrl = process.env.RELAY_URL ?? DEFAULT_RELAY_URL;
 const hostId = process.env.HOST_ID ?? 'local-dev-host';
 const displayName = process.env.HOST_NAME ?? 'Local Development Host';
 const bridgeVersion = '0.0.1';
-const adapter = new MockCodexAdapter(hostId);
+const adapter = createCodexAdapter(hostId);
 
 const socket = new WebSocket(relayUrl);
 
-socket.addEventListener('open', () => {
+socket.addEventListener('open', async () => {
   console.log(`[bridge] connected to ${relayUrl}`);
+
+  if (typeof adapter.start === 'function') {
+    await adapter.start();
+  }
 
   send(MessageType.HostRegister, {
     host_id: hostId,
@@ -60,6 +64,9 @@ socket.addEventListener('message', async (event) => {
 
 socket.addEventListener('close', () => {
   console.log('[bridge] disconnected from relay');
+  if (typeof adapter.stop === 'function') {
+    adapter.stop();
+  }
 });
 
 socket.addEventListener('error', () => {
@@ -69,4 +76,3 @@ socket.addEventListener('error', () => {
 function send(type, payload) {
   socket.send(encodeMessage(createMessage(type, payload)));
 }
-

@@ -70,3 +70,106 @@ npm run verify:delivery-strategy
 2. 在 Relay/Bridge 原型上增加 approval request/decision 链路。
 3. 选择 Android 工具链安装路径后再启动 Android MVP Shell。
 
+## 2026-05-10: Codex adapter 覆盖与连接验证
+
+状态：完成接口覆盖初判和 App Server loopback 连接验证。
+
+本次目标：
+
+- 找到本机可执行的 Codex CLI。
+- 判断真实 Codex adapter 应优先接 App Server、exec JSON 还是 PTY wrapper。
+- 产出 coverage matrix。
+
+完成内容：
+
+- 确认 WindowsApps app alias 的 `codex` 当前执行 `--help` / `--version` 会返回 `Access is denied`。
+- 找到 VS Code 扩展内置 Codex CLI：`C:\Users\13372\.vscode\extensions\openai.chatgpt-26.506.21252-win32-x64\bin\windows-x86_64\codex.exe`。
+- 确认该 CLI 可执行，版本为 `codex-cli 0.129.0-alpha.15`。
+- 确认该 CLI 暴露 `app-server`、`app-server generate-ts`、`app-server generate-json-schema`、`exec --json`、`exec-server`、`mcp-server`。
+- 使用临时目录生成 App Server TypeScript bindings 和 JSON Schema，没有写入仓库。
+- 新增 `docs/codex-api-coverage.md`。
+- 新增 `tools/probe-codex-app-server.mjs`。
+- 验证 `codex app-server --listen ws://127.0.0.1:8791` 可以启动。
+- 验证 Node WebSocket client 可以连接 App Server。
+- 验证 JSON-RPC `initialize` 成功。
+- 验证 `thread/list` 成功返回 5 条历史 thread。
+- 观察到 App Server 会发送 `remoteControl/status/changed` notification。
+
+结论：
+
+- 首选真实 adapter 是 App Server Adapter。
+- `codex exec --json` 可作为 batch task fallback。
+- PTY wrapper 暂不建议使用。
+- App Server Adapter 的只读 MVP 可以进入实现。
+
+验证命令：
+
+```powershell
+npm run probe:codex-app-server
+```
+
+验证结果摘要：
+
+```text
+[probe] connected to ws://127.0.0.1:8791
+[probe] initialize ok: Codex Desktop/0.129.0-alpha.15 ...
+[probe] codex home: C:\Users\13372\.codex
+[probe] notification: remoteControl/status/changed
+[probe] thread/list ok: 5 thread(s)
+```
+
+下一步建议：
+
+1. 实现 `AppServerCodexAdapter` 的只读最小版本。
+2. 将 `thread/list` 映射为 Host Bridge `session.snapshot`。
+3. 增加环境变量开关，在测试中默认继续使用 `MockCodexAdapter`。
+
+## 2026-05-10: App Server readonly adapter MVP
+
+状态：完成。
+
+本次目标：
+
+- 保持 `MockCodexAdapter` 为默认测试 adapter。
+- 增加可通过环境变量启用的真实 App Server readonly adapter。
+- 让 Host Bridge 可以从真实 Codex App Server 读取 threads，并映射成 Relay 的 `session.snapshot`。
+
+完成内容：
+
+- 新增 `AppServerCodexAdapter`。
+- 新增 adapter factory：默认使用 mock，`CODEX_ADAPTER=app-server` 时使用真实 App Server。
+- Host Bridge 启动时会调用 adapter `start()`，再注册 host 和发送 sessions。
+- `AppServerCodexAdapter` 会启动 VS Code 扩展内置 Codex CLI：
+  - `codex app-server --listen ws://127.0.0.1:<port>`
+- `AppServerCodexAdapter` 会发送 JSON-RPC `initialize` 和 `thread/list`。
+- 将 Codex `Thread` 映射为 Host Bridge session snapshot。
+- 新增 `npm run verify:app-server-readonly`。
+
+验证命令：
+
+```powershell
+npm run verify:delivery-strategy
+npm run verify:app-server-readonly
+```
+
+验证结果摘要：
+
+```text
+[verify] Delivery Strategy main path verified.
+[bridge] app-server initialized: Codex Desktop/0.129.0-alpha.15 ...
+[relay] session snapshot: 019e100a-58f8-72f0-969d-3fb5bbefef97
+[verify] App Server read-only adapter listed sessions through Relay.
+```
+
+当前限制：
+
+- App Server adapter 当前只读，`sendPrompt()` 会显式报错。
+- 还未实现 `thread/read`、`turn/start`、`turn/steer` 或 approval request resolution。
+- 真实 adapter 依赖 VS Code 扩展内置 Codex CLI 路径；后续需要做 CLI discovery 更稳的实现。
+- App Server stderr 会输出 remote plugin sync warning：`chatgpt authentication required to sync remote plugins; api key auth is not supported`。这不影响本次 `initialize` / `thread/list` 验证。
+
+下一步建议：
+
+1. 实现 `thread/read`，让移动端能看到真实 thread 的 turns/items。
+2. 将 App Server notifications 映射为 timeline events。
+3. 再实现 `turn/start` 或 `turn/steer`，让真实 session 支持手机 prompt。

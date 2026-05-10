@@ -8,10 +8,11 @@
     "relay": "node relay/service/server.mjs",
     "bridge": "node bridge/host-bridge/index.mjs",
     "test-client": "node tools/test-client/index.mjs",
+    "probe:codex-app-server": "node tools/probe-codex-app-server.mjs",
+    "verify:app-server-readonly": "node tools/verify-app-server-readonly.mjs",
     "verify:delivery-strategy": "node tools/verify-delivery-strategy.mjs"
   },
   "engines": {
     "node": ">=24"
   }
 }
-
