@@ -44,6 +44,7 @@ class RelayViewModel(
                 sessions = emptyList(),
                 selectedSessionId = null,
                 timeline = emptyList(),
+                approvals = emptyList(),
                 lastConnectedAt = null,
                 lastError = null
             )
@@ -73,6 +74,7 @@ class RelayViewModel(
                 sessions = emptyList(),
                 selectedSessionId = null,
                 timeline = emptyList(),
+                approvals = emptyList(),
                 lastConnectedAt = null,
                 lastHealthCheck = null,
                 lastError = null
@@ -111,6 +113,10 @@ class RelayViewModel(
         relayClient.sendPrompt(sessionId, text.trim())
     }
 
+    fun decideApproval(approvalId: String, decision: String) {
+        relayClient.sendApprovalDecision(approvalId, decision)
+    }
+
     override fun onConnected() {
         _uiState.update {
             it.copy(
@@ -139,6 +145,14 @@ class RelayViewModel(
         settings.saveSelectedSessionId(state.selectedSessionId)
         if (_uiState.value.selectedSessionId == session.sessionId) {
             relayClient.requestTimeline(session.sessionId, latestCursorFor(session.sessionId))
+        }
+    }
+
+    override fun onApprovalRequest(approval: ApprovalItem) {
+        _uiState.update { state ->
+            val approvals = (listOf(approval) + state.approvals.filter { it.approvalId != approval.approvalId })
+                .take(MAX_APPROVAL_ITEMS)
+            state.copy(approvals = approvals)
         }
     }
 
@@ -179,6 +193,7 @@ class RelayViewModel(
 
     private companion object {
         const val MAX_TIMELINE_ITEMS = 200
+        const val MAX_APPROVAL_ITEMS = 50
 
         fun isValidRelayUrl(url: String): Boolean =
             url.startsWith("ws://") || url.startsWith("wss://")

@@ -1047,6 +1047,62 @@ MVP 剩余缺口：
 4. Relay/Bridge 自动重连与退避策略。
 5. 真机端到端测试手册和故障排查清单。
 
+## 2026-05-10: Approval request/decision protocol shell
+
+状态：完成。
+
+本次目标：
+
+- 继续 MVP 主线，先打通移动端 approval request/decision 的协议和 UI 主链路。
+- 暂不直接接真实 Codex App Server approval request，先用 Mock adapter 验证端到端路由。
+
+完成内容：
+
+- 协议新增：
+  - `approval.request`
+  - `approval.decision`
+- Relay 新增 approval 内存状态：
+  - Host Bridge 可上报 pending approval。
+  - Client subscribe `*` 或具体 session 时会收到 pending approval。
+  - Client 发送 decision 后，Relay 路由到对应 Host Bridge。
+  - Relay 广播 resolved approval 状态。
+- Mock Host Bridge 新增一个 mock approval：
+  - `mock-approval-001`
+  - kind: `shell`
+  - command: `npm test`
+  - allowed decisions: `approve_once`, `deny`
+- Mock adapter 支持 `resolveApproval()`，收到 decision 后回传 `approval_resolved` timeline event。
+- Android 新增 approval inbox：
+  - 展示 selected session 的 pending approvals。
+  - 展示 title、summary、command、risk。
+  - 支持 Approve / Deny。
+- 新增 `npm run verify:approval-flow`。
+
+验证命令：
+
+```powershell
+npm run verify:approval-flow
+npm run verify:delivery-strategy
+npm run verify:relay-dev-token
+cd android
+$env:JAVA_HOME='C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot'
+$env:ANDROID_HOME='C:\Users\13372\AppData\Local\Android\Sdk'
+$env:ANDROID_SDK_ROOT=$env:ANDROID_HOME
+$env:Path="$env:JAVA_HOME\bin;$env:ANDROID_HOME\platform-tools;$env:Path"
+.\gradlew.bat :app:assembleDebug
+```
+
+当前限制：
+
+- 真实 Codex App Server server request 还没有接到 `approval.request`。
+- Android approval 状态暂不持久化，重连后依赖 Relay pending approval replay。
+- Relay approval 状态仍是内存态，Relay 重启后丢失。
+
+下一步建议：
+
+1. 调研并接入 App Server `item/commandExecution/requestApproval`、`item/fileChange/requestApproval`、`item/permissions/requestApproval` 的 request/response。
+2. 再做 Git status/diff/commit/push 最小入口。
+
 ## 2026-05-10: Android dashboard scroll fix
 
 Status: completed.

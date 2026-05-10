@@ -18,6 +18,7 @@ class RelayClient(
         fun onConnected()
         fun onDisconnected(reason: String)
         fun onSessionSnapshot(session: CodexSession)
+        fun onApprovalRequest(approval: ApprovalItem)
         fun onTimelineEvent(event: TimelineItem)
         fun onHealthCheck(summary: String)
         fun onPairingComplete(deviceId: String, deviceToken: String)
@@ -79,6 +80,15 @@ class RelayClient(
             JSONObject()
                 .put("session_id", sessionId)
                 .put("text", text)
+        )
+    }
+
+    fun sendApprovalDecision(approvalId: String, decision: String) {
+        send(
+            "approval.decision",
+            JSONObject()
+                .put("approval_id", approvalId)
+                .put("decision", decision)
         )
     }
 
@@ -172,6 +182,10 @@ class RelayClient(
                     parseSession(message.getJSONObject("payload").getJSONObject("session"))
                 )
 
+                "approval.request" -> listener.onApprovalRequest(
+                    parseApproval(message.getJSONObject("payload").getJSONObject("approval"))
+                )
+
                 "timeline.event" -> listener.onTimelineEvent(
                     parseTimelineEvent(message.getJSONObject("payload").getJSONObject("event"))
                 )
@@ -259,6 +273,18 @@ class RelayClient(
         title = json.optString("title", "Timeline event"),
         summary = json.optString("summary", ""),
         cursor = json.optString("cursor").takeIf { it.isNotBlank() }
+    )
+
+    private fun parseApproval(json: JSONObject): ApprovalItem = ApprovalItem(
+        approvalId = json.getString("approval_id"),
+        sessionId = json.getString("session_id"),
+        kind = json.optString("kind", "action"),
+        title = json.optString("title", "Approval requested"),
+        summary = json.optString("summary", ""),
+        command = json.optString("command", ""),
+        riskLevel = json.optString("risk_level", "unknown"),
+        status = json.optString("status", "pending"),
+        requestedAt = json.optString("requested_at", "")
     )
 
     companion object {

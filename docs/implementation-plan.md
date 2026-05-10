@@ -33,6 +33,7 @@
 - Android 已支持 Relay URL 编辑保存、重连和基础连接诊断，模拟器/真机可以切换不同 Relay 地址。
 - Android 已用 SharedPreferences 持久化最近 sessions、timeline events、selected session 和 cursor recovery 状态。
 - Relay 已加入临时配对安全模型：局域网监听必须配置 `RELAY_DEV_TOKEN`，Host Bridge 用 pairing token 注册，Android/Node client 必须通过 `/pair` 换取 device token 后才能订阅 session、请求 timeline 或发送 prompt。
+- Approval request/decision 的协议壳、Relay 路由、Mock Bridge 验证和 Android 待处理卡片已完成；真实 App Server approval request 适配仍待接入。
 - 详细记录见 `docs/progress.md`。
 
 ## 2. Milestone 0: Research Spike

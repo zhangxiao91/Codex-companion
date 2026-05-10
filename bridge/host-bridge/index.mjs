@@ -43,6 +43,12 @@ socket.addEventListener('open', async () => {
     send(MessageType.SessionSnapshot, { session });
   }
 
+  if (typeof adapter.listApprovals === 'function') {
+    for (const approval of adapter.listApprovals()) {
+      send(MessageType.ApprovalRequest, { approval });
+    }
+  }
+
   setInterval(() => {
     send(MessageType.HostHeartbeat, {
       host_id: hostId,
@@ -77,6 +83,17 @@ socket.addEventListener('message', async (event) => {
       for (const response of responses) {
         socket.send(encodeMessage(withAuth(response)));
       }
+      return;
+    }
+
+    if (message.type === MessageType.ApprovalDecision) {
+      if (typeof adapter.resolveApproval !== 'function') {
+        return;
+      }
+
+      console.log(`[bridge] received approval decision for ${message.payload.approval_id}: ${message.payload.decision}`);
+      const response = await adapter.resolveApproval(message.payload);
+      socket.send(encodeMessage(withAuth(response)));
       return;
     }
 

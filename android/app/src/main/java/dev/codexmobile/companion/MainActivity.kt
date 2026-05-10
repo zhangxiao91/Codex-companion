@@ -68,6 +68,7 @@ class MainActivity : ComponentActivity() {
                 onPairDevice = viewModel::pairDevice,
                 onHealthCheck = viewModel::testConnection,
                 onSessionSelected = viewModel::selectSession,
+                onApprovalDecision = viewModel::decideApproval,
                 onPromptSend = viewModel::sendPrompt
             )
         }
@@ -82,6 +83,7 @@ private fun CompanionApp(
     onPairDevice: () -> Unit,
     onHealthCheck: () -> Unit,
     onSessionSelected: (String) -> Unit,
+    onApprovalDecision: (String, String) -> Unit,
     onPromptSend: (String) -> Unit
 ) {
     MaterialTheme(
@@ -102,6 +104,7 @@ private fun CompanionApp(
                 onPairDevice = onPairDevice,
                 onHealthCheck = onHealthCheck,
                 onSessionSelected = onSessionSelected,
+                onApprovalDecision = onApprovalDecision,
                 onPromptSend = onPromptSend
             )
         }
@@ -116,6 +119,7 @@ private fun SessionDashboard(
     onPairDevice: () -> Unit,
     onHealthCheck: () -> Unit,
     onSessionSelected: (String) -> Unit,
+    onApprovalDecision: (String, String) -> Unit,
     onPromptSend: (String) -> Unit
 ) {
     var prompt by remember { mutableStateOf("\u603b\u7ed3\u5f53\u524d\u8fdb\u5ea6") }
@@ -140,6 +144,11 @@ private fun SessionDashboard(
             sessions = uiState.sessions,
             selectedSession = uiState.selectedSession,
             onSessionSelected = onSessionSelected
+        )
+        ApprovalInbox(
+            approvals = uiState.pendingApprovals,
+            selectedSessionId = uiState.selectedSessionId,
+            onDecision = onApprovalDecision
         )
         TimelineList(
             events = uiState.timeline.filter { it.sessionId == uiState.selectedSessionId },
@@ -389,6 +398,89 @@ private fun SessionRow(session: CodexSession, selected: Boolean, onClick: () -> 
 }
 
 @Composable
+private fun ApprovalInbox(
+    approvals: List<ApprovalItem>,
+    selectedSessionId: String?,
+    onDecision: (String, String) -> Unit
+) {
+    val visibleApprovals = approvals
+        .filter { selectedSessionId == null || it.sessionId == selectedSessionId }
+        .take(3)
+
+    if (visibleApprovals.isEmpty()) {
+        return
+    }
+
+    Panel {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Needs attention", fontWeight = FontWeight.SemiBold)
+            visibleApprovals.forEach { approval ->
+                ApprovalRow(approval = approval, onDecision = onDecision)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ApprovalRow(
+    approval: ApprovalItem,
+    onDecision: (String, String) -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = Color(0xFFFFF8E8),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = approval.title,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                StatusPill(text = approval.riskLevel)
+            }
+            Text(
+                text = approval.summary.ifBlank { approval.kind },
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF5E6978),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (approval.command.isNotBlank()) {
+                Text(
+                    text = approval.command,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF344054),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(
+                    onClick = { onDecision(approval.approvalId, "approve_once") },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF176B52))
+                ) {
+                    Text("Approve")
+                }
+                OutlinedButton(onClick = { onDecision(approval.approvalId, "deny") }) {
+                    Text("Deny")
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun TimelineList(events: List<TimelineItem>, modifier: Modifier = Modifier) {
     Panel(modifier = modifier) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -504,5 +596,5 @@ private fun StatusPill(text: String) {
 private fun diagnosticsSummary(uiState: RelayUiState): String {
     val connectedAt = uiState.lastConnectedAt ?: "never"
     val selected = uiState.selectedSession?.projectName ?: "none"
-    return "sessions=${uiState.sessions.size}, events=${uiState.timeline.size}, selected=$selected, last connected=$connectedAt"
+    return "sessions=${uiState.sessions.size}, approvals=${uiState.pendingApprovals.size}, events=${uiState.timeline.size}, selected=$selected, last connected=$connectedAt"
 }

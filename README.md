@@ -151,7 +151,7 @@ npm run check:android-toolchain
 
 还没完成但属于 MVP 应补能力：
 
-- Approval request/decision：Codex 请求 shell/Git/网络/文件权限时，手机端还不能批准或拒绝。
+- Approval request/decision：协议壳、Relay 路由和 Android 卡片已完成；真实 Codex App Server approval request 尚未接入。
 - Git status/diff/commit/push：还没有移动端 Git 收尾入口。
 - Android foreground/background 通知：当前需要打开 App 看 timeline，还没有系统通知。
 - Relay/Bridge 重连策略：断线后基础重连能手动触发，自动退避重连还不完整。

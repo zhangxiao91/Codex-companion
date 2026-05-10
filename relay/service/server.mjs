@@ -26,6 +26,7 @@ const state = {
   hosts: new Map(),
   hostConnections: new Map(),
   sessions: new Map(),
+  approvals: new Map(),
   clients: new Set(),
   subscriptions: new Map(),
   timelineEvents: new Map(),
@@ -89,6 +90,12 @@ function handleMessage(connection, raw) {
       case MessageType.HostHeartbeat:
         handleHostHeartbeat(connection, message);
         break;
+      case MessageType.ApprovalRequest:
+        handleApprovalRequest(connection, message);
+        break;
+      case MessageType.ApprovalDecision:
+        handleApprovalDecision(connection, message);
+        break;
       case MessageType.SessionCreateEphemeral:
         handleSessionCreateEphemeral(connection, message);
         break;
@@ -147,6 +154,7 @@ function createHealthPayload(request) {
       hosts: state.hosts.size,
       online_hosts: state.hostConnections.size,
       sessions: state.sessions.size,
+      approvals: state.approvals.size,
       clients: state.clients.size,
       subscriptions: state.subscriptions.size,
       paired_devices: state.deviceTokens.size,
@@ -209,12 +217,14 @@ function isAuthorizedDeviceToken(token) {
 function isHostMessage(type) {
   return type === MessageType.HostRegister
     || type === MessageType.HostHeartbeat
+    || type === MessageType.ApprovalRequest
     || type === MessageType.SessionSnapshot
     || type === MessageType.TimelineEvent;
 }
 
 function isClientMessage(type) {
-  return type === MessageType.SessionCreateEphemeral
+  return type === MessageType.ApprovalDecision
+    || type === MessageType.SessionCreateEphemeral
     || type === MessageType.SessionSubscribe
     || type === MessageType.SessionPrompt
     || type === MessageType.SessionTimelineRequest;
@@ -344,6 +354,67 @@ function handleSessionCreateEphemeral(connection, message) {
   send(hostConnection, message);
 }
 
+function handleApprovalRequest(connection, message) {
+  requirePayloadField(message, 'approval');
+
+  const { approval } = message.payload;
+  requireApprovalField(approval, 'approval_id');
+  requireApprovalField(approval, 'session_id');
+
+  state.approvals.set(approval.approval_id, {
+    ...approval,
+    status: approval.status ?? 'pending',
+    updated_at: new Date().toISOString()
+  });
+
+  console.log(`[relay] approval requested: ${approval.approval_id}`);
+  broadcastToClients(createMessage(MessageType.ApprovalRequest, {
+    approval: state.approvals.get(approval.approval_id)
+  }));
+}
+
+function handleApprovalDecision(connection, message) {
+  requirePayloadField(message, 'approval_id');
+  requirePayloadField(message, 'decision');
+
+  connection.role = SenderRole.Client;
+  state.clients.add(connection);
+
+  const approval = state.approvals.get(message.payload.approval_id);
+  if (!approval) {
+    sendError(connection, `Unknown approval: ${message.payload.approval_id}`);
+    return;
+  }
+
+  if (approval.status && approval.status !== 'pending') {
+    sendError(connection, `Approval is already resolved: ${message.payload.approval_id}`);
+    return;
+  }
+
+  const session = state.sessions.get(approval.session_id);
+  if (!session) {
+    sendError(connection, `Unknown session for approval: ${approval.session_id}`);
+    return;
+  }
+
+  const hostConnection = state.hostConnections.get(session.host_id);
+  if (!hostConnection) {
+    sendError(connection, `Host is offline: ${session.host_id}`);
+    return;
+  }
+
+  const resolvedApproval = {
+    ...approval,
+    status: message.payload.decision,
+    decided_at: new Date().toISOString()
+  };
+  state.approvals.set(approval.approval_id, resolvedApproval);
+
+  console.log(`[relay] routing approval decision to host ${session.host_id}: ${approval.approval_id}`);
+  send(hostConnection, message);
+  broadcastToClients(createMessage(MessageType.ApprovalRequest, { approval: resolvedApproval }));
+}
+
 function handleSessionSnapshot(connection, message) {
   requirePayloadField(message, 'session');
 
@@ -369,12 +440,22 @@ function handleSessionSubscribe(connection, message) {
     for (const session of state.sessions.values()) {
       send(connection, createMessage(MessageType.SessionSnapshot, { session }));
     }
+    for (const approval of state.approvals.values()) {
+      if (approval.status === 'pending') {
+        send(connection, createMessage(MessageType.ApprovalRequest, { approval }));
+      }
+    }
     return;
   }
 
   const session = state.sessions.get(sessionId);
   if (session) {
     send(connection, createMessage(MessageType.SessionSnapshot, { session }));
+    for (const approval of state.approvals.values()) {
+      if (approval.session_id === sessionId && approval.status === 'pending') {
+        send(connection, createMessage(MessageType.ApprovalRequest, { approval }));
+      }
+    }
     sendCachedTimeline(connection, sessionId, {
       afterCursor: message.payload.after_cursor,
       limit: message.payload.limit
@@ -474,7 +555,7 @@ function broadcastToClients(message) {
     const sessionId = eventSessionId ?? snapshotSessionId;
     const subscriptions = state.subscriptions.get(client);
 
-    if (!sessionId || !subscriptions || subscriptions.has(sessionId)) {
+    if (!sessionId || !subscriptions || subscriptions.has('*') || subscriptions.has(sessionId)) {
       send(client, message);
     }
   }
@@ -530,6 +611,12 @@ function parseCursor(cursor) {
 
   const parsed = Number.parseInt(cursor, 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function requireApprovalField(approval, field) {
+  if (!approval || approval[field] === undefined || approval[field] === null) {
+    throw new Error(`Approval is missing ${field}.`);
+  }
 }
 
 function send(connection, message) {

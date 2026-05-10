@@ -16,10 +16,62 @@ export class MockCodexAdapter {
   constructor(hostId) {
     this.hostId = hostId;
     this.session = createMockSession(hostId);
+    this.approvals = new Map([
+      [
+        'mock-approval-001',
+        {
+          approval_id: 'mock-approval-001',
+          session_id: this.session.session_id,
+          kind: 'shell',
+          title: 'Run test command',
+          summary: 'Mock approval for validating mobile approval routing.',
+          command: 'npm test',
+          cwd: process.cwd(),
+          risk_level: 'medium',
+          allowed_decisions: ['approve_once', 'deny'],
+          status: 'pending',
+          requested_at: new Date().toISOString()
+        }
+      ]
+    ]);
   }
 
   listSessions() {
     return [this.session];
+  }
+
+  listApprovals() {
+    return [...this.approvals.values()].filter((approval) => approval.status === 'pending');
+  }
+
+  async resolveApproval({ approval_id: approvalId, decision }) {
+    const approval = this.approvals.get(approvalId);
+    if (!approval) {
+      throw new Error(`Unknown mock approval: ${approvalId}`);
+    }
+
+    const resolvedApproval = {
+      ...approval,
+      status: decision,
+      decided_at: new Date().toISOString()
+    };
+    this.approvals.set(approvalId, resolvedApproval);
+
+    return createMessage(MessageType.TimelineEvent, {
+      event: {
+        event_id: `${approval.session_id}:${approvalId}:approval_resolved`,
+        session_id: approval.session_id,
+        created_at: new Date().toISOString(),
+        type: 'approval_resolved',
+        title: 'Approval resolved',
+        summary: `Decision: ${decision}`,
+        payload: {
+          approval_id: approvalId,
+          decision
+        },
+        redaction_level: 'none'
+      }
+    });
   }
 
   async sendPrompt(sessionId, text) {
