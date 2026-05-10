@@ -193,6 +193,7 @@ UI 要求：
 - Android 已有紧凑 Git 面板，支持 Status / Diff summary 和点击 changed file 查看单文件 diff preview。
 - Relay 已有 metadata-only Git action audit，记录 requested/completed、device、action、file path 和结果摘要；当前仍是内存态，未持久化查询。
 - Android 已有 commit message 输入和二次确认 UI；commit 执行默认受 `GIT_WRITE_ACTIONS_ENABLED=true` 保护。
+- Git snapshot 已区分 tracked/untracked files；Android commit confirmation 会提示 untracked files 不会被当前 tracked-only commit 策略提交。
 - push adapter 已预留，但尚未在 Android 默认暴露。
 
 任务：
@@ -202,7 +203,7 @@ UI 要求：
 - 支持 file diff summary。（已完成最小 diff stat）
 - 支持 file-level diff。（已完成 compact preview）
 - 支持生成 commit message。
-- 支持 commit。（已完成确认 UI；执行仍 gated）
+- 支持 commit。（已完成确认 UI和 tracked/untracked 提示；执行仍 gated）
 - 支持 push。
 - Android 实现 Git status 页面。（已完成紧凑面板）
 - Android 实现 diff review 页面。（已完成 Git 面板内 compact preview；后续可拆成完整页面）

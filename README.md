@@ -165,6 +165,7 @@ The current prototype includes a minimal Git status and file diff path:
 - Android can request Git Status or Diff summary for the selected session.
 - Android can tap a changed file and request a compact file-level diff preview.
 - Android can enter a commit message and pass a confirmation dialog before sending a commit request.
+- Android and Host Bridge distinguish tracked vs untracked files; the current commit strategy warns that untracked files are not included.
 - Relay routes `git.request` to the owning Host Bridge.
 - Host Bridge runs local read-only Git commands in the session repository and returns `git.snapshot`.
 - Relay emits metadata-only `git_audit` timeline events for Git request/completion.
@@ -178,6 +179,6 @@ npm run verify:git-flow
 
 Remaining before Git is truly user-facing:
 
-- tracked/untracked file handling
+- explicit stage/add strategy for untracked files
 - persistent/queryable audit storage
 - push confirmation and host policy checks

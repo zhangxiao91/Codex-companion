@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { readFile, writeFile } from 'node:fs/promises';
+import { rm, readFile, writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
   MessageType,
@@ -13,10 +13,12 @@ const relayPort = '8811';
 const relayUrl = `ws://127.0.0.1:${relayPort}`;
 const devToken = 'git-flow-token';
 const diffFixturePath = 'README.md';
+const untrackedFixturePath = 'verify-git-flow-untracked.tmp';
 const originalFixture = await readFile(diffFixturePath, 'utf8');
 
 try {
   await writeFile(diffFixturePath, `${originalFixture}\n<!-- verify-git-flow temporary diff -->\n`);
+  await writeFile(untrackedFixturePath, 'temporary untracked fixture\n');
 
   const relay = spawnProcess('relay', 'node', ['relay/service/server.mjs'], {
     ...process.env,
@@ -56,6 +58,12 @@ try {
   if (!statusSnapshot.is_git_repo) {
     throw new Error(`Expected workspace to be a git repo: ${statusSnapshot.error}`);
   }
+  if ((statusSnapshot.untracked_file_count ?? 0) < 1) {
+    throw new Error('Expected at least one untracked file in git snapshot.');
+  }
+  if (!statusSnapshot.files.some((file) => file.path === untrackedFixturePath && file.tracked === false)) {
+    throw new Error('Expected untracked fixture to be marked tracked=false.');
+  }
 
   const diffRequestedAudit = waitForGitAudit(client, 'requested', 'diff', 5000);
   const diffCompletedAudit = waitForGitAudit(client, 'completed', 'diff', 5000);
@@ -93,6 +101,9 @@ try {
   if (commitSnapshot.result?.ok !== false) {
     throw new Error('Expected commit to be disabled by default.');
   }
+  if (!commitSnapshot.result?.message?.includes('untracked file')) {
+    throw new Error('Expected commit result to warn about untracked files.');
+  }
 
   const health = await readHealth(relayPort, deviceToken);
   if ((health.counts?.git_audit_events ?? 0) < 6) {
@@ -106,6 +117,7 @@ try {
   console.log('[verify] Git status, file diff, and audit flow verified.');
 } finally {
   await writeFile(diffFixturePath, originalFixture);
+  await rm(untrackedFixturePath, { force: true });
 
   for (const child of processes.reverse()) {
     if (!child.killed) {

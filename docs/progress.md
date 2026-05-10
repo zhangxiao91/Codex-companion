@@ -1466,10 +1466,62 @@ BUILD SUCCESSFUL
 Current limitations:
 
 - The current commit adapter uses `git commit -am`, so it only covers tracked files.
-- Android does not yet distinguish tracked vs untracked files in the confirmation.
 - Push confirmation is still not implemented.
 
 Next recommended step:
 
-1. Add tracked/untracked handling before enabling real commit use.
+1. Add explicit stage/add strategy before enabling untracked-file commits.
 2. Then add push confirmation with host policy checks.
+
+## 2026-05-10: Tracked and untracked Git handling
+
+Status: completed.
+
+Goal:
+
+- Prevent the mobile commit flow from implying untracked files will be committed.
+- Keep the current write strategy conservative and explicit.
+
+Changes:
+
+- Host Bridge now marks each Git file as `tracked: true/false`.
+- Git snapshots include:
+  - `tracked_file_count`
+  - `untracked_file_count`
+  - `commit_strategy: "tracked_only_commit_am"`
+- Commit blocked/validation messages now mention that the current strategy covers tracked files only.
+- If untracked files exist, commit result messages include how many will not be committed.
+- Android parses tracked/untracked counts.
+- Android Git panel shows tracked and untracked counts.
+- Android commit confirmation warns when untracked files will not be included.
+- `npm run verify:git-flow` now creates a temporary untracked file and verifies it is marked `tracked=false`.
+
+Verification commands:
+
+```powershell
+npm run verify:git-flow
+cd android
+$env:JAVA_HOME='C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot'
+$env:ANDROID_HOME='C:\Users\13372\AppData\Local\Android\Sdk'
+$env:ANDROID_SDK_ROOT=$env:ANDROID_HOME
+$env:Path="$env:JAVA_HOME\bin;$env:ANDROID_HOME\platform-tools;$env:Path"
+.\gradlew.bat :app:assembleDebug
+```
+
+Verification result:
+
+```text
+[verify] Git status, file diff, and audit flow verified.
+BUILD SUCCESSFUL
+```
+
+Current limitations:
+
+- Untracked files are identified and warned about, but not staged or committed.
+- Real commit execution is still gated by `GIT_WRITE_ACTIONS_ENABLED=true`.
+- Push confirmation is still not implemented.
+
+Next recommended step:
+
+1. Add an explicit stage/add policy for untracked files.
+2. Add push confirmation after commit semantics are clear.

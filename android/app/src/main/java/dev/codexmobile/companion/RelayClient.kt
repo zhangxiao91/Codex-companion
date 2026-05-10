@@ -315,7 +315,8 @@ class RelayClient(
                 GitFileChange(
                     path = item.optString("path", ""),
                     indexStatus = item.optString("index_status", ""),
-                    worktreeStatus = item.optString("worktree_status", "")
+                    worktreeStatus = item.optString("worktree_status", ""),
+                    tracked = item.optBoolean("tracked", true)
                 )
             }
         }
@@ -327,6 +328,9 @@ class RelayClient(
             branch = json.optString("branch", "unknown"),
             isGitRepo = json.optBoolean("is_git_repo", false),
             statusSummary = json.optString("status_summary", ""),
+            trackedFileCount = json.optInt("tracked_file_count", files.count { it.tracked }),
+            untrackedFileCount = json.optInt("untracked_file_count", files.count { !it.tracked }),
+            commitStrategy = json.optString("commit_strategy", "tracked_only_commit_am"),
             files = files,
             diffStat = json.optString("diff_stat", ""),
             selectedFilePath = json.optString("selected_file_path", ""),

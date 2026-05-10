@@ -19,18 +19,19 @@ export async function handleGitRequest(session, request) {
   }
 
   if (action === 'commit') {
+    const preCommitSnapshot = await readGitSnapshot(repoPath);
     if (!gitWriteActionsEnabled) {
-      return createSnapshot(session, action, await readGitSnapshot(repoPath), {
+      return createSnapshot(session, action, preCommitSnapshot, {
         ok: false,
-        message: 'Git commit is disabled. Set GIT_WRITE_ACTIONS_ENABLED=true on Host Bridge to enable it.'
+        message: commitPolicyMessage('Git commit is disabled. Set GIT_WRITE_ACTIONS_ENABLED=true on Host Bridge to enable it.', preCommitSnapshot)
       }, undefined, auditId);
     }
 
     const message = typeof request.message === 'string' ? request.message.trim() : '';
     if (!message) {
-      return createSnapshot(session, action, await readGitSnapshot(repoPath), {
+      return createSnapshot(session, action, preCommitSnapshot, {
         ok: false,
-        message: 'Commit message is required.'
+        message: commitPolicyMessage('Commit message is required.', preCommitSnapshot)
       }, undefined, auditId);
     }
 
@@ -80,6 +81,8 @@ async function readGitSnapshot(repoPath) {
     branch: branch.output.trim() || parseBranch(statusLines[0]) || 'unknown',
     is_git_repo: status.exitCode === 0,
     status_summary: summarizeFiles(files),
+    tracked_file_count: files.filter((file) => file.tracked).length,
+    untracked_file_count: files.filter((file) => !file.tracked).length,
     files,
     diff_stat: diffStat.output.trim(),
     changed_files: changedFiles.output.split(/\r?\n/).filter(Boolean),
@@ -96,6 +99,9 @@ function createSnapshot(session, action, git, result = { ok: true, message: '' }
     branch: git.branch,
     is_git_repo: git.is_git_repo,
     status_summary: git.status_summary,
+    tracked_file_count: git.tracked_file_count,
+    untracked_file_count: git.untracked_file_count,
+    commit_strategy: 'tracked_only_commit_am',
     files: git.files,
     diff_stat: git.diff_stat,
     changed_files: git.changed_files,
@@ -156,8 +162,17 @@ function parsePorcelainLine(line) {
   return {
     index_status: line.slice(0, 1).trim(),
     worktree_status: line.slice(1, 2).trim(),
-    path: line.slice(3).trim()
+    path: line.slice(3).trim(),
+    tracked: !line.startsWith('??')
   };
+}
+
+function commitPolicyMessage(message, git) {
+  if (!git.untracked_file_count) {
+    return `${message} Current commit strategy covers tracked files only.`;
+  }
+
+  return `${message} Current commit strategy covers tracked files only; ${git.untracked_file_count} untracked file(s) will not be committed.`;
 }
 
 function summarizeFiles(files) {

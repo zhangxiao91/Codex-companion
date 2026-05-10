@@ -35,7 +35,8 @@ data class ApprovalItem(
 data class GitFileChange(
     val path: String,
     val indexStatus: String,
-    val worktreeStatus: String
+    val worktreeStatus: String,
+    val tracked: Boolean
 )
 
 data class GitSnapshot(
@@ -45,6 +46,9 @@ data class GitSnapshot(
     val branch: String,
     val isGitRepo: Boolean,
     val statusSummary: String,
+    val trackedFileCount: Int,
+    val untrackedFileCount: Int,
+    val commitStrategy: String,
     val files: List<GitFileChange>,
     val diffStat: String,
     val selectedFilePath: String,

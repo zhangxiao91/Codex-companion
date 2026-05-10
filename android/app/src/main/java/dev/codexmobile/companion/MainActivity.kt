@@ -458,7 +458,7 @@ private fun GitPanel(
             }
             if (snapshot != null) {
                 Text(
-                    text = "changes=${snapshot.files.size}, status=${snapshot.statusSummary.ifBlank { "unknown" }}",
+                    text = gitChangeSummary(snapshot),
                     style = MaterialTheme.typography.bodySmall,
                     color = Color(0xFF344054),
                     maxLines = 2,
@@ -538,6 +538,15 @@ private fun GitPanel(
             ) {
                 Text("Commit")
             }
+            if (snapshot?.untrackedFileCount ?: 0 > 0) {
+                Text(
+                    text = "${snapshot?.untrackedFileCount} untracked file(s) will not be included by the current commit strategy.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFFB42318),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
             if (selectedSession == null || connectionStatus != "Online") {
                 Text(
                     text = "Select an online session to refresh Git status.",
@@ -552,6 +561,7 @@ private fun GitPanel(
         CommitConfirmDialog(
             changedFileCount = snapshot?.files?.size ?: 0,
             message = commitMessage,
+            untrackedFileCount = snapshot?.untrackedFileCount ?: 0,
             onDismiss = { confirmCommit = false },
             onConfirm = {
                 onCommit(commitMessage)
@@ -565,6 +575,7 @@ private fun GitPanel(
 private fun CommitConfirmDialog(
     changedFileCount: Int,
     message: String,
+    untrackedFileCount: Int,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit
 ) {
@@ -580,10 +591,17 @@ private fun CommitConfirmDialog(
             ) {
                 Text("Confirm commit", fontWeight = FontWeight.SemiBold)
                 Text(
-                    text = "This requests a commit for $changedFileCount changed file(s). Host Bridge will only execute it when Git write actions are explicitly enabled.",
+                    text = commitConfirmText(changedFileCount, untrackedFileCount),
                     style = MaterialTheme.typography.bodySmall,
                     color = Color(0xFF5E6978)
                 )
+                if (untrackedFileCount > 0) {
+                    Text(
+                        text = "$untrackedFileCount untracked file(s) will not be committed by the current tracked-only strategy.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFB42318)
+                    )
+                }
                 Text(
                     text = message,
                     style = MaterialTheme.typography.bodySmall,
@@ -896,7 +914,20 @@ private fun gitSummary(selectedSession: CodexSession?, snapshot: GitSnapshot?): 
 }
 
 private fun gitFileStatus(file: GitFileChange): String {
+    if (!file.tracked) {
+        return "??"
+    }
     val index = file.indexStatus.ifBlank { "." }
     val worktree = file.worktreeStatus.ifBlank { "." }
     return "$index$worktree"
+}
+
+private fun gitChangeSummary(snapshot: GitSnapshot): String {
+    val status = snapshot.statusSummary.ifBlank { "unknown" }
+    return "changes=${snapshot.files.size}, tracked=${snapshot.trackedFileCount}, untracked=${snapshot.untrackedFileCount}, status=$status"
+}
+
+private fun commitConfirmText(changedFileCount: Int, untrackedFileCount: Int): String {
+    val trackedCount = (changedFileCount - untrackedFileCount).coerceAtLeast(0)
+    return "This requests a tracked-only commit for $trackedCount tracked changed file(s). Host Bridge will only execute it when Git write actions are explicitly enabled."
 }
