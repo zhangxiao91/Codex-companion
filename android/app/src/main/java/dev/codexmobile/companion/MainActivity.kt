@@ -233,24 +233,13 @@ private fun HostSummary(
                 style = MaterialTheme.typography.bodySmall,
                 color = Color(0xFF5E6978)
             )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Button(
-                    onClick = { onRelaySettingsSave(relayUrlDraft, pairingTokenDraft) },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF176B52))
-                ) {
-                    Text("Save")
-                }
-                CompactActionButton(text = "Pair", onClick = onPairDevice)
-                CompactActionButton(
-                    text = if (uiState.connectionStatus == "Online") "Refresh" else "Connect",
-                    onClick = onReconnect
-                )
-                CompactActionButton(text = "Test", onClick = onHealthCheck)
-            }
+            RelayActionButtons(
+                connectionStatus = uiState.connectionStatus,
+                onSave = { onRelaySettingsSave(relayUrlDraft, pairingTokenDraft) },
+                onPairDevice = onPairDevice,
+                onReconnect = onReconnect,
+                onHealthCheck = onHealthCheck
+            )
             if (!uiState.lastHealthCheck.isNullOrBlank()) {
                 Text(
                     text = uiState.lastHealthCheck,
@@ -274,12 +263,61 @@ private fun HostSummary(
 }
 
 @Composable
-private fun CompactActionButton(text: String, onClick: () -> Unit) {
+private fun RelayActionButtons(
+    connectionStatus: String,
+    onSave: () -> Unit,
+    onPairDevice: () -> Unit,
+    onReconnect: () -> Unit,
+    onHealthCheck: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Button(
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 44.dp),
+                onClick = onSave,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF176B52))
+            ) {
+                Text("Save", maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            CompactActionButton(
+                modifier = Modifier.weight(1f),
+                text = "Pair",
+                onClick = onPairDevice
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            CompactActionButton(
+                modifier = Modifier.weight(1f),
+                text = if (connectionStatus == "Online") "Refresh" else "Connect",
+                onClick = onReconnect
+            )
+            CompactActionButton(
+                modifier = Modifier.weight(1f),
+                text = "Test",
+                onClick = onHealthCheck
+            )
+        }
+    }
+}
+
+@Composable
+private fun CompactActionButton(modifier: Modifier = Modifier, text: String, onClick: () -> Unit) {
     OutlinedButton(
+        modifier = modifier.heightIn(min = 44.dp),
         onClick = onClick,
         contentPadding = ButtonDefaults.ContentPadding
     ) {
-        Text(text)
+        Text(text, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

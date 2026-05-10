@@ -1077,3 +1077,34 @@ Expected result:
 ```text
 BUILD SUCCESSFUL
 ```
+
+## 2026-05-10: Android Relay action button layout fix
+
+状态：完成。
+
+本次目标：
+
+- 修复 Relay connection 面板里四个操作按钮在手机窄屏上被挤压的问题。
+
+完成内容：
+
+- 将 Save / Pair / Connect-Refresh / Test 从单行四按钮改为两行 2x2 布局。
+- 每个按钮使用等宽 `weight(1f)` 和最小高度，避免第四个按钮被压成极小块。
+- 按钮文本限制单行并使用 ellipsis，避免长状态文案撑破布局。
+
+验证命令：
+
+```powershell
+cd android
+$env:JAVA_HOME='C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot'
+$env:ANDROID_HOME='C:\Users\13372\AppData\Local\Android\Sdk'
+$env:ANDROID_SDK_ROOT=$env:ANDROID_HOME
+$env:Path="$env:JAVA_HOME\bin;$env:ANDROID_HOME\platform-tools;$env:Path"
+.\gradlew.bat :app:assembleDebug
+```
+
+验证结果：
+
+```text
+BUILD SUCCESSFUL
+```
