@@ -1165,6 +1165,50 @@ $env:Path="$env:JAVA_HOME\bin;$env:ANDROID_HOME\platform-tools;$env:Path"
 1. 用安全命令手测真实 approval，例如在 `CODEX_APPROVAL_POLICY='on-request'` 下请求运行只读命令。
 2. 进入 Git status/diff/commit/push MVP。
 
+## 2026-05-10: Manual App Server approval test flow
+
+状态：完成。
+
+本次目标：
+
+- 提供一个可复用的真实 App Server approval 手测流程。
+- 让用户可以在 Android 上实际点击 Approve/Deny 验证闭环。
+
+完成内容：
+
+- 新增 `npm run manual:app-server-approval`。
+- 新增 `tools/manual-app-server-approval.mjs`：
+  - 启动 Relay，默认端口 `8810`。
+  - 启动真实 `CODEX_ADAPTER=app-server` Bridge。
+  - 设置 `CODEX_APPROVAL_POLICY=on-request`。
+  - 自动生成 pairing token。
+  - 打印模拟器/真机 Relay URL 和 Pairing token。
+  - 使用 ephemeral client 请求 Codex 运行只读命令 `node --version`。
+- `tools/ephemeral-prompt-client/` 支持 `EPHEMERAL_CLIENT_EXPECT_EVENT_TYPES=any`，便于手测观察真实事件。
+- 新增 `docs/manual-app-server-approval-test.md`，记录 Android 操作步骤、预期日志和故障排查。
+
+运行命令：
+
+```powershell
+npm run manual:app-server-approval
+```
+
+Android 操作：
+
+1. 填脚本输出的 Relay URL。
+2. 填脚本输出的 Pairing token。
+3. 点击 Save。
+4. 点击 Pair。
+5. 点击 Test。
+6. 点击 Connect/Refresh。
+7. 等 `Needs attention` 卡片出现后点击 Approve 或 Deny。
+
+当前限制：
+
+- 这是手测流程，不是 CI 自动测试。
+- 是否出现 approval card 取决于真实 Codex 是否按 prompt 请求执行命令。
+- 如果 Codex 直接回答而未请求命令，需要重跑并把 prompt 改得更明确。
+
 ## 2026-05-10: Android dashboard scroll fix
 
 Status: completed.

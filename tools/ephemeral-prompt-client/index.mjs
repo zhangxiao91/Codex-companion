@@ -17,6 +17,7 @@ const expectedEventTypes = (process.env.EPHEMERAL_CLIENT_EXPECT_EVENT_TYPES ?? '
   .split(',')
   .map((item) => item.trim())
   .filter(Boolean);
+const acceptAnyTimelineEvent = expectedEventTypes.includes('*') || expectedEventTypes.includes('any');
 
 const socket = new WebSocket(relayUrl);
 const timer = setTimeout(() => {
@@ -67,7 +68,7 @@ socket.addEventListener('message', (event) => {
       process.exit(1);
     }
 
-    if (!expectedEventTypes.includes(timelineEvent.type)) {
+    if (!acceptAnyTimelineEvent && !expectedEventTypes.includes(timelineEvent.type)) {
       console.log(`[ephemeral-client] ignoring timeline event: ${timelineEvent.type}`);
       return;
     }

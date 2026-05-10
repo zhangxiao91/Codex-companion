@@ -68,6 +68,7 @@ Codex Mobile Companion 是一个 Android 优先的 Codex 移动协作入口。�
 - [docs/architecture.md](docs/architecture.md)：系统架构、组件职责、协议边界和安全模型。
 - [docs/implementation-plan.md](docs/implementation-plan.md)：分阶段施工计划、里程碑和验收标准。
 - [docs/android-toolchain.md](docs/android-toolchain.md)：Android 构建工具链安装和验证说明。
+- [docs/manual-app-server-approval-test.md](docs/manual-app-server-approval-test.md)：真实 App Server approval 手测流程。
 
 ## Current Status
 
