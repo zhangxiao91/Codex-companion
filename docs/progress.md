@@ -412,3 +412,59 @@ npm run verify:live-notification-mapper
 1. 实现 active turn 的 `turn/steer`。
 2. 为 prompt 验证增加等待 assistant delta 或 `turn/completed` 的模式。
 3. 将 Relay 的 session/timeline 状态做最小缓存，支持客户端断线重连后恢复。
+
+## 2026-05-10: App Server turn/steer prompt routing
+
+状态：完成。
+
+本次目标：
+
+- 在 Codex App Server 已有 active turn 时，不再启动新的 `turn/start`。
+- 将移动端后续 prompt 映射为 App Server `turn/steer`。
+- 继续使用专用 ephemeral test thread，避免污染用户真实历史会话。
+
+完成内容：
+
+- `AppServerCodexAdapter` 新增 active turn 追踪。
+- `turn/start` 成功后记录当前 thread 的 active turn id。
+- App Server live notification `turn/started` 会刷新 active turn id。
+- App Server live notification `turn/completed` 会清理对应 active turn id。
+- `sendPrompt()` 在检测到 active turn 时调用 `turn/steer`，并传入 `expectedTurnId`。
+- `turn/steer` 成功后返回 `turn_steer_requested` timeline event。
+- 新增 `tools/steer-client/`，用于模拟移动端在 active turn 中追加指令。
+- 新增 `npm run verify:app-server-steer`。
+
+验证命令：
+
+```powershell
+npm run verify:app-server-steer
+npm run verify:app-server-prompt
+npm run verify:delivery-strategy
+npm run verify:app-server-timeline
+npm run verify:live-notification-mapper
+```
+
+验证结果摘要：
+
+```text
+[steer-client] first prompt sent
+[steer-client] steer prompt sent
+[steer-client] steer event received: Steered turn ...
+[verify] App Server turn/steer prompt routed through Relay.
+[verify] App Server ephemeral turn/start prompt routed through Relay.
+[verify] Delivery Strategy main path verified.
+[verify] App Server thread/read timeline mapped through Relay.
+[verify] Live notification mapper verified.
+```
+
+当前限制：
+
+- `turn/steer` 验证依赖第二条 prompt 在 active turn 完成前发出；测试 prompt 已要求模型短暂等待，但后续仍应降低这种时序敏感性。
+- 验证仍只确认 `turn/steer` 请求成功路由到 App Server，没有等待 assistant delta 或 `turn/completed`。
+- active turn 状态当前保存在 Host Bridge 内存中，Relay 重启或 Bridge 重启后不会恢复。
+
+下一步建议：
+
+1. 让 prompt 验证等待 `assistant_delta` 或 `turn/completed`，证明完整回答链路。
+2. 为 Relay 增加最小 timeline 缓存和 cursor，支持移动端断线重连。
+3. 实现 approval request/decision 映射，把需要用户处理的事件做成移动端一等入口。

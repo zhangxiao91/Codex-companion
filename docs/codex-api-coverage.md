@@ -78,7 +78,7 @@
 | list sessions | covered | not covered | weak | App Server has `thread/list` and `thread/loaded/list`. |
 | read session | covered | not covered | weak | App Server has `thread/read` and `thread/turns/list`. |
 | start session | covered | covered for batch | possible | App Server has `thread/start`; exec can start non-interactive task. |
-| send prompt to existing session | covered | limited | possible | App Server has `turn/start` and `turn/steer`. |
+| send prompt to existing session | covered and verified | limited | possible | App Server `turn/start` is verified for idle/resumed or ephemeral threads; `turn/steer` is verified for active turns. |
 | stream status/events | covered | covered for batch | weak | App Server has server notifications for thread/turn/item events. |
 | plan updates | covered | likely event-only | weak | App Server has `turn/plan/updated`. |
 | diff updates | covered | likely event-only | weak | App Server has `turn/diff/updated`. |
@@ -196,4 +196,5 @@ Next implementation target:
 3. Live App Server notifications are mapped into incremental timeline events.
 4. `turn/start` prompt routing is implemented for loaded/resumed threads.
 5. Dedicated ephemeral test threads are implemented through `thread/start`.
-6. Next: add `turn/steer` for active turns and wait for `turn/completed` in verification.
+6. `turn/steer` for active turns is implemented and verified through an ephemeral test thread.
+7. Next: wait for `assistant_delta` or `turn/completed` in prompt verification.

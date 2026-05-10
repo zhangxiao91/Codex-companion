@@ -69,6 +69,7 @@ export class AppServerCodexAdapter {
     this.pending = new Map();
     this.nextId = 1;
     this.cachedSessions = [];
+    this.activeTurnsByThread = new Map();
     this.onTimelineEvent = options.onTimelineEvent;
   }
 
@@ -138,6 +139,41 @@ export class AppServerCodexAdapter {
   async sendPrompt(sessionId, text) {
     try {
       await this.ensureThreadLoaded(sessionId);
+      const activeTurnId = this.activeTurnsByThread.get(sessionId);
+
+      if (activeTurnId) {
+        const response = await this.request('turn/steer', {
+          threadId: sessionId,
+          expectedTurnId: activeTurnId,
+          input: [
+            {
+              type: 'text',
+              text,
+              text_elements: []
+            }
+          ],
+          responsesapiClientMetadata: {
+            source: 'codex-mobile-companion'
+          }
+        });
+
+        return createMessage(MessageType.TimelineEvent, {
+          event: {
+            event_id: `${sessionId}:${response.turnId}:turn_steer_requested:${Date.now()}`,
+            session_id: sessionId,
+            created_at: new Date().toISOString(),
+            type: 'turn_steer_requested',
+            title: 'Prompt steered active Codex turn',
+            summary: `Steered turn ${response.turnId}.`,
+            payload: {
+              turn_id: response.turnId,
+              prompt: text
+            },
+            redaction_level: 'none'
+          }
+        });
+      }
+
       const response = await this.request('turn/start', {
         threadId: sessionId,
         input: [
@@ -158,6 +194,7 @@ export class AppServerCodexAdapter {
       });
 
       const turn = response.turn;
+      this.activeTurnsByThread.set(sessionId, turn.id);
       return createMessage(MessageType.TimelineEvent, {
         event: {
           event_id: `${sessionId}:${turn.id}:turn_start_requested`,
@@ -234,6 +271,7 @@ export class AppServerCodexAdapter {
 
     if (message.method) {
       console.log(`[bridge] app-server notification: ${message.method}`);
+      this.updateActiveTurnState(message);
       for (const event of mapAppServerNotificationToTimelineEvents(message)) {
         this.onTimelineEvent?.(event);
       }
@@ -285,6 +323,20 @@ export class AppServerCodexAdapter {
       excludeTurns: true,
       persistExtendedHistory: false
     });
+  }
+
+  updateActiveTurnState(message) {
+    if (message.method === 'turn/started') {
+      this.activeTurnsByThread.set(message.params.threadId, message.params.turn.id);
+      return;
+    }
+
+    if (message.method === 'turn/completed') {
+      const activeTurnId = this.activeTurnsByThread.get(message.params.threadId);
+      if (activeTurnId === message.params.turn.id) {
+        this.activeTurnsByThread.delete(message.params.threadId);
+      }
+    }
   }
 }
 
