@@ -1373,3 +1373,55 @@ Next recommended step:
 
 1. Add Relay/Bridge audit events for Git requests.
 2. Add an explicit commit confirmation flow after audit logging exists.
+
+## 2026-05-10: Git action audit events
+
+Status: completed.
+
+Goal:
+
+- Add traceability before exposing any Git write action in Android.
+- Record who requested Git status/diff/commit/push, for which session, and what result came back.
+- Avoid storing source diff contents or commit messages in audit metadata.
+
+Changes:
+
+- Relay now keeps an in-memory `gitAuditEvents` log capped by `RELAY_AUDIT_LOG_LIMIT`, default `500`.
+- `/health` detailed diagnostics now include `counts.git_audit_events`.
+- On `git.request`, Relay records a `requested` audit event with:
+  - audit id
+  - session id / host id
+  - action
+  - optional file path
+  - paired device id/display name
+- Relay injects `audit_id` into the routed Host Bridge request.
+- Host Bridge echoes `audit_id` back in `git.snapshot`.
+- On `git.snapshot`, Relay records a `completed` audit event with:
+  - result ok/blocked state
+  - result message summary
+  - changed file count
+- Relay converts each audit entry into a metadata-only `git_audit` timeline event so Android can see the audit trail without a new UI surface.
+- `npm run verify:git-flow` now verifies requested/completed audit events and `/health` audit counts.
+
+Verification command:
+
+```powershell
+npm run verify:git-flow
+```
+
+Verification result:
+
+```text
+[verify] Git status, file diff, and audit flow verified.
+```
+
+Current limitations:
+
+- Audit storage is in-memory only; Relay restart clears it.
+- There is no audit query endpoint yet beyond timeline events and `/health` counts.
+- Audit events intentionally do not include diff contents.
+
+Next recommended step:
+
+1. Add explicit commit confirmation UI and keep write execution behind `GIT_WRITE_ACTIONS_ENABLED=true`.
+2. Add persistent audit storage before broader use outside local development.

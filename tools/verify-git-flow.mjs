@@ -41,11 +41,15 @@ try {
   send(client, MessageType.SessionSubscribe, { session_id: '*' }, deviceToken);
   await waitForSession(client, 'mock-session-001', 5000);
 
+  const statusRequestedAudit = waitForGitAudit(client, 'requested', 'status', 5000);
+  const statusCompletedAudit = waitForGitAudit(client, 'completed', 'status', 5000);
   send(client, MessageType.GitRequest, {
     session_id: 'mock-session-001',
     action: 'status'
   }, deviceToken);
   const statusSnapshot = await waitForGitSnapshot(client, 'status', 5000);
+  await statusRequestedAudit;
+  await statusCompletedAudit;
   if (statusSnapshot.session_id !== 'mock-session-001') {
     throw new Error(`Unexpected git snapshot session: ${statusSnapshot.session_id}`);
   }
@@ -53,12 +57,19 @@ try {
     throw new Error(`Expected workspace to be a git repo: ${statusSnapshot.error}`);
   }
 
+  const diffRequestedAudit = waitForGitAudit(client, 'requested', 'diff', 5000);
+  const diffCompletedAudit = waitForGitAudit(client, 'completed', 'diff', 5000);
   send(client, MessageType.GitRequest, {
     session_id: 'mock-session-001',
     action: 'diff',
     file_path: diffFixturePath
   }, deviceToken);
   const diffSnapshot = await waitForGitSnapshot(client, 'diff', 5000);
+  const diffAudit = await diffRequestedAudit;
+  await diffCompletedAudit;
+  if (diffAudit.payload.file_path !== diffFixturePath) {
+    throw new Error(`Expected diff audit file path ${diffFixturePath}, received ${diffAudit.payload.file_path}`);
+  }
   if (diffSnapshot.selected_file_path !== diffFixturePath) {
     throw new Error(`Unexpected selected diff file: ${diffSnapshot.selected_file_path}`);
   }
@@ -66,21 +77,33 @@ try {
     throw new Error('Expected file-level diff to include temporary fixture change.');
   }
 
+  const commitRequestedAudit = waitForGitAudit(client, 'requested', 'commit', 5000);
+  const commitCompletedAuditPromise = waitForGitAudit(client, 'completed', 'commit', 5000);
   send(client, MessageType.GitRequest, {
     session_id: 'mock-session-001',
     action: 'commit',
     message: 'Verify disabled mobile commit'
   }, deviceToken);
   const commitSnapshot = await waitForGitSnapshot(client, 'commit', 5000);
+  await commitRequestedAudit;
+  const commitCompletedAudit = await commitCompletedAuditPromise;
+  if (commitCompletedAudit.payload.result_ok !== false) {
+    throw new Error('Expected commit audit result to be blocked.');
+  }
   if (commitSnapshot.result?.ok !== false) {
     throw new Error('Expected commit to be disabled by default.');
+  }
+
+  const health = await readHealth(relayPort, deviceToken);
+  if ((health.counts?.git_audit_events ?? 0) < 6) {
+    throw new Error(`Expected at least 6 git audit events, received ${health.counts?.git_audit_events}`);
   }
 
   await waitForOutput(bridge, 'received git status for mock-session-001', 5000);
   await waitForOutput(bridge, 'received git diff for mock-session-001', 5000);
   await waitForOutput(bridge, 'received git commit for mock-session-001', 5000);
   client.close();
-  console.log('[verify] Git status and file diff snapshot flow verified.');
+  console.log('[verify] Git status, file diff, and audit flow verified.');
 } finally {
   await writeFile(diffFixturePath, originalFixture);
 
@@ -193,6 +216,21 @@ function waitForGitSnapshot(socket, action, timeoutMs) {
   ));
 }
 
+function waitForGitAudit(socket, phase, action, timeoutMs) {
+  return waitForMessage(socket, timeoutMs, (message) => {
+    if (message.type !== MessageType.TimelineEvent) {
+      return undefined;
+    }
+
+    const event = message.payload.event;
+    return event.type === 'git_audit'
+      && event.payload?.phase === phase
+      && event.payload?.action === action
+      ? event
+      : undefined;
+  });
+}
+
 function waitForMessage(socket, timeoutMs, selector) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -222,4 +260,18 @@ function send(socket, type, payload, token) {
       token
     }
   })));
+}
+
+async function readHealth(port, deviceToken) {
+  const response = await fetch(`http://127.0.0.1:${port}/health`, {
+    headers: {
+      'X-Relay-Device-Token': deviceToken
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Health check failed with HTTP ${response.status}`);
+  }
+
+  return response.json();
 }

@@ -16,6 +16,7 @@ const timelineCacheLimit = Number.parseInt(process.env.RELAY_TIMELINE_CACHE_LIMI
 const devToken = process.env.RELAY_DEV_TOKEN ?? '';
 const maxMessageBytes = Number.parseInt(process.env.RELAY_MAX_MESSAGE_BYTES ?? '65536', 10);
 const maxPromptLength = Number.parseInt(process.env.RELAY_MAX_PROMPT_LENGTH ?? '4000', 10);
+const auditLogLimit = Number.parseInt(process.env.RELAY_AUDIT_LOG_LIMIT ?? '500', 10);
 
 if (host === '0.0.0.0' && !devToken) {
   console.error('[relay] refusing to listen on 0.0.0.0 without RELAY_DEV_TOKEN');
@@ -30,6 +31,7 @@ const state = {
   clients: new Set(),
   subscriptions: new Map(),
   timelineEvents: new Map(),
+  gitAuditEvents: [],
   deviceTokens: new Map(),
   nextTimelineCursor: 1
 };
@@ -164,6 +166,7 @@ function createHealthPayload(request) {
       clients: state.clients.size,
       subscriptions: state.subscriptions.size,
       paired_devices: state.deviceTokens.size,
+      git_audit_events: state.gitAuditEvents.length,
       cached_timeline_sessions: state.timelineEvents.size,
       cached_timeline_events: cachedTimelineEvents
     },
@@ -446,8 +449,26 @@ function handleGitRequest(connection, message) {
   subscriptions.add(message.payload.session_id);
   state.subscriptions.set(connection, subscriptions);
 
+  const auditId = randomUUID();
+  appendGitAuditEvent({
+    audit_id: auditId,
+    phase: 'requested',
+    session_id: session.session_id,
+    host_id: session.host_id,
+    action: message.payload.action,
+    file_path: sanitizeAuditFilePath(message.payload.file_path),
+    device: deviceInfoForMessage(message),
+    requested_at: new Date().toISOString()
+  });
+
   console.log(`[relay] routing git ${message.payload.action} to host ${session.host_id}: ${message.payload.session_id}`);
-  send(hostConnection, message);
+  send(hostConnection, {
+    ...message,
+    payload: {
+      ...message.payload,
+      audit_id: auditId
+    }
+  });
 }
 
 function handleGitSnapshot(connection, message) {
@@ -455,6 +476,18 @@ function handleGitSnapshot(connection, message) {
 
   const snapshot = message.payload.snapshot;
   console.log(`[relay] git snapshot: ${snapshot.session_id} ${snapshot.action}`);
+  appendGitAuditEvent({
+    audit_id: snapshot.audit_id || randomUUID(),
+    phase: 'completed',
+    session_id: snapshot.session_id,
+    host_id: snapshot.host_id,
+    action: snapshot.action,
+    file_path: sanitizeAuditFilePath(snapshot.selected_file_path),
+    result_ok: snapshot.result?.ok ?? null,
+    result_message: summarizeAuditMessage(snapshot.result?.message),
+    changed_file_count: Array.isArray(snapshot.files) ? snapshot.files.length : 0,
+    completed_at: new Date().toISOString()
+  });
   broadcastToClients(message);
 }
 
@@ -624,6 +657,75 @@ function cacheTimelineEvent(event) {
 
   state.timelineEvents.set(cachedEvent.session_id, events);
   return cachedEvent;
+}
+
+function appendGitAuditEvent(event) {
+  const auditEvent = {
+    event_id: randomUUID(),
+    created_at: new Date().toISOString(),
+    ...event
+  };
+
+  state.gitAuditEvents.push(auditEvent);
+  while (state.gitAuditEvents.length > auditLogLimit) {
+    state.gitAuditEvents.shift();
+  }
+
+  const timelineEvent = cacheTimelineEvent(createGitAuditTimelineEvent(auditEvent));
+  broadcastToClients(createMessage(MessageType.TimelineEvent, { event: timelineEvent }));
+}
+
+function createGitAuditTimelineEvent(auditEvent) {
+  const fileSuffix = auditEvent.file_path ? ` ${auditEvent.file_path}` : '';
+  const result = auditEvent.result_ok === null || auditEvent.result_ok === undefined
+    ? ''
+    : ` result=${auditEvent.result_ok ? 'ok' : 'blocked'}`;
+
+  return {
+    event_id: randomUUID(),
+    session_id: auditEvent.session_id,
+    created_at: auditEvent.created_at,
+    type: 'git_audit',
+    title: `Git ${auditEvent.phase}: ${auditEvent.action}`,
+    summary: `${auditEvent.phase} git ${auditEvent.action}${fileSuffix}${result}`.trim(),
+    payload: {
+      audit_id: auditEvent.audit_id,
+      phase: auditEvent.phase,
+      action: auditEvent.action,
+      file_path: auditEvent.file_path ?? '',
+      host_id: auditEvent.host_id,
+      device_id: auditEvent.device?.device_id ?? '',
+      device_display_name: auditEvent.device?.display_name ?? '',
+      result_ok: auditEvent.result_ok ?? null,
+      result_message: auditEvent.result_message ?? '',
+      changed_file_count: auditEvent.changed_file_count ?? null
+    },
+    redaction_level: 'metadata'
+  };
+}
+
+function deviceInfoForMessage(message) {
+  const token = message.auth?.device_token ?? message.auth?.token;
+  const device = token ? state.deviceTokens.get(token) : undefined;
+  if (!device) {
+    return {
+      device_id: 'unknown',
+      display_name: 'Unknown device'
+    };
+  }
+
+  return {
+    device_id: device.device_id,
+    display_name: device.display_name
+  };
+}
+
+function sanitizeAuditFilePath(filePath) {
+  return typeof filePath === 'string' ? filePath.slice(0, 240) : '';
+}
+
+function summarizeAuditMessage(message) {
+  return typeof message === 'string' ? message.slice(0, 240) : '';
 }
 
 function sendCachedTimeline(connection, sessionId, options = {}) {

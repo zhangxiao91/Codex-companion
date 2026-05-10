@@ -6,15 +6,16 @@ const maxFileDiffBytes = Number.parseInt(process.env.GIT_FILE_DIFF_MAX_BYTES ?? 
 export async function handleGitRequest(session, request) {
   const action = request.action;
   const repoPath = session.repo_path || process.cwd();
+  const auditId = typeof request.audit_id === 'string' ? request.audit_id : '';
 
   if (action === 'status') {
-    return createSnapshot(session, action, await readGitSnapshot(repoPath));
+    return createSnapshot(session, action, await readGitSnapshot(repoPath), undefined, undefined, auditId);
   }
 
   if (action === 'diff') {
     const filePath = normalizeRelativePath(request.file_path);
     const fileDiff = filePath ? await readFileDiff(repoPath, filePath) : undefined;
-    return createSnapshot(session, action, await readGitSnapshot(repoPath), undefined, fileDiff);
+    return createSnapshot(session, action, await readGitSnapshot(repoPath), undefined, fileDiff, auditId);
   }
 
   if (action === 'commit') {
@@ -22,7 +23,7 @@ export async function handleGitRequest(session, request) {
       return createSnapshot(session, action, await readGitSnapshot(repoPath), {
         ok: false,
         message: 'Git commit is disabled. Set GIT_WRITE_ACTIONS_ENABLED=true on Host Bridge to enable it.'
-      });
+      }, undefined, auditId);
     }
 
     const message = typeof request.message === 'string' ? request.message.trim() : '';
@@ -30,14 +31,14 @@ export async function handleGitRequest(session, request) {
       return createSnapshot(session, action, await readGitSnapshot(repoPath), {
         ok: false,
         message: 'Commit message is required.'
-      });
+      }, undefined, auditId);
     }
 
     const commit = await runGit(repoPath, ['commit', '-am', message]);
     return createSnapshot(session, action, await readGitSnapshot(repoPath), {
       ok: commit.exitCode === 0,
       message: commit.output.trim() || commit.error.trim()
-    });
+    }, undefined, auditId);
   }
 
   if (action === 'push') {
@@ -45,20 +46,20 @@ export async function handleGitRequest(session, request) {
       return createSnapshot(session, action, await readGitSnapshot(repoPath), {
         ok: false,
         message: 'Git push is disabled. Set GIT_WRITE_ACTIONS_ENABLED=true on Host Bridge to enable it.'
-      });
+      }, undefined, auditId);
     }
 
     const push = await runGit(repoPath, ['push']);
     return createSnapshot(session, action, await readGitSnapshot(repoPath), {
       ok: push.exitCode === 0,
       message: push.output.trim() || push.error.trim()
-    });
+    }, undefined, auditId);
   }
 
   return createSnapshot(session, action, await readGitSnapshot(repoPath), {
     ok: false,
     message: `Unsupported git action: ${action}`
-  });
+  }, undefined, auditId);
 }
 
 async function readGitSnapshot(repoPath) {
@@ -86,7 +87,7 @@ async function readGitSnapshot(repoPath) {
   };
 }
 
-function createSnapshot(session, action, git, result = { ok: true, message: '' }, fileDiff = undefined) {
+function createSnapshot(session, action, git, result = { ok: true, message: '' }, fileDiff = undefined, auditId = '') {
   return {
     session_id: session.session_id,
     host_id: session.host_id,
@@ -101,6 +102,7 @@ function createSnapshot(session, action, git, result = { ok: true, message: '' }
     selected_file_path: fileDiff?.file_path ?? '',
     selected_file_diff: fileDiff?.diff ?? '',
     selected_file_diff_truncated: fileDiff?.truncated ?? false,
+    audit_id: auditId,
     result,
     error: git.error,
     updated_at: new Date().toISOString()
