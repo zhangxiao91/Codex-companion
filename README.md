@@ -160,9 +160,10 @@ npm run check:android-toolchain
 
 ## Git MVP Status
 
-The current prototype includes a minimal Git status path:
+The current prototype includes a minimal Git status and file diff path:
 
 - Android can request Git Status or Diff summary for the selected session.
+- Android can tap a changed file and request a compact file-level diff preview.
 - Relay routes `git.request` to the owning Host Bridge.
 - Host Bridge runs local read-only Git commands in the session repository and returns `git.snapshot`.
 - Commit and push are guarded by `GIT_WRITE_ACTIONS_ENABLED=true` and are not exposed in the Android UI yet.
@@ -175,7 +176,6 @@ npm run verify:git-flow
 
 Remaining before Git is truly user-facing:
 
-- file-level diff review on Android
 - explicit commit confirmation flow
 - tracked/untracked file handling
 - audit log for Git actions

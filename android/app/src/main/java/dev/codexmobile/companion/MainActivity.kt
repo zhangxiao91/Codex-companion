@@ -70,6 +70,7 @@ class MainActivity : ComponentActivity() {
                 onSessionSelected = viewModel::selectSession,
                 onGitStatus = viewModel::requestGitStatus,
                 onGitDiff = viewModel::requestGitDiff,
+                onGitFileDiff = viewModel::requestGitFileDiff,
                 onApprovalDecision = viewModel::decideApproval,
                 onPromptSend = viewModel::sendPrompt
             )
@@ -87,6 +88,7 @@ private fun CompanionApp(
     onSessionSelected: (String) -> Unit,
     onGitStatus: () -> Unit,
     onGitDiff: () -> Unit,
+    onGitFileDiff: (String) -> Unit,
     onApprovalDecision: (String, String) -> Unit,
     onPromptSend: (String) -> Unit
 ) {
@@ -110,6 +112,7 @@ private fun CompanionApp(
                 onSessionSelected = onSessionSelected,
                 onGitStatus = onGitStatus,
                 onGitDiff = onGitDiff,
+                onGitFileDiff = onGitFileDiff,
                 onApprovalDecision = onApprovalDecision,
                 onPromptSend = onPromptSend
             )
@@ -127,6 +130,7 @@ private fun SessionDashboard(
     onSessionSelected: (String) -> Unit,
     onGitStatus: () -> Unit,
     onGitDiff: () -> Unit,
+    onGitFileDiff: (String) -> Unit,
     onApprovalDecision: (String, String) -> Unit,
     onPromptSend: (String) -> Unit
 ) {
@@ -158,7 +162,8 @@ private fun SessionDashboard(
             snapshot = uiState.selectedGitSnapshot,
             connectionStatus = uiState.connectionStatus,
             onStatus = onGitStatus,
-            onDiff = onGitDiff
+            onDiff = onGitDiff,
+            onFileDiff = onGitFileDiff
         )
         ApprovalInbox(
             approvals = uiState.pendingApprovals,
@@ -418,7 +423,8 @@ private fun GitPanel(
     snapshot: GitSnapshot?,
     connectionStatus: String,
     onStatus: () -> Unit,
-    onDiff: () -> Unit
+    onDiff: () -> Unit,
+    onFileDiff: (String) -> Unit
 ) {
     Panel {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -455,6 +461,20 @@ private fun GitPanel(
                         maxLines = 3,
                         overflow = TextOverflow.Ellipsis
                     )
+                }
+                if (snapshot.files.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        snapshot.files.take(6).forEach { file ->
+                            GitFileRow(
+                                file = file,
+                                selected = file.path == snapshot.selectedFilePath,
+                                onClick = { onFileDiff(file.path) }
+                            )
+                        }
+                    }
+                }
+                if (snapshot.selectedFilePath.isNotBlank()) {
+                    DiffPreview(snapshot = snapshot)
                 }
                 if (snapshot.resultMessage.isNotBlank()) {
                     Text(
@@ -496,6 +516,75 @@ private fun GitPanel(
                     text = "Select an online session to refresh Git status.",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color(0xFF8A94A6)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GitFileRow(file: GitFileChange, selected: Boolean, onClick: () -> Unit) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick),
+        color = if (selected) Color(0xFFE8F7F0) else Color(0xFFF7F8FA),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = gitFileStatus(file),
+                style = MaterialTheme.typography.labelMedium,
+                color = Color(0xFF176B52),
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                text = file.path,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF344054),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun DiffPreview(snapshot: GitSnapshot) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = Color(0xFF101828),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = snapshot.selectedFilePath,
+                style = MaterialTheme.typography.labelMedium,
+                color = Color(0xFFE8F7F0),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = snapshot.selectedFileDiff.ifBlank { "No unstaged diff for this file." },
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFFF2F4F7),
+                maxLines = 12,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (snapshot.selectedFileDiffTruncated) {
+                Text(
+                    text = "Diff truncated",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFFFDB022)
                 )
             }
         }
@@ -715,4 +804,10 @@ private fun gitSummary(selectedSession: CodexSession?, snapshot: GitSnapshot?): 
         return "Not a git repo"
     }
     return snapshot.repoPath.ifBlank { selectedSession.repoPath }
+}
+
+private fun gitFileStatus(file: GitFileChange): String {
+    val index = file.indexStatus.ifBlank { "." }
+    val worktree = file.worktreeStatus.ifBlank { "." }
+    return "$index$worktree"
 }

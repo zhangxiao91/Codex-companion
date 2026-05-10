@@ -811,12 +811,6 @@ Current limitations:
 - Relay still does not persist Git snapshots; they are live messages only.
 - There is no audit log yet for Git requests.
 
-Next recommended step:
-
-1. Add a file-level diff request and compact Android diff review view.
-2. Add Git action audit events in Relay/Bridge.
-3. After diff review is usable, add a guarded commit flow with explicit confirmation and tracked/untracked file handling.
-
 当前限制：
 
 - 只保存 Relay URL，还没有保存 selected session、timeline cursor 或最近 events。
@@ -1325,3 +1319,57 @@ $env:Path="$env:JAVA_HOME\bin;$env:ANDROID_HOME\platform-tools;$env:Path"
 ```text
 BUILD SUCCESSFUL
 ```
+
+## 2026-05-10: Git file-level diff preview
+
+Status: completed.
+
+Goal:
+
+- Let the mobile client inspect a changed file before any future commit/push flow.
+- Keep diff review compact and read-only.
+- Avoid turning Android into a source editor.
+
+Changes:
+
+- Reused `git.request` with `action: "diff"` and optional `file_path`.
+- Host Bridge now returns:
+  - `selected_file_path`
+  - `selected_file_diff`
+  - `selected_file_diff_truncated`
+- Host Bridge validates requested diff paths as relative repo paths and rejects absolute/parent traversal style paths.
+- Host Bridge reads file diff using `git diff HEAD -- <file>`.
+- File diff payload is capped by `GIT_FILE_DIFF_MAX_BYTES`, default `20000`.
+- Android Git panel now shows a compact changed-file list.
+- Tapping a changed file requests and displays a compact diff preview.
+- `npm run verify:git-flow` now creates a temporary README diff, verifies the file-level diff payload, then restores the file.
+
+Verification commands:
+
+```powershell
+npm run verify:git-flow
+cd android
+$env:JAVA_HOME='C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot'
+$env:ANDROID_HOME='C:\Users\13372\AppData\Local\Android\Sdk'
+$env:ANDROID_SDK_ROOT=$env:ANDROID_HOME
+$env:Path="$env:JAVA_HOME\bin;$env:ANDROID_HOME\platform-tools;$env:Path"
+.\gradlew.bat :app:assembleDebug
+```
+
+Verification result:
+
+```text
+[verify] Git status and file diff snapshot flow verified.
+BUILD SUCCESSFUL
+```
+
+Current limitations:
+
+- Diff preview is compact and capped; it is not a full diff review screen yet.
+- Binary diffs, renames, staged-only edge cases, and untracked file contents are not handled as first-class UX yet.
+- Commit/push remain hidden from Android and disabled by default.
+
+Next recommended step:
+
+1. Add Relay/Bridge audit events for Git requests.
+2. Add an explicit commit confirmation flow after audit logging exists.

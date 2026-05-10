@@ -84,13 +84,14 @@ class RelayClient(
         )
     }
 
-    fun requestGit(sessionId: String, action: String) {
-        send(
-            "git.request",
-            JSONObject()
-                .put("session_id", sessionId)
-                .put("action", action)
-        )
+    fun requestGit(sessionId: String, action: String, filePath: String? = null) {
+        val payload = JSONObject()
+            .put("session_id", sessionId)
+            .put("action", action)
+        if (!filePath.isNullOrBlank()) {
+            payload.put("file_path", filePath)
+        }
+        send("git.request", payload)
     }
 
     fun sendApprovalDecision(approvalId: String, decision: String) {
@@ -325,6 +326,9 @@ class RelayClient(
             statusSummary = json.optString("status_summary", ""),
             files = files,
             diffStat = json.optString("diff_stat", ""),
+            selectedFilePath = json.optString("selected_file_path", ""),
+            selectedFileDiff = json.optString("selected_file_diff", ""),
+            selectedFileDiffTruncated = json.optBoolean("selected_file_diff_truncated", false),
             resultOk = result?.takeIf { it.has("ok") }?.optBoolean("ok"),
             resultMessage = result?.optString("message", "") ?: "",
             error = json.optString("error", ""),

@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { readFile, writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
   MessageType,
@@ -11,8 +12,12 @@ const processes = [];
 const relayPort = '8811';
 const relayUrl = `ws://127.0.0.1:${relayPort}`;
 const devToken = 'git-flow-token';
+const diffFixturePath = 'README.md';
+const originalFixture = await readFile(diffFixturePath, 'utf8');
 
 try {
+  await writeFile(diffFixturePath, `${originalFixture}\n<!-- verify-git-flow temporary diff -->\n`);
+
   const relay = spawnProcess('relay', 'node', ['relay/service/server.mjs'], {
     ...process.env,
     RELAY_PORT: relayPort,
@@ -50,6 +55,19 @@ try {
 
   send(client, MessageType.GitRequest, {
     session_id: 'mock-session-001',
+    action: 'diff',
+    file_path: diffFixturePath
+  }, deviceToken);
+  const diffSnapshot = await waitForGitSnapshot(client, 'diff', 5000);
+  if (diffSnapshot.selected_file_path !== diffFixturePath) {
+    throw new Error(`Unexpected selected diff file: ${diffSnapshot.selected_file_path}`);
+  }
+  if (!diffSnapshot.selected_file_diff.includes('verify-git-flow temporary diff')) {
+    throw new Error('Expected file-level diff to include temporary fixture change.');
+  }
+
+  send(client, MessageType.GitRequest, {
+    session_id: 'mock-session-001',
     action: 'commit',
     message: 'Verify disabled mobile commit'
   }, deviceToken);
@@ -59,10 +77,13 @@ try {
   }
 
   await waitForOutput(bridge, 'received git status for mock-session-001', 5000);
+  await waitForOutput(bridge, 'received git diff for mock-session-001', 5000);
   await waitForOutput(bridge, 'received git commit for mock-session-001', 5000);
   client.close();
-  console.log('[verify] Git status snapshot flow verified.');
+  console.log('[verify] Git status and file diff snapshot flow verified.');
 } finally {
+  await writeFile(diffFixturePath, originalFixture);
+
   for (const child of processes.reverse()) {
     if (!child.killed) {
       child.kill();

@@ -123,6 +123,13 @@ class RelayViewModel(
         requestGit("diff")
     }
 
+    fun requestGitFileDiff(filePath: String) {
+        if (filePath.isBlank()) {
+            return
+        }
+        requestGit("diff", filePath)
+    }
+
     fun decideApproval(approvalId: String, decision: String) {
         relayClient.sendApprovalDecision(approvalId, decision)
     }
@@ -221,8 +228,8 @@ class RelayViewModel(
         .maxOrNull()
         ?.toString()
 
-    private fun requestGit(action: String) {
+    private fun requestGit(action: String, filePath: String? = null) {
         val sessionId = _uiState.value.selectedSessionId ?: return
-        relayClient.requestGit(sessionId, action)
+        relayClient.requestGit(sessionId, action, filePath)
     }
 }

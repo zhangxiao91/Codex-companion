@@ -1,13 +1,20 @@
 import { spawn } from 'node:child_process';
 
 const gitWriteActionsEnabled = process.env.GIT_WRITE_ACTIONS_ENABLED === 'true';
+const maxFileDiffBytes = Number.parseInt(process.env.GIT_FILE_DIFF_MAX_BYTES ?? '20000', 10);
 
 export async function handleGitRequest(session, request) {
   const action = request.action;
   const repoPath = session.repo_path || process.cwd();
 
-  if (action === 'status' || action === 'diff') {
+  if (action === 'status') {
     return createSnapshot(session, action, await readGitSnapshot(repoPath));
+  }
+
+  if (action === 'diff') {
+    const filePath = normalizeRelativePath(request.file_path);
+    const fileDiff = filePath ? await readFileDiff(repoPath, filePath) : undefined;
+    return createSnapshot(session, action, await readGitSnapshot(repoPath), undefined, fileDiff);
   }
 
   if (action === 'commit') {
@@ -79,7 +86,7 @@ async function readGitSnapshot(repoPath) {
   };
 }
 
-function createSnapshot(session, action, git, result = { ok: true, message: '' }) {
+function createSnapshot(session, action, git, result = { ok: true, message: '' }, fileDiff = undefined) {
   return {
     session_id: session.session_id,
     host_id: session.host_id,
@@ -91,10 +98,56 @@ function createSnapshot(session, action, git, result = { ok: true, message: '' }
     files: git.files,
     diff_stat: git.diff_stat,
     changed_files: git.changed_files,
+    selected_file_path: fileDiff?.file_path ?? '',
+    selected_file_diff: fileDiff?.diff ?? '',
+    selected_file_diff_truncated: fileDiff?.truncated ?? false,
     result,
     error: git.error,
     updated_at: new Date().toISOString()
   };
+}
+
+async function readFileDiff(repoPath, filePath) {
+  const diff = await runGit(repoPath, ['diff', 'HEAD', '--', filePath]);
+  const raw = diff.output || diff.error;
+  return {
+    file_path: filePath,
+    diff: truncateText(raw, maxFileDiffBytes),
+    truncated: Buffer.byteLength(raw, 'utf8') > maxFileDiffBytes
+  };
+}
+
+function normalizeRelativePath(filePath) {
+  if (typeof filePath !== 'string') {
+    return '';
+  }
+
+  const normalized = filePath.trim().replaceAll('\\', '/');
+  if (!normalized || normalized.startsWith('/') || normalized.includes('../') || normalized === '..') {
+    return '';
+  }
+
+  return normalized;
+}
+
+function truncateText(text, maxBytes) {
+  if (!Number.isFinite(maxBytes) || maxBytes <= 0) {
+    return text;
+  }
+
+  if (Buffer.byteLength(text, 'utf8') <= maxBytes) {
+    return text;
+  }
+
+  let output = '';
+  for (const character of text) {
+    if (Buffer.byteLength(output + character, 'utf8') > maxBytes) {
+      break;
+    }
+    output += character;
+  }
+
+  return `${output}\n[diff truncated]`;
 }
 
 function parsePorcelainLine(line) {
