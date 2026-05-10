@@ -17,6 +17,7 @@
     "verify:app-server-readonly": "node tools/verify-app-server-readonly.mjs",
     "verify:app-server-timeline": "node tools/verify-app-server-timeline.mjs",
     "verify:app-server-prompt": "node tools/verify-app-server-prompt.mjs",
+    "verify:app-server-security-defaults": "node tools/verify-app-server-security-defaults.mjs",
     "verify:app-server-steer": "node tools/verify-app-server-steer.mjs",
     "verify:app-server-approval-mapper": "node tools/verify-app-server-approval-mapper.mjs",
     "verify:relay-dev-token": "node tools/verify-relay-dev-token.mjs",

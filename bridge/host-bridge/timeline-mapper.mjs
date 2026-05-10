@@ -154,16 +154,18 @@ export function mapAppServerNotificationToTimelineEvents(message) {
           { request_id: params.requestId }
         )
       ];
-    case 'error':
+    case 'error': {
+      const isRetrying = params.willRetry === true;
       return [
         createLiveTimelineEvent(
           params.threadId,
-          'error',
-          'Codex error',
+          isRetrying ? 'codex_retrying' : 'error',
+          isRetrying ? 'Codex retrying' : 'Codex error',
           truncate(params.error?.message ?? JSON.stringify(params.error)),
           { turn_id: params.turnId, error: params.error, will_retry: params.willRetry }
         )
       ];
+    }
     default:
       return [];
   }
@@ -327,4 +329,3 @@ function truncate(text, maxLength = 500) {
 
   return `${text.slice(0, maxLength - 3)}...`;
 }
-

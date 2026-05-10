@@ -27,6 +27,7 @@
 - prompt 验证已改为创建专用 ephemeral thread，避免污染用户真实历史会话。
 - active turn 的 `turn/steer` prompt routing 已完成，移动端后续指令可以追加到正在运行的 Codex turn。
 - prompt 验证已升级为等待 live `assistant_delta` 或 `turn_completed`，证明移动端可看到真实 Codex 回答事件。
+- App Server prompt 链路已区分 retryable error 和 terminal error；`willRetry: true` 会显示为 `codex_retrying`，不再中断移动端等待。
 - Relay 已实现最小内存 timeline cache 和 `after_cursor` 补发，可支撑移动端断线重连后的事件恢复原型。
 - Android 应用骨架已开始构建，Gradle wrapper 已生成，`.\gradlew.bat :app:assembleDebug` 已通过。
 - Android 已接入 Relay WebSocket，支持 session snapshot、timeline event 和 prompt send 的第一版真实链路。
@@ -34,6 +35,7 @@
 - Android 已用 SharedPreferences 持久化最近 sessions、timeline events、selected session 和 cursor recovery 状态。
 - Relay 已加入临时配对安全模型：局域网监听必须配置 `RELAY_DEV_TOKEN`，Host Bridge 用 pairing token 注册，Android/Node client 必须通过 `/pair` 换取 device token 后才能订阅 session、请求 timeline 或发送 prompt。
 - Approval request/decision 的协议壳、Relay 路由、Android 待处理卡片和真实 App Server approval request/response 映射已完成；真实危险操作端到端触发仍待手动验证。
+- App Server adapter 默认审批策略已从 `never` 改为 `on-request` + `approvalsReviewer: "user"`，避免 Codex 诊断命令被直接 `blocked by policy`，同时保持命令需用户审批。
 - Git Workflow MVP 已开始：Relay/Bridge 支持 `git.request` / `git.snapshot`，Host Bridge 增加本地 Git adapter，Android 增加选中 session 的 Git status/diff summary 面板、file-level diff preview、commit confirmation UI 和 tracked/untracked commit strategy，Relay 已产生 metadata-only Git action audit timeline events，并将 Git audit 以 NDJSON 持久化到 `RELAY_GIT_AUDIT_LOG_PATH` / `.relay/git-audit.ndjson`。commit/push 执行仍默认禁用，等 host write policy 补完后再开放。
 - 详细记录见 `docs/progress.md`。
 

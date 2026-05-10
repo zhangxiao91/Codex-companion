@@ -129,7 +129,8 @@ export class AppServerCodexAdapter {
     this.activeTurnsByThread = new Map();
     this.onTimelineEvent = options.onTimelineEvent;
     this.onApprovalRequest = options.onApprovalRequest;
-    this.approvalPolicy = process.env.CODEX_APPROVAL_POLICY ?? 'never';
+    this.approvalPolicy = process.env.CODEX_APPROVAL_POLICY ?? 'on-request';
+    this.approvalsReviewer = process.env.CODEX_APPROVALS_REVIEWER ?? 'user';
   }
 
   async start() {
@@ -243,6 +244,7 @@ export class AppServerCodexAdapter {
           }
         ],
         approvalPolicy: this.approvalPolicy,
+        approvalsReviewer: this.approvalsReviewer,
         sandboxPolicy: {
           type: 'readOnly',
           networkAccess: false
@@ -304,6 +306,7 @@ export class AppServerCodexAdapter {
     const response = await this.request('thread/start', {
       cwd: options.cwd ?? process.cwd(),
       approvalPolicy: this.approvalPolicy,
+      approvalsReviewer: this.approvalsReviewer,
       sandbox: 'read-only',
       ephemeral: true,
       threadSource: 'user',
@@ -335,6 +338,9 @@ export class AppServerCodexAdapter {
 
     if (message.method) {
       console.log(`[bridge] app-server notification: ${message.method}`);
+      if (message.method === 'error') {
+        console.error(`[bridge] app-server error params: ${truncateForLog(JSON.stringify(message.params))}`);
+      }
       this.updateActiveTurnState(message);
       for (const event of mapAppServerNotificationToTimelineEvents(message)) {
         this.onTimelineEvent?.(event);
@@ -431,6 +437,7 @@ export class AppServerCodexAdapter {
     await this.request('thread/resume', {
       threadId: sessionId,
       approvalPolicy: this.approvalPolicy,
+      approvalsReviewer: this.approvalsReviewer,
       sandbox: 'read-only',
       excludeTurns: true,
       persistExtendedHistory: false
@@ -753,6 +760,14 @@ function summarizePermissions(permissions) {
     parts.push(`fileSystem=${JSON.stringify(permissions.fileSystem)}`);
   }
   return parts.join('; ');
+}
+
+function truncateForLog(text, maxLength = 1200) {
+  if (!text || text.length <= maxLength) {
+    return text ?? '';
+  }
+
+  return `${text.slice(0, maxLength - 3)}...`;
 }
 
 function resolveCodexCli() {

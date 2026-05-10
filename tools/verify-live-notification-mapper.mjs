@@ -70,6 +70,30 @@ const samples = [
       }
     },
     expectedType: 'file_changed'
+  },
+  {
+    message: {
+      method: 'error',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        willRetry: true,
+        error: { message: 'Reconnecting... 1/5' }
+      }
+    },
+    expectedType: 'codex_retrying'
+  },
+  {
+    message: {
+      method: 'error',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        willRetry: false,
+        error: { message: 'Request failed' }
+      }
+    },
+    expectedType: 'error'
   }
 ];
 
@@ -87,4 +111,3 @@ assert.deepEqual(
 );
 
 console.log('[verify] Live notification mapper verified.');
-

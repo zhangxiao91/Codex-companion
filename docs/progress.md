@@ -1997,3 +1997,52 @@ Result:
 ```text
 [verify] Dev pairing code generation verified.
 ```
+
+## 2026-05-10: App Server retry and approval policy fix
+
+Status: completed.
+
+Changes:
+
+- App Server `error` notifications with `willRetry: true` now map to `codex_retrying` timeline events instead of fatal `error` events.
+- Bridge logs App Server error notification params with truncation, so real terminal failures can be diagnosed without dumping huge payloads.
+- App Server adapter now defaults to `CODEX_APPROVAL_POLICY=on-request` and `CODEX_APPROVALS_REVIEWER=user`.
+- `turn/start`, `thread/start`, and `thread/resume` pass `approvalsReviewer: "user"` by default.
+- This prevents read-only/sandbox escape command attempts from being silently rejected by `approvalPolicy: "never"`; they should now route through the existing mobile approval channel.
+- Added `npm run verify:app-server-security-defaults`.
+
+Observed behavior:
+
+- `npm run verify:app-server-prompt` reproduced a transient App Server stream disconnect.
+- The retry notification was emitted as `Codex retrying`, ignored by the fatal-error path, and the same turn later produced `assistant_delta: OK`.
+- `websocket error read ECONNRESET` still appears when verification scripts kill child processes during cleanup; this is a test teardown artifact, not the mobile runtime disconnect.
+
+Verification:
+
+```powershell
+npm run verify:live-notification-mapper
+npm run verify:app-server-security-defaults
+npm run verify:app-server-prompt
+npm run verify:app-server-steer
+npm run verify:approval-flow
+npm run verify:delivery-strategy
+.\gradlew.bat :app:assembleDebug
+```
+
+Result:
+
+```text
+[verify] Live notification mapper verified.
+[verify] App Server security defaults verified.
+[verify] App Server ephemeral prompt produced a live assistant/completion event through Relay.
+[verify] App Server turn/steer prompt routed through Relay.
+[verify] Approval request/decision flow verified.
+[verify] Delivery Strategy main path verified.
+BUILD SUCCESSFUL
+```
+
+Next recommended step:
+
+1. Run `npm run dev:pair`, pair the Android app, and send a prompt that asks Codex to run a harmless read-only command.
+2. Confirm the phone receives an approval card instead of seeing `blocked by policy`.
+3. If an approval request appears, approve once and verify the command result returns into the selected session timeline.
