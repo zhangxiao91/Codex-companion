@@ -193,5 +193,5 @@ Next implementation target:
 
 1. `thread/read` support for selected session details is implemented.
 2. Historical turns/items are mapped into mobile timeline events through `session.timeline.request`.
-3. Next: map live App Server notifications into incremental timeline events.
-4. Next: add `turn/start` or `turn/steer` only after live timeline mapping is stable.
+3. Live App Server notifications are mapped into incremental timeline events.
+4. Next: add `turn/start` or `turn/steer` and validate live notifications with a real turn.

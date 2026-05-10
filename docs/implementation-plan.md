@@ -22,6 +22,7 @@
 - App Server 协议覆盖初判和 loopback 连接验证已完成；`initialize` 与 `thread/list` 可用，首选真实 adapter 是 App Server Adapter，详见 `docs/codex-api-coverage.md`。
 - `AppServerCodexAdapter` 只读 MVP 已完成，可通过 `CODEX_ADAPTER=app-server` 启用，并已验证能通过 Relay 发布真实 Codex threads。
 - `thread/read` timeline MVP 已完成，真实 thread turns/items 可通过 `session.timeline.request` 映射为移动端 timeline events。
+- App Server live notifications 已映射为增量 timeline events，但还未通过真实 `turn/start` 长任务做端到端验证。
 - 详细记录见 `docs/progress.md`。
 
 ## 2. Milestone 0: Research Spike

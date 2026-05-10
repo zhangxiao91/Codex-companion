@@ -11,7 +11,13 @@ const relayUrl = process.env.RELAY_URL ?? DEFAULT_RELAY_URL;
 const hostId = process.env.HOST_ID ?? 'local-dev-host';
 const displayName = process.env.HOST_NAME ?? 'Local Development Host';
 const bridgeVersion = '0.0.1';
-const adapter = createCodexAdapter(hostId);
+const adapter = createCodexAdapter(hostId, {
+  onTimelineEvent: (event) => {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(encodeMessage(createMessage(MessageType.TimelineEvent, { event })));
+    }
+  }
+});
 
 const socket = new WebSocket(relayUrl);
 

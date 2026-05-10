@@ -238,3 +238,63 @@ npm run verify:app-server-timeline
 1. 增加 timeline event limit/cursor，避免一次性推送过多历史事件。
 2. 将 App Server live notifications 映射为增量 timeline events。
 3. 实现真实 prompt 路由：优先验证 `turn/start`，再评估 active turn 场景下的 `turn/steer`。
+
+## 2026-05-10: App Server live notification timeline mapping
+
+状态：完成。
+
+本次目标：
+
+- 将 App Server server notifications 从日志输出升级为实时 timeline event。
+- 保持 historical `thread/read` mapper 可复用。
+- 补充不依赖真实长任务的 mapper 验证。
+
+完成内容：
+
+- 新增 `bridge/host-bridge/timeline-mapper.mjs`，集中管理 historical thread item 和 live notification 映射。
+- `AppServerCodexAdapter` 在收到未匹配 request id 的 App Server notification 时，会调用 live notification mapper。
+- Host Bridge 通过 `onTimelineEvent` callback 将 live timeline events 转发给 Relay。
+- 新增 `npm run verify:live-notification-mapper`。
+- 保留 `MockCodexAdapter` 默认路径，避免普通验证依赖真实 Codex App Server。
+
+Live notification 映射覆盖：
+
+- `thread/status/changed` -> `thread_status_changed`
+- `turn/started` -> `turn_started`
+- `turn/completed` -> `turn_completed`
+- `turn/plan/updated` -> `plan_update`
+- `turn/diff/updated` -> `diff_update`
+- `item/started` / `item/completed` -> 复用 ThreadItem mapper
+- `item/agentMessage/delta` -> `assistant_delta`
+- `item/commandExecution/outputDelta` -> `command_output_delta`
+- `item/fileChange/patchUpdated` -> `file_changed`
+- `serverRequest/resolved` -> `request_resolved`
+- `error` -> `error`
+
+验证命令：
+
+```powershell
+npm run verify:live-notification-mapper
+npm run verify:delivery-strategy
+npm run verify:app-server-timeline
+```
+
+验证结果摘要：
+
+```text
+[verify] Live notification mapper verified.
+[verify] Delivery Strategy main path verified.
+[verify] App Server thread/read timeline mapped through Relay.
+```
+
+当前限制：
+
+- live notification mapper 已接入，但还没有通过真实 `turn/start` 长任务触发端到端 live event。
+- Relay 仍不缓存 timeline events，客户端必须在线订阅才能看到 live event。
+- delta 类事件目前逐条转发，尚未做合并、节流或按 item 聚合。
+
+下一步建议：
+
+1. 实现真实 prompt 路由：先用 `turn/start` 在 idle thread 上启动新 turn。
+2. 用真实 prompt 验证 live notification 从 App Server 到 Relay client 的端到端链路。
+3. 再处理 active turn 场景下的 `turn/steer`。

@@ -7,6 +7,10 @@ import {
   createMockSession,
   createTimelineEvent
 } from '../../packages/protocol/index.mjs';
+import {
+  mapAppServerNotificationToTimelineEvents,
+  mapThreadToTimelineEvents
+} from './timeline-mapper.mjs';
 
 export class MockCodexAdapter {
   constructor(hostId) {
@@ -65,6 +69,7 @@ export class AppServerCodexAdapter {
     this.pending = new Map();
     this.nextId = 1;
     this.cachedSessions = [];
+    this.onTimelineEvent = options.onTimelineEvent;
   }
 
   async start() {
@@ -156,6 +161,9 @@ export class AppServerCodexAdapter {
 
     if (message.method) {
       console.log(`[bridge] app-server notification: ${message.method}`);
+      for (const event of mapAppServerNotificationToTimelineEvents(message)) {
+        this.onTimelineEvent?.(event);
+      }
     }
   }
 
@@ -189,9 +197,9 @@ export class AppServerCodexAdapter {
   }
 }
 
-export function createCodexAdapter(hostId) {
+export function createCodexAdapter(hostId, options = {}) {
   if (process.env.CODEX_ADAPTER === 'app-server') {
-    return new AppServerCodexAdapter(hostId);
+    return new AppServerCodexAdapter(hostId, options);
   }
 
   return new MockCodexAdapter(hostId);
@@ -226,200 +234,6 @@ function mapThreadStatus(status) {
   return 'idle';
 }
 
-function mapThreadToTimelineEvents(thread, options = {}) {
-  const events = [];
-  const limit = Number.isInteger(options.limit) && options.limit > 0 ? options.limit : undefined;
-
-  for (const turn of thread.turns ?? []) {
-    if (turn.startedAt) {
-      events.push(createThreadTimelineEvent(
-        thread.id,
-        'turn_started',
-        'Turn started',
-        `Turn ${turn.id} started.`,
-        turn.startedAt,
-        { turn_id: turn.id, status: turn.status }
-      ));
-    }
-
-    for (const item of turn.items ?? []) {
-      const event = mapThreadItemToTimelineEvent(thread.id, turn, item);
-      if (event) {
-        events.push(event);
-        if (limit && events.length >= limit) {
-          return events;
-        }
-      }
-    }
-
-    if (turn.completedAt) {
-      events.push(createThreadTimelineEvent(
-        thread.id,
-        'turn_completed',
-        'Turn completed',
-        `Turn ${turn.id} completed.`,
-        turn.completedAt,
-        { turn_id: turn.id, status: turn.status, duration_ms: turn.durationMs }
-      ));
-    }
-  }
-
-  if (events.length === 0) {
-    events.push(createThreadTimelineEvent(
-      thread.id,
-      'summary',
-      'Thread loaded',
-      thread.preview || 'Thread has no loaded turns yet.',
-      thread.updatedAt ?? thread.createdAt ?? Date.now() / 1000,
-      { source: 'thread/read' }
-    ));
-  }
-
-  return limit ? events.slice(0, limit) : events;
-}
-
-function mapThreadItemToTimelineEvent(threadId, turn, item) {
-  const basePayload = {
-    turn_id: turn.id,
-    item_id: item.id,
-    item_type: item.type
-  };
-
-  switch (item.type) {
-    case 'userMessage':
-      return createThreadTimelineEvent(
-        threadId,
-        'user_prompt',
-        'User prompt',
-        summarizeUserInput(item.content),
-        turn.startedAt,
-        { ...basePayload, content: item.content }
-      );
-    case 'agentMessage':
-      return createThreadTimelineEvent(
-        threadId,
-        'assistant_message',
-        'Assistant message',
-        truncate(item.text),
-        turn.completedAt ?? turn.startedAt,
-        { ...basePayload, phase: item.phase }
-      );
-    case 'plan':
-      return createThreadTimelineEvent(
-        threadId,
-        'plan_update',
-        'Plan update',
-        truncate(item.text),
-        turn.startedAt,
-        basePayload
-      );
-    case 'reasoning':
-      return createThreadTimelineEvent(
-        threadId,
-        'reasoning_summary',
-        'Reasoning summary',
-        truncate([...item.summary, ...item.content].join('\n')),
-        turn.startedAt,
-        { ...basePayload, summary_count: item.summary.length, content_count: item.content.length }
-      );
-    case 'commandExecution':
-      return createThreadTimelineEvent(
-        threadId,
-        'command_execution',
-        `Command ${item.status?.type ?? 'execution'}`,
-        truncate(item.command),
-        turn.completedAt ?? turn.startedAt,
-        {
-          ...basePayload,
-          command: item.command,
-          cwd: item.cwd,
-          status: item.status,
-          exit_code: item.exitCode,
-          duration_ms: item.durationMs,
-          output_preview: truncate(item.aggregatedOutput ?? '')
-        }
-      );
-    case 'fileChange':
-      return createThreadTimelineEvent(
-        threadId,
-        'file_changed',
-        'File change',
-        `${item.changes?.length ?? 0} file change(s), status=${JSON.stringify(item.status)}`,
-        turn.completedAt ?? turn.startedAt,
-        { ...basePayload, status: item.status, changes: item.changes }
-      );
-    case 'mcpToolCall':
-      return createThreadTimelineEvent(
-        threadId,
-        'tool_call',
-        `MCP tool: ${item.server}/${item.tool}`,
-        `Status: ${JSON.stringify(item.status)}`,
-        turn.completedAt ?? turn.startedAt,
-        { ...basePayload, server: item.server, tool: item.tool, status: item.status }
-      );
-    case 'dynamicToolCall':
-      return createThreadTimelineEvent(
-        threadId,
-        'tool_call',
-        `Tool: ${item.namespace ? `${item.namespace}/` : ''}${item.tool}`,
-        `Status: ${JSON.stringify(item.status)}`,
-        turn.completedAt ?? turn.startedAt,
-        { ...basePayload, namespace: item.namespace, tool: item.tool, status: item.status, success: item.success }
-      );
-    default:
-      return createThreadTimelineEvent(
-        threadId,
-        item.type,
-        `Item: ${item.type}`,
-        `Codex item ${item.type} completed.`,
-        turn.completedAt ?? turn.startedAt,
-        basePayload
-      );
-  }
-}
-
-function createThreadTimelineEvent(sessionId, type, title, summary, timestampSeconds, payload) {
-  return {
-    event_id: `${sessionId}:${payload.turn_id ?? 'thread'}:${payload.item_id ?? type}`,
-    session_id: sessionId,
-    created_at: timestampSeconds ? new Date(timestampSeconds * 1000).toISOString() : new Date().toISOString(),
-    type,
-    title,
-    summary: summary || title,
-    payload,
-    redaction_level: 'none'
-  };
-}
-
-function summarizeUserInput(content) {
-  return truncate((content ?? []).map((item) => {
-    if (item.type === 'text') {
-      return item.text;
-    }
-
-    if (item.path) {
-      return `[${item.type}: ${item.path}]`;
-    }
-
-    if (item.url) {
-      return `[${item.type}: ${item.url}]`;
-    }
-
-    return `[${item.type}]`;
-  }).join('\n'));
-}
-
-function truncate(text, maxLength = 500) {
-  if (!text) {
-    return '';
-  }
-
-  if (text.length <= maxLength) {
-    return text;
-  }
-
-  return `${text.slice(0, maxLength - 3)}...`;
-}
 
 function resolveCodexCli() {
   if (process.env.CODEX_CLI_PATH) {
