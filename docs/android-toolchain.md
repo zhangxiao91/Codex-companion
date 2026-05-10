@@ -1,6 +1,6 @@
 # Android Toolchain Setup
 
-本项目的 Android shell 已经有 Gradle/Kotlin/Compose 骨架，但当前机器还缺少 Android 构建工具链。
+本项目的 Android shell 已经有 Gradle/Kotlin/Compose 骨架，当前机器已完成命令行 Android SDK 安装并通过 debug 构建。
 
 ## Required Versions
 
@@ -21,7 +21,7 @@
 
 ## Current Machine Check
 
-本轮检测结果：
+首次检测结果：
 
 - `winget` 可用。
 - `java` 不可用。
@@ -29,6 +29,14 @@
 - `adb` 不可用。
 - `JAVA_HOME`、`ANDROID_HOME`、`ANDROID_SDK_ROOT` 未设置。
 - `winget search` 在当前 shell 中超时，不适合由 Codex 自动安装。
+
+后续已完成：
+
+- JDK 17 已安装在 `C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot`。
+- Android command-line tools 已安装到 `%LOCALAPPDATA%\Android\Sdk\cmdline-tools\latest`。
+- Android SDK Platform 36、Build Tools 36.0.0、Platform Tools 已安装。
+- Gradle wrapper 已生成，版本为 9.4.1。
+- `.\gradlew.bat :app:assembleDebug` 已通过。
 
 ## Recommended Install Path
 
@@ -65,11 +73,11 @@ $env:Path = "$env:JAVA_HOME\bin;$env:ANDROID_HOME\platform-tools;$env:Path"
 npm run check:android-toolchain
 ```
 
-工具链就绪后，在 `android/` 目录构建：
+在 `android/` 目录构建：
 
 ```powershell
 cd android
-gradle :app:assembleDebug
+.\gradlew.bat :app:assembleDebug
 ```
 
 如果使用 Android Studio，直接打开 `android/` 目录，等待 Gradle sync 完成后运行 `app`。

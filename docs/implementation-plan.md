@@ -17,7 +17,7 @@
 
 - 第一条主链路已用 Node test client 代替 Android App 验证通过。
 - 已完成最小 Relay、Host Bridge、MockCodexAdapter 和 test client。
-- 当前机器未检测到 Android 工具链；Android MVP Shell 骨架已创建，但 Gradle build 暂缓到 Java/Gradle/Android SDK 可用后执行。
+- 当前机器已完成 Android 命令行工具链安装；Android MVP Shell 骨架已创建，并已通过 debug build。
 - WindowsApps app alias 的 `codex --help` 和 `codex --version` 返回 `Access is denied`；VS Code 扩展内置 Codex CLI 可执行，版本为 `codex-cli 0.129.0-alpha.15`。
 - App Server 协议覆盖初判和 loopback 连接验证已完成；`initialize` 与 `thread/list` 可用，首选真实 adapter 是 App Server Adapter，详见 `docs/codex-api-coverage.md`。
 - `AppServerCodexAdapter` 只读 MVP 已完成，可通过 `CODEX_ADAPTER=app-server` 启用，并已验证能通过 Relay 发布真实 Codex threads。
@@ -28,7 +28,7 @@
 - active turn 的 `turn/steer` prompt routing 已完成，移动端后续指令可以追加到正在运行的 Codex turn。
 - prompt 验证已升级为等待 live `assistant_delta` 或 `turn_completed`，证明移动端可看到真实 Codex 回答事件。
 - Relay 已实现最小内存 timeline cache 和 `after_cursor` 补发，可支撑移动端断线重连后的事件恢复原型。
-- Android 应用骨架已开始构建，当前机器仍缺 Java、Gradle 和 adb，需先补齐 Android 工具链后验证编译。
+- Android 应用骨架已开始构建，Gradle wrapper 已生成，`.\gradlew.bat :app:assembleDebug` 已通过。
 - 详细记录见 `docs/progress.md`。
 
 ## 2. Milestone 0: Research Spike

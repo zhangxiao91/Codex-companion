@@ -587,7 +587,7 @@ npm run verify:app-server-prompt
 
 ## 2026-05-10: Android toolchain preparation and shell skeleton
 
-状态：部分完成；构建验证受本机工具链阻塞。
+状态：完成；Android debug build 已通过。
 
 本次目标：
 
@@ -636,24 +636,25 @@ npm run check:android-toolchain
 [missing] Android SDK: set ANDROID_HOME or ANDROID_SDK_ROOT
 ```
 
-当前阻塞：
+后续完成：
 
-- 本机缺少 JDK/Java。
-- 本机缺少 Gradle。
-- 本机缺少 Android SDK / adb。
-- `winget` 存在，但 `winget search` 在当前 shell 中超时，不适合作为本轮自动安装路径。
-- 因为没有 Java/Gradle，本轮未生成 Gradle wrapper，也未执行 `:app:assembleDebug`。
+- 已定位 JDK：`C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot`。
+- 已安装 Android command-line tools 到 `%LOCALAPPDATA%\Android\Sdk`。
+- 已通过 `sdkmanager` 安装 `platform-tools`、`platforms;android-36`、`build-tools;36.0.0`。
+- 已接受 Android SDK licenses。
+- 已下载 Gradle 9.4.1 并生成 Gradle wrapper。
+- 已执行 `.\gradlew.bat :app:assembleDebug`，生成 debug APK。
 
-需要人工安装：
+构建验证命令：
 
-1. Android Studio。
-2. JDK 17。
-3. Android SDK Platform 36。
-4. Android SDK Build Tools 36.0.0。
-5. Android SDK Platform Tools。
+```powershell
+npm run check:android-toolchain
+cd android
+.\gradlew.bat :app:assembleDebug
+```
 
 下一步建议：
 
-1. 用户安装 Android 工具链后，运行 `npm run check:android-toolchain`。
-2. 工具链就绪后在 `android/` 目录生成 Gradle wrapper 并执行 `gradle :app:assembleDebug`。
-3. 编译通过后接入 Relay WebSocket，把静态首页替换为真实 session/timeline 数据。
+1. 接入 Relay WebSocket，把静态首页替换为真实 session/timeline 数据。
+2. 加入本地状态模型和 cursor 保存。
+3. 增加 prompt send 的真实调用路径。

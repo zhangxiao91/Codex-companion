@@ -82,7 +82,7 @@ Codex Mobile Companion 是一个 Android 优先的 Codex 移动协作入口。�
 - prompt 后等待真实 `assistant_delta` 或 `turn_completed`。
 - Relay 内存 timeline cache 和 `after_cursor` 补发。
 
-Android 骨架位于 [android/](android/)，使用 Kotlin + Jetpack Compose。当前机器尚未检测到 Java、Gradle 或 adb，因此暂时不能执行 Gradle build。工具链安装说明见 [docs/android-toolchain.md](docs/android-toolchain.md)。
+Android 骨架位于 [android/](android/)，使用 Kotlin + Jetpack Compose。当前机器已安装命令行 Android SDK，并已通过 `.\gradlew.bat :app:assembleDebug`。工具链说明见 [docs/android-toolchain.md](docs/android-toolchain.md)。
 
 常用验证命令：
 
