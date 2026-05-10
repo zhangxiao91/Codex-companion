@@ -23,6 +23,7 @@
 - `AppServerCodexAdapter` 只读 MVP 已完成，可通过 `CODEX_ADAPTER=app-server` 启用，并已验证能通过 Relay 发布真实 Codex threads。
 - `thread/read` timeline MVP 已完成，真实 thread turns/items 可通过 `session.timeline.request` 映射为移动端 timeline events。
 - App Server live notifications 已映射为增量 timeline events，但还未通过真实 `turn/start` 长任务做端到端验证。
+- `turn/start` prompt routing 已完成，Host Bridge 会先 resume 未加载 thread，再将移动端 prompt 发送到真实 Codex App Server。
 - 详细记录见 `docs/progress.md`。
 
 ## 2. Milestone 0: Research Spike

@@ -298,3 +298,65 @@ npm run verify:app-server-timeline
 1. 实现真实 prompt 路由：先用 `turn/start` 在 idle thread 上启动新 turn。
 2. 用真实 prompt 验证 live notification 从 App Server 到 Relay client 的端到端链路。
 3. 再处理 active turn 场景下的 `turn/steer`。
+
+## 2026-05-10: App Server turn/start prompt routing
+
+状态：完成。
+
+本次目标：
+
+- 让 `session.prompt` 不再停留在 mock adapter，而是进入真实 Codex App Server。
+- 对历史 `notLoaded` thread 做必要的 resume。
+- 用真实 App Server 验证 test client -> Relay -> Host Bridge -> Codex App Server -> Relay -> test client 的 prompt 链路。
+
+完成内容：
+
+- `AppServerCodexAdapter.sendPrompt()` 改为调用 App Server `turn/start`。
+- 调用 `turn/start` 前先通过 `thread/loaded/list` 判断 thread 是否已加载。
+- 若 thread 未加载，先调用 `thread/resume`。
+- `turn/start` 使用只读沙箱：
+  - `approvalPolicy: "never"`
+  - `sandboxPolicy: { type: "readOnly", networkAccess: false }`
+- `turn/start` 成功后返回 `turn_start_requested` timeline event。
+- `turn/start` 失败时返回 `error` timeline event，避免客户端一直等待。
+- `tools/test-client/` 支持通过 `TEST_CLIENT_EXPECT_EVENT_TYPE` 等待指定 timeline event type。
+- 新增 `npm run verify:app-server-prompt`。
+
+验证命令：
+
+```powershell
+npm run verify:app-server-prompt
+npm run verify:delivery-strategy
+npm run verify:app-server-timeline
+npm run verify:live-notification-mapper
+```
+
+验证结果摘要：
+
+```text
+[test-client] prompt sent: Reply with exactly: OK
+[bridge] received prompt for 019e100a-58f8-72f0-969d-3fb5bbefef97: Reply with exactly: OK
+[test-client] ignoring timeline event: thread_status_changed
+[test-client] timeline event received: Prompt sent to Codex
+[test-client] summary: Started turn 019e1050-beba-7ec2-81af-7e3fd3b53807.
+[verify] App Server turn/start prompt routed through Relay.
+```
+
+关键发现：
+
+- `thread/list` 返回的历史 threads 多数是 `notLoaded`，直接 `turn/start` 会失败：`thread not found`。
+- 对历史 thread 需要先 `thread/resume`，然后才能 `turn/start`。
+- App Server 会先发 `thread/status/changed` live notification，再返回本地确认事件 `turn_start_requested`。
+
+当前限制：
+
+- 只实现了 idle/resumed thread 的 `turn/start`。
+- active turn 场景还没有使用 `turn/steer`。
+- 验证脚本确认 prompt 已启动 turn，但不会等待模型最终回答完成。
+- 当前 prompt 会真实写入所选 Codex thread 历史；后续应改成创建专用 ephemeral test thread，避免污染用户历史。
+
+下一步建议：
+
+1. 增加测试专用 ephemeral thread 创建，避免 prompt 验证写入真实历史 thread。
+2. 实现 `turn/steer`，用于 active turn 的追加指令。
+3. 让 test client 等待 `turn/completed` 或 assistant delta，验证完整回答链路。

@@ -136,7 +136,61 @@ export class AppServerCodexAdapter {
   }
 
   async sendPrompt(sessionId, text) {
-    throw new Error(`AppServerCodexAdapter is read-only in this milestone. Cannot send prompt to ${sessionId}: ${text}`);
+    try {
+      await this.ensureThreadLoaded(sessionId);
+      const response = await this.request('turn/start', {
+        threadId: sessionId,
+        input: [
+          {
+            type: 'text',
+            text,
+            text_elements: []
+          }
+        ],
+        approvalPolicy: 'never',
+        sandboxPolicy: {
+          type: 'readOnly',
+          networkAccess: false
+        },
+        responsesapiClientMetadata: {
+          source: 'codex-mobile-companion'
+        }
+      });
+
+      const turn = response.turn;
+      return createMessage(MessageType.TimelineEvent, {
+        event: {
+          event_id: `${sessionId}:${turn.id}:turn_start_requested`,
+          session_id: sessionId,
+          created_at: new Date().toISOString(),
+          type: 'turn_start_requested',
+          title: 'Prompt sent to Codex',
+          summary: `Started turn ${turn.id}.`,
+          payload: {
+            turn_id: turn.id,
+            status: turn.status,
+            prompt: text
+          },
+          redaction_level: 'none'
+        }
+      });
+    } catch (error) {
+      return createMessage(MessageType.TimelineEvent, {
+        event: {
+          event_id: `${sessionId}:prompt_failed:${Date.now()}`,
+          session_id: sessionId,
+          created_at: new Date().toISOString(),
+          type: 'error',
+          title: 'Prompt failed',
+          summary: error.message,
+          payload: {
+            prompt: text,
+            error: error.message
+          },
+          redaction_level: 'none'
+        }
+      });
+    }
   }
 
   async readTimeline(sessionId, options = {}) {
@@ -193,6 +247,24 @@ export class AppServerCodexAdapter {
       });
 
       this.socket.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  async ensureThreadLoaded(sessionId) {
+    const loaded = await this.request('thread/loaded/list', {
+      limit: 100
+    });
+
+    if (loaded.data.includes(sessionId)) {
+      return;
+    }
+
+    await this.request('thread/resume', {
+      threadId: sessionId,
+      approvalPolicy: 'never',
+      sandbox: 'read-only',
+      excludeTurns: true,
+      persistExtendedHistory: false
     });
   }
 }

@@ -11,6 +11,7 @@
     "probe:codex-app-server": "node tools/probe-codex-app-server.mjs",
     "verify:app-server-readonly": "node tools/verify-app-server-readonly.mjs",
     "verify:app-server-timeline": "node tools/verify-app-server-timeline.mjs",
+    "verify:app-server-prompt": "node tools/verify-app-server-prompt.mjs",
     "verify:live-notification-mapper": "node tools/verify-live-notification-mapper.mjs",
     "verify:delivery-strategy": "node tools/verify-delivery-strategy.mjs"
   },

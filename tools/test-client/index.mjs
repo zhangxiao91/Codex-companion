@@ -9,6 +9,7 @@ import {
 const relayUrl = process.env.RELAY_URL ?? DEFAULT_RELAY_URL;
 const promptText = process.argv.slice(2).join(' ') || '总结当前进度';
 const timeoutMs = Number.parseInt(process.env.TEST_CLIENT_TIMEOUT_MS ?? '10000', 10);
+const expectedEventType = process.env.TEST_CLIENT_EXPECT_EVENT_TYPE;
 
 const socket = new WebSocket(relayUrl);
 const timer = setTimeout(() => {
@@ -53,6 +54,11 @@ socket.addEventListener('message', (event) => {
       return;
     }
 
+    if (expectedEventType && timelineEvent.type !== expectedEventType) {
+      console.log(`[test-client] ignoring timeline event: ${timelineEvent.type}`);
+      return;
+    }
+
     console.log(`[test-client] timeline event received: ${timelineEvent.title}`);
     console.log(`[test-client] summary: ${timelineEvent.summary}`);
     clearTimeout(timer);
@@ -69,4 +75,3 @@ socket.addEventListener('error', () => {
 function send(type, payload) {
   socket.send(encodeMessage(createMessage(type, payload)));
 }
-
