@@ -44,7 +44,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 class MainActivity : ComponentActivity() {
-    private val viewModel by viewModels<RelayViewModel>()
+    private val viewModel by viewModels<RelayViewModel> {
+        RelayViewModelFactory(this)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -58,6 +60,7 @@ class MainActivity : ComponentActivity() {
             CompanionApp(
                 uiState = uiState,
                 onReconnect = viewModel::connect,
+                onRelayUrlSave = viewModel::saveRelayUrl,
                 onSessionSelected = viewModel::selectSession,
                 onPromptSend = viewModel::sendPrompt
             )
@@ -69,6 +72,7 @@ class MainActivity : ComponentActivity() {
 private fun CompanionApp(
     uiState: RelayUiState,
     onReconnect: () -> Unit,
+    onRelayUrlSave: (String) -> Unit,
     onSessionSelected: (String) -> Unit,
     onPromptSend: (String) -> Unit
 ) {
@@ -86,6 +90,7 @@ private fun CompanionApp(
             SessionDashboard(
                 uiState = uiState,
                 onReconnect = onReconnect,
+                onRelayUrlSave = onRelayUrlSave,
                 onSessionSelected = onSessionSelected,
                 onPromptSend = onPromptSend
             )
@@ -97,6 +102,7 @@ private fun CompanionApp(
 private fun SessionDashboard(
     uiState: RelayUiState,
     onReconnect: () -> Unit,
+    onRelayUrlSave: (String) -> Unit,
     onSessionSelected: (String) -> Unit,
     onPromptSend: (String) -> Unit
 ) {
@@ -110,10 +116,9 @@ private fun SessionDashboard(
     ) {
         Header(status = uiState.connectionStatus)
         HostSummary(
-            relayUrl = uiState.relayUrl,
-            status = uiState.connectionStatus,
-            lastError = uiState.lastError,
-            onReconnect = onReconnect
+            uiState = uiState,
+            onReconnect = onReconnect,
+            onRelayUrlSave = onRelayUrlSave
         )
         SessionSummary(
             sessions = uiState.sessions,
@@ -160,39 +165,57 @@ private fun Header(status: String) {
 }
 
 @Composable
-private fun HostSummary(
-    relayUrl: String,
-    status: String,
-    lastError: String?,
-    onReconnect: () -> Unit
-) {
+private fun HostSummary(uiState: RelayUiState, onReconnect: () -> Unit, onRelayUrlSave: (String) -> Unit) {
+    var relayUrlDraft by remember(uiState.relayUrl) { mutableStateOf(uiState.relayUrl) }
+
     Panel {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("local-dev-host", fontWeight = FontWeight.SemiBold)
-                Text(
-                    text = relayUrl,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF5E6978),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                if (!lastError.isNullOrBlank()) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Relay connection", fontWeight = FontWeight.SemiBold)
                     Text(
-                        text = lastError,
+                        text = diagnosticsSummary(uiState),
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFFB42318),
+                        color = Color(0xFF5E6978),
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
+                StatusPill(text = uiState.connectionStatus)
             }
-            OutlinedButton(onClick = onReconnect) {
-                Text(if (status == "Online") "Refresh" else "Connect")
+            TextField(
+                modifier = Modifier.fillMaxWidth(),
+                value = relayUrlDraft,
+                onValueChange = { relayUrlDraft = it },
+                singleLine = true
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Button(
+                    onClick = { onRelayUrlSave(relayUrlDraft) },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF176B52))
+                ) {
+                    Text("Save")
+                }
+                OutlinedButton(onClick = onReconnect) {
+                    Text(if (uiState.connectionStatus == "Online") "Refresh" else "Connect")
+                }
+            }
+            if (!uiState.lastError.isNullOrBlank()) {
+                Text(
+                    text = uiState.lastError,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFFB42318),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
     }
@@ -376,4 +399,9 @@ private fun StatusPill(text: String) {
             fontWeight = FontWeight.Medium
         )
     }
+}
+
+private fun diagnosticsSummary(uiState: RelayUiState): String {
+    val connectedAt = uiState.lastConnectedAt ?: "never"
+    return "sessions=${uiState.sessions.size}, events=${uiState.timeline.size}, last connected=$connectedAt"
 }

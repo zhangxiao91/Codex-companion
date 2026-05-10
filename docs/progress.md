@@ -711,3 +711,55 @@ BUILD SUCCESSFUL
 1. 增加 Relay URL 设置和连接诊断。
 2. 持久化 selected session、timeline cursor 和最近 events。
 3. 实现 approval request/decision 映射，并在 Android 首页做“需要处理”入口。
+
+## 2026-05-10: Android Relay URL settings and diagnostics
+
+状态：完成。
+
+本次目标：
+
+- 让 Android App 不再只能连接写死的模拟器 Relay URL。
+- 支持保存最近使用的 Relay URL。
+- 增加基础连接诊断，便于模拟器、真机和云端 devbox 调试。
+
+完成内容：
+
+- 新增 `RelaySettings`，使用 SharedPreferences 保存 Relay URL。
+- 新增 `RelayViewModelFactory`，向 ViewModel 注入 settings。
+- `RelayViewModel` 支持 `saveRelayUrl()`，保存后清空旧 session/timeline 并自动重连。
+- Relay URL 做最小校验：必须以 `ws://` 或 `wss://` 开头。
+- UI Host 面板新增 Relay URL 输入框。
+- UI Host 面板新增 Save 和 Connect/Refresh。
+- UI 显示连接状态、session 数、timeline event 数、最后连接时间和最近错误。
+- Relay 新增 `RELAY_HOST`，开发时可用 `RELAY_HOST=0.0.0.0` 允许真机局域网访问。
+
+连接方式：
+
+- Android 模拟器：`ws://10.0.2.2:8787`
+- Android 真机：`ws://<电脑局域网 IP>:8787`
+- 云端开发机：`wss://<relay domain>` 或通过 SSH/VPN 暴露的 WebSocket 地址
+
+验证命令：
+
+```powershell
+cd android
+.\gradlew.bat :app:assembleDebug
+```
+
+验证结果：
+
+```text
+BUILD SUCCESSFUL
+```
+
+当前限制：
+
+- 只保存 Relay URL，还没有保存 selected session、timeline cursor 或最近 events。
+- 真机连接仍要求 Relay 地址在网络上可达；开发模式可用 `RELAY_HOST=0.0.0.0`，正式方案仍需要认证和 TLS。
+- 没有 TLS、认证或 pairing flow。
+
+下一步建议：
+
+1. 持久化 selected session、timeline cursor 和最近 events。
+2. 实现 approval request/decision 映射。
+3. 增加 pairing/auth，替换开放局域网开发模式。

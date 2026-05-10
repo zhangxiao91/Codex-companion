@@ -1,18 +1,43 @@
 package dev.codexmobile.companion
 
 import androidx.lifecycle.ViewModel
+import java.time.Instant
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 
-class RelayViewModel : ViewModel(), RelayClient.Listener {
+class RelayViewModel(
+    private val settings: RelaySettings
+) : ViewModel(), RelayClient.Listener {
     private val relayClient = RelayClient(this)
-    private val _uiState = MutableStateFlow(RelayUiState())
+    private val _uiState = MutableStateFlow(RelayUiState(relayUrl = settings.relayUrl()))
     val uiState: StateFlow<RelayUiState> = _uiState
 
     fun connect() {
         _uiState.update { it.copy(connectionStatus = "Connecting", lastError = null) }
         relayClient.connect(_uiState.value.relayUrl)
+    }
+
+    fun saveRelayUrl(url: String) {
+        val normalizedUrl = url.trim()
+        if (!isValidRelayUrl(normalizedUrl)) {
+            _uiState.update { it.copy(lastError = "Relay URL must start with ws:// or wss://") }
+            return
+        }
+
+        settings.saveRelayUrl(normalizedUrl)
+        _uiState.update {
+            it.copy(
+                relayUrl = normalizedUrl,
+                connectionStatus = "Disconnected",
+                sessions = emptyList(),
+                selectedSessionId = null,
+                timeline = emptyList(),
+                lastConnectedAt = null,
+                lastError = null
+            )
+        }
+        connect()
     }
 
     fun selectSession(sessionId: String) {
@@ -34,7 +59,13 @@ class RelayViewModel : ViewModel(), RelayClient.Listener {
     }
 
     override fun onConnected() {
-        _uiState.update { it.copy(connectionStatus = "Online", lastError = null) }
+        _uiState.update {
+            it.copy(
+                connectionStatus = "Online",
+                lastConnectedAt = Instant.now().toString(),
+                lastError = null
+            )
+        }
     }
 
     override fun onDisconnected(reason: String) {
@@ -71,5 +102,8 @@ class RelayViewModel : ViewModel(), RelayClient.Listener {
 
     private companion object {
         const val MAX_TIMELINE_ITEMS = 200
+
+        fun isValidRelayUrl(url: String): Boolean =
+            url.startsWith("ws://") || url.startsWith("wss://")
     }
 }

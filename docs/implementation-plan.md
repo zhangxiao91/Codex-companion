@@ -30,6 +30,7 @@
 - Relay 已实现最小内存 timeline cache 和 `after_cursor` 补发，可支撑移动端断线重连后的事件恢复原型。
 - Android 应用骨架已开始构建，Gradle wrapper 已生成，`.\gradlew.bat :app:assembleDebug` 已通过。
 - Android 已接入 Relay WebSocket，支持 session snapshot、timeline event 和 prompt send 的第一版真实链路。
+- Android 已支持 Relay URL 编辑保存、重连和基础连接诊断，模拟器/真机可以切换不同 Relay 地址。
 - 详细记录见 `docs/progress.md`。
 
 ## 2. Milestone 0: Research Spike

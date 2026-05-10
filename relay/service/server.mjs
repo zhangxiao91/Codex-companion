@@ -10,6 +10,7 @@ import {
 import { handleWebSocketUpgrade } from './ws-server.mjs';
 
 const port = Number.parseInt(process.env.RELAY_PORT ?? '8787', 10);
+const host = process.env.RELAY_HOST ?? '127.0.0.1';
 const timelineCacheLimit = Number.parseInt(process.env.RELAY_TIMELINE_CACHE_LIMIT ?? '200', 10);
 
 const state = {
@@ -47,8 +48,8 @@ server.on('upgrade', (request, socket, head) => {
   });
 });
 
-server.listen(port, '127.0.0.1', () => {
-  console.log(`[relay] listening on ws://127.0.0.1:${port}`);
+server.listen(port, host, () => {
+  console.log(`[relay] listening on ws://${host}:${port}`);
 });
 
 function handleMessage(connection, raw) {
