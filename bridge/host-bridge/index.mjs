@@ -17,6 +17,11 @@ const adapter = createCodexAdapter(hostId, {
     if (socket.readyState === WebSocket.OPEN) {
       socket.send(encodeMessage(createRelayMessage(MessageType.TimelineEvent, { event })));
     }
+  },
+  onApprovalRequest: (approval) => {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(encodeMessage(createRelayMessage(MessageType.ApprovalRequest, { approval })));
+    }
   }
 });
 

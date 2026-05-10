@@ -1103,6 +1103,68 @@ $env:Path="$env:JAVA_HOME\bin;$env:ANDROID_HOME\platform-tools;$env:Path"
 1. 调研并接入 App Server `item/commandExecution/requestApproval`、`item/fileChange/requestApproval`、`item/permissions/requestApproval` 的 request/response。
 2. 再做 Git status/diff/commit/push 最小入口。
 
+## 2026-05-10: Real App Server approval request mapping
+
+状态：完成。
+
+本次目标：
+
+- 把真实 Codex App Server 的 approval server request 接入上一轮 `approval.request` / `approval.decision` 通道。
+- 让手机端 decision 能回写到 App Server JSON-RPC request。
+
+完成内容：
+
+- `AppServerCodexAdapter` 现在识别 App Server server request：
+  - `item/commandExecution/requestApproval`
+  - `item/fileChange/requestApproval`
+  - `item/permissions/requestApproval`
+  - `execCommandApproval`
+  - `applyPatchApproval`
+- 将 App Server params 映射为移动端 approval card 字段：
+  - session id
+  - kind
+  - title / summary
+  - command / cwd
+  - risk level
+  - allowed decisions
+  - app-server request id
+- `resolveApproval()` 会把手机端 decision 转回 App Server response：
+  - command execution: `accept` / `acceptForSession` / `decline`
+  - file change: `accept` / `acceptForSession` / `decline`
+  - permissions: granted permission profile + `turn` / `session` scope
+  - legacy exec/applyPatch: `approved` / `approved_for_session` / `denied`
+- `CODEX_APPROVAL_POLICY` 可控制 App Server session 的 approval policy；默认仍是 `never`。
+- 新增 `npm run verify:app-server-approval-mapper`：
+  - 验证真实 App Server approval params 到 mobile approval 的映射。
+  - 验证 mobile decision 到 App Server result 的映射。
+  - 用 fake socket 验证 `handleMessage()` server request 和 `resolveApproval()` 写回路径。
+
+验证命令：
+
+```powershell
+npm run verify:app-server-approval-mapper
+npm run verify:approval-flow
+npm run verify:delivery-strategy
+npm run verify:relay-dev-token
+cd android
+$env:JAVA_HOME='C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot'
+$env:ANDROID_HOME='C:\Users\13372\AppData\Local\Android\Sdk'
+$env:ANDROID_SDK_ROOT=$env:ANDROID_HOME
+$env:Path="$env:JAVA_HOME\bin;$env:ANDROID_HOME\platform-tools;$env:Path"
+.\gradlew.bat :app:assembleDebug
+```
+
+当前限制：
+
+- 尚未用真实 Codex dangerous action 触发端到端 approval，因为这会执行/尝试执行真实 shell 或文件写操作；需要手动选择安全命令验证。
+- Android approval card 目前只支持 approve once / approve session / deny 的通用动作，不展示 App Server 的全部细粒度 amendment 选项。
+- Permissions deny 当前映射为授予空权限并 strict auto review，后续需要确认 App Server 是否有更明确的 deny 语义。
+
+下一步建议：
+
+1. 用安全命令手测真实 approval，例如在 `CODEX_APPROVAL_POLICY='on-request'` 下请求运行只读命令。
+2. 进入 Git status/diff/commit/push MVP。
+
 ## 2026-05-10: Android dashboard scroll fix
 
 Status: completed.
