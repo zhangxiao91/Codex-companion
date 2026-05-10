@@ -20,6 +20,7 @@ class RelayClient(
         fun onSessionSnapshot(session: CodexSession)
         fun onApprovalRequest(approval: ApprovalItem)
         fun onGitSnapshot(snapshot: GitSnapshot)
+        fun onGitAudit(sessionId: String, events: List<GitAuditItem>)
         fun onTimelineEvent(event: TimelineItem)
         fun onHealthCheck(summary: String)
         fun onPairingComplete(deviceId: String, deviceToken: String)
@@ -145,6 +146,49 @@ class RelayClient(
         }
     }
 
+    fun requestGitAudit(url: String = DEFAULT_RELAY_URL, token: String = "", sessionId: String, limit: Int = 20) {
+        runCatching {
+            val requestBuilder = Request.Builder().url(gitAuditUrlFor(url, sessionId, limit))
+            addAuthHeaders(requestBuilder, token.trim())
+            val request = requestBuilder.build()
+            client.newCall(request).enqueue(
+                object : okhttp3.Callback {
+                    override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
+                        listener.onError("Git audit failed: ${e.message}")
+                    }
+
+                    override fun onResponse(call: okhttp3.Call, response: Response) {
+                        response.use {
+                            val raw = it.body.string()
+                            if (!it.isSuccessful) {
+                                listener.onError("Git audit failed: HTTP ${it.code}")
+                                return
+                            }
+
+                            val json = JSONObject(raw)
+                            if (!json.optBoolean("ok", false)) {
+                                listener.onError(json.optString("detail", "Git audit failed"))
+                                return
+                            }
+
+                            val eventsJson = json.optJSONArray("events")
+                            val events = if (eventsJson == null) {
+                                emptyList()
+                            } else {
+                                List(eventsJson.length()) { index ->
+                                    parseGitAuditItem(eventsJson.getJSONObject(index))
+                                }
+                            }
+                            listener.onGitAudit(sessionId, events)
+                        }
+                    }
+                }
+            )
+        }.onFailure { error ->
+            listener.onError(error.message ?: "Invalid Relay URL")
+        }
+    }
+
     fun pairDevice(url: String = DEFAULT_RELAY_URL, pairingToken: String = "", existingDeviceId: String = "") {
         runCatching {
             val token = pairingToken.trim()
@@ -248,6 +292,10 @@ class RelayClient(
         return httpUrlFor(url, "/pair")
     }
 
+    private fun gitAuditUrlFor(url: String, sessionId: String, limit: Int): String {
+        return "${httpUrlFor(url, "/git/audit")}?session_id=${encodeQuery(sessionId)}&limit=${limit.coerceIn(1, 100)}"
+    }
+
     private fun httpUrlFor(url: String, path: String): String {
         val base = when {
             url.startsWith("ws://") -> url.replaceFirst("ws://", "http://")
@@ -281,6 +329,22 @@ class RelayClient(
         val lan = listen?.optBoolean("lan_access_enabled") ?: false
         return "health ok: hosts=$hosts, sessions=$sessions, clients=$clients, cached_events=$cachedEvents, lan=$lan"
     }
+
+    private fun parseGitAuditItem(json: JSONObject): GitAuditItem = GitAuditItem(
+        eventId = json.optString("event_id", UUID.randomUUID().toString()),
+        auditId = json.optString("audit_id", ""),
+        sessionId = json.optString("session_id", ""),
+        hostId = json.optString("host_id", ""),
+        phase = json.optString("phase", ""),
+        action = json.optString("action", ""),
+        filePath = json.optString("file_path", ""),
+        deviceId = json.optJSONObject("device")?.optString("device_id", "") ?: "",
+        deviceDisplayName = json.optJSONObject("device")?.optString("display_name", "") ?: "",
+        resultOk = json.takeIf { it.has("result_ok") && !it.isNull("result_ok") }?.optBoolean("result_ok"),
+        resultMessage = json.optString("result_message", ""),
+        changedFileCount = json.takeIf { it.has("changed_file_count") && !it.isNull("changed_file_count") }?.optInt("changed_file_count"),
+        createdAt = json.optString("created_at", "")
+    )
 
     private fun parseSession(json: JSONObject): CodexSession = CodexSession(
         sessionId = json.getString("session_id"),
@@ -355,5 +419,8 @@ class RelayClient(
     companion object {
         const val DEFAULT_RELAY_URL = "ws://10.0.2.2:8787"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+
+        private fun encodeQuery(value: String): String =
+            java.net.URLEncoder.encode(value, Charsets.UTF_8.name())
     }
 }

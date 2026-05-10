@@ -46,6 +46,7 @@ class RelayViewModel(
                 timeline = emptyList(),
                 approvals = emptyList(),
                 gitSnapshots = emptyMap(),
+                gitAudit = emptyMap(),
                 lastConnectedAt = null,
                 lastError = null
             )
@@ -77,6 +78,7 @@ class RelayViewModel(
                 timeline = emptyList(),
                 approvals = emptyList(),
                 gitSnapshots = emptyMap(),
+                gitAudit = emptyMap(),
                 lastConnectedAt = null,
                 lastHealthCheck = null,
                 lastError = null
@@ -105,6 +107,7 @@ class RelayViewModel(
         _uiState.update { it.copy(selectedSessionId = sessionId) }
         settings.saveSelectedSessionId(sessionId)
         relayClient.requestTimeline(sessionId, afterCursor)
+        requestGitAudit()
     }
 
     fun sendPrompt(text: String) {
@@ -139,6 +142,15 @@ class RelayViewModel(
 
     fun requestGitPush() {
         requestGit("push")
+    }
+
+    fun requestGitAudit() {
+        val sessionId = _uiState.value.selectedSessionId ?: return
+        relayClient.requestGitAudit(
+            _uiState.value.relayUrl,
+            _uiState.value.activeAuthToken,
+            sessionId
+        )
     }
 
     fun decideApproval(approvalId: String, decision: String) {
@@ -187,6 +199,15 @@ class RelayViewModel(
     override fun onGitSnapshot(snapshot: GitSnapshot) {
         _uiState.update { state ->
             state.copy(gitSnapshots = state.gitSnapshots + (snapshot.sessionId to snapshot))
+        }
+        if (_uiState.value.selectedSessionId == snapshot.sessionId) {
+            requestGitAudit()
+        }
+    }
+
+    override fun onGitAudit(sessionId: String, events: List<GitAuditItem>) {
+        _uiState.update { state ->
+            state.copy(gitAudit = state.gitAudit + (sessionId to events))
         }
     }
 

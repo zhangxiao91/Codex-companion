@@ -74,6 +74,7 @@ class MainActivity : ComponentActivity() {
                 onGitFileDiff = viewModel::requestGitFileDiff,
                 onGitCommit = viewModel::requestGitCommit,
                 onGitPush = viewModel::requestGitPush,
+                onGitAuditRefresh = viewModel::requestGitAudit,
                 onApprovalDecision = viewModel::decideApproval,
                 onPromptSend = viewModel::sendPrompt
             )
@@ -94,6 +95,7 @@ private fun CompanionApp(
     onGitFileDiff: (String) -> Unit,
     onGitCommit: (String, String) -> Unit,
     onGitPush: () -> Unit,
+    onGitAuditRefresh: () -> Unit,
     onApprovalDecision: (String, String) -> Unit,
     onPromptSend: (String) -> Unit
 ) {
@@ -120,6 +122,7 @@ private fun CompanionApp(
                 onGitFileDiff = onGitFileDiff,
                 onGitCommit = onGitCommit,
                 onGitPush = onGitPush,
+                onGitAuditRefresh = onGitAuditRefresh,
                 onApprovalDecision = onApprovalDecision,
                 onPromptSend = onPromptSend
             )
@@ -140,6 +143,7 @@ private fun SessionDashboard(
     onGitFileDiff: (String) -> Unit,
     onGitCommit: (String, String) -> Unit,
     onGitPush: () -> Unit,
+    onGitAuditRefresh: () -> Unit,
     onApprovalDecision: (String, String) -> Unit,
     onPromptSend: (String) -> Unit
 ) {
@@ -169,12 +173,14 @@ private fun SessionDashboard(
         GitPanel(
             selectedSession = uiState.selectedSession,
             snapshot = uiState.selectedGitSnapshot,
+            auditEvents = uiState.selectedGitAudit,
             connectionStatus = uiState.connectionStatus,
             onStatus = onGitStatus,
             onDiff = onGitDiff,
             onFileDiff = onGitFileDiff,
             onCommit = onGitCommit,
-            onPush = onGitPush
+            onPush = onGitPush,
+            onAuditRefresh = onGitAuditRefresh
         )
         ApprovalInbox(
             approvals = uiState.pendingApprovals,
@@ -432,12 +438,14 @@ private fun SessionRow(session: CodexSession, selected: Boolean, onClick: () -> 
 private fun GitPanel(
     selectedSession: CodexSession?,
     snapshot: GitSnapshot?,
+    auditEvents: List<GitAuditItem>,
     connectionStatus: String,
     onStatus: () -> Unit,
     onDiff: () -> Unit,
     onFileDiff: (String) -> Unit,
     onCommit: (String, String) -> Unit,
-    onPush: () -> Unit
+    onPush: () -> Unit,
+    onAuditRefresh: () -> Unit
 ) {
     var commitMessage by remember { mutableStateOf("") }
     var commitStrategy by remember { mutableStateOf("tracked_only") }
@@ -585,6 +593,11 @@ private fun GitPanel(
                     color = Color(0xFF8A94A6)
                 )
             }
+            GitAuditPreview(
+                events = auditEvents,
+                enabled = selectedSession != null,
+                onRefresh = onAuditRefresh
+            )
         }
     }
 
@@ -610,6 +623,69 @@ private fun GitPanel(
                 onPush()
                 confirmPush = false
             }
+        )
+    }
+}
+
+@Composable
+private fun GitAuditPreview(
+    events: List<GitAuditItem>,
+    enabled: Boolean,
+    onRefresh: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Git audit", fontWeight = FontWeight.SemiBold)
+            OutlinedButton(
+                enabled = enabled,
+                onClick = onRefresh
+            ) {
+                Text("Refresh")
+            }
+        }
+        if (events.isEmpty()) {
+            Text(
+                text = "No audit events loaded.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF8A94A6)
+            )
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                events.take(5).forEach { event ->
+                    GitAuditRow(event)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GitAuditRow(event: GitAuditItem) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFFF7F8FA), RoundedCornerShape(8.dp))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        Text(
+            text = gitAuditTitle(event),
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            color = Color(0xFF344054),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = gitAuditDetail(event),
+            style = MaterialTheme.typography.labelSmall,
+            color = Color(0xFF5E6978),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
@@ -1094,4 +1170,20 @@ private fun commitStrategyWarning(snapshot: GitSnapshot, commitStrategy: String)
 
 private fun pushConfirmText(branch: String): String {
     return "This requests `git push` for branch $branch. The local worktree must be clean and the branch must have an upstream tracking branch."
+}
+
+private fun gitAuditTitle(event: GitAuditItem): String {
+    val result = when (event.resultOk) {
+        true -> "ok"
+        false -> "blocked"
+        null -> event.phase
+    }
+    return "${event.action} ${event.phase} $result"
+}
+
+private fun gitAuditDetail(event: GitAuditItem): String {
+    val file = event.filePath.takeIf { it.isNotBlank() }?.let { " file=$it" } ?: ""
+    val device = event.deviceDisplayName.ifBlank { event.deviceId }.ifBlank { "unknown device" }
+    val changed = event.changedFileCount?.let { " changes=$it" } ?: ""
+    return "$device$file$changed ${event.createdAt}".trim()
 }

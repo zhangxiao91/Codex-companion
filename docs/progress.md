@@ -1736,3 +1736,51 @@ Next recommended step:
 
 1. Add a real-device Git workflow checklist and run it against a disposable remote.
 2. Consider Android read-only audit view after real-device Git testing.
+
+## 2026-05-10: Android Git audit view
+
+Status: completed.
+
+Goal:
+
+- Make persistent Git audit useful from the mobile information window.
+- Keep it read-only and scoped to the selected session.
+
+Changes:
+
+- Added Android `GitAuditItem` model.
+- RelayClient can call authenticated `GET /git/audit?session_id=<id>&limit=20`.
+- RelayViewModel stores recent audit events per session.
+- Selecting a session refreshes Git audit events.
+- Receiving a Git snapshot refreshes audit events for the selected session.
+- Git panel now includes a read-only Git audit section with:
+  - Refresh button,
+  - recent action/phase/result rows,
+  - device/file/change-count metadata where available.
+
+Verification commands:
+
+```powershell
+cd android
+$env:JAVA_HOME='C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot'
+$env:ANDROID_HOME='C:\Users\13372\AppData\Local\Android\Sdk'
+$env:ANDROID_SDK_ROOT=$env:ANDROID_HOME
+$env:Path="$env:JAVA_HOME\bin;$env:ANDROID_HOME\platform-tools;$env:Path"
+.\gradlew.bat :app:assembleDebug
+```
+
+Verification result:
+
+```text
+BUILD SUCCESSFUL
+```
+
+Current limitations:
+
+- Audit rows are compact and read-only; there is no dedicated full-screen audit browser yet.
+- Audit query results are not persisted in Android local cache.
+
+Next recommended step:
+
+1. Add a real-device Git workflow checklist and run it against a disposable remote.
+2. Add a focused Android manual test checklist for audit refresh behavior.

@@ -192,6 +192,7 @@ UI 要求：
 - 已验证 `npm run verify:git-flow`。
 - Android 已有紧凑 Git 面板，支持 Status / Diff summary 和点击 changed file 查看单文件 diff preview。
 - Relay 已有 metadata-only Git action audit，记录 requested/completed、device、action、file path 和结果摘要；当前已支持 NDJSON 持久化和 `GET /git/audit` 查询。
+- Android Git 面板已支持按 selected session 刷新最近 Git audit entries。
 - Android 已有 commit message 输入和二次确认 UI；commit 执行默认受 `GIT_WRITE_ACTIONS_ENABLED=true` 保护。
 - Git snapshot 已区分 tracked/untracked files；Android commit confirmation 支持 `tracked_only` 和 `include_untracked` 两种策略。`include_untracked` 只有在 Host Bridge 显式启用 `GIT_WRITE_ACTIONS_ENABLED=true` 后才会执行 `git add -A`。
 - push 已接入 Android 二次确认 UI 和 Host Bridge policy；执行需同时启用 `GIT_WRITE_ACTIONS_ENABLED=true` 与 `GIT_PUSH_ACTIONS_ENABLED=true`，并要求已知 branch、upstream tracking branch 和 clean worktree。

@@ -171,6 +171,7 @@ The current prototype includes a minimal Git status and file diff path:
 - Host Bridge runs local read-only Git commands in the session repository and returns `git.snapshot`.
 - Relay emits metadata-only `git_audit` timeline events for Git request/completion.
 - Relay persists Git audit events as NDJSON and exposes `GET /git/audit` for authenticated queries.
+- Android can refresh and view recent Git audit entries for the selected session from the Git panel.
 - Commit execution is guarded by `GIT_WRITE_ACTIONS_ENABLED=true`; `include_untracked` stages tracked and untracked files with `git add -A` only after that host-side gate is enabled.
 - Push execution is guarded by both `GIT_WRITE_ACTIONS_ENABLED=true` and `GIT_PUSH_ACTIONS_ENABLED=true`; Host Bridge also requires a known branch, upstream tracking branch, and clean worktree.
 

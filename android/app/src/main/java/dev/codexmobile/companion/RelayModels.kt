@@ -60,6 +60,22 @@ data class GitSnapshot(
     val updatedAt: String
 )
 
+data class GitAuditItem(
+    val eventId: String,
+    val auditId: String,
+    val sessionId: String,
+    val hostId: String,
+    val phase: String,
+    val action: String,
+    val filePath: String,
+    val deviceId: String,
+    val deviceDisplayName: String,
+    val resultOk: Boolean?,
+    val resultMessage: String,
+    val changedFileCount: Int?,
+    val createdAt: String
+)
+
 data class RelayUiState(
     val relayUrl: String = RelayClient.DEFAULT_RELAY_URL,
     val pairingToken: String = "",
@@ -71,6 +87,7 @@ data class RelayUiState(
     val timeline: List<TimelineItem> = emptyList(),
     val approvals: List<ApprovalItem> = emptyList(),
     val gitSnapshots: Map<String, GitSnapshot> = emptyMap(),
+    val gitAudit: Map<String, List<GitAuditItem>> = emptyMap(),
     val lastConnectedAt: String? = null,
     val lastHealthCheck: String? = null,
     val lastError: String? = null
@@ -83,6 +100,9 @@ data class RelayUiState(
 
     val selectedGitSnapshot: GitSnapshot?
         get() = selectedSessionId?.let { gitSnapshots[it] }
+
+    val selectedGitAudit: List<GitAuditItem>
+        get() = selectedSessionId?.let { gitAudit[it] } ?: emptyList()
 
     val activeAuthToken: String
         get() = deviceToken.ifBlank { pairingToken }
