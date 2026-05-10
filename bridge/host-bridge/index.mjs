@@ -8,13 +8,14 @@ import {
 import { createCodexAdapter } from './codex-adapter.mjs';
 
 const relayUrl = process.env.RELAY_URL ?? DEFAULT_RELAY_URL;
+const devToken = process.env.RELAY_DEV_TOKEN ?? process.env.DEV_TOKEN ?? '';
 const hostId = process.env.HOST_ID ?? 'local-dev-host';
 const displayName = process.env.HOST_NAME ?? 'Local Development Host';
 const bridgeVersion = '0.0.1';
 const adapter = createCodexAdapter(hostId, {
   onTimelineEvent: (event) => {
     if (socket.readyState === WebSocket.OPEN) {
-      socket.send(encodeMessage(createMessage(MessageType.TimelineEvent, { event })));
+      socket.send(encodeMessage(createRelayMessage(MessageType.TimelineEvent, { event })));
     }
   }
 });
@@ -54,9 +55,9 @@ socket.addEventListener('message', async (event) => {
 
     if (message.type === MessageType.SessionPrompt) {
       const { session_id: sessionId, text } = message.payload;
-      console.log(`[bridge] received prompt for ${sessionId}: ${text}`);
+      console.log(`[bridge] received prompt for ${sessionId}`);
       const response = await adapter.sendPrompt(sessionId, text);
-      socket.send(encodeMessage(response));
+      socket.send(encodeMessage(withAuth(response)));
       return;
     }
 
@@ -72,7 +73,7 @@ socket.addEventListener('message', async (event) => {
         limit: message.payload.limit
       });
       for (const response of responses) {
-        socket.send(encodeMessage(response));
+        socket.send(encodeMessage(withAuth(response)));
       }
       return;
     }
@@ -108,5 +109,27 @@ socket.addEventListener('error', () => {
 });
 
 function send(type, payload) {
-  socket.send(encodeMessage(createMessage(type, payload)));
+  socket.send(encodeMessage(createRelayMessage(type, payload)));
+}
+
+function createRelayMessage(type, payload) {
+  return createMessage(type, payload, authOptions());
+}
+
+function withAuth(message) {
+  if (!devToken) {
+    return message;
+  }
+
+  return {
+    ...message,
+    auth: {
+      ...(message.auth ?? {}),
+      dev_token: devToken
+    }
+  };
+}
+
+function authOptions() {
+  return devToken ? { auth: { dev_token: devToken } } : {};
 }

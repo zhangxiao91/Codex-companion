@@ -22,9 +22,11 @@ class RelayClient(
     }
 
     private var socket: WebSocket? = null
+    private var devToken: String = ""
 
-    fun connect(url: String = DEFAULT_RELAY_URL) {
+    fun connect(url: String = DEFAULT_RELAY_URL, token: String = "") {
         close()
+        devToken = token.trim()
         val request = Request.Builder().url(url).build()
         socket = client.newWebSocket(
             request,
@@ -77,9 +79,14 @@ class RelayClient(
         )
     }
 
-    fun testHealth(url: String = DEFAULT_RELAY_URL) {
+    fun testHealth(url: String = DEFAULT_RELAY_URL, token: String = "") {
         runCatching {
-            val request = Request.Builder().url(healthUrlFor(url)).build()
+            val requestBuilder = Request.Builder().url(healthUrlFor(url))
+            val trimmedToken = token.trim()
+            if (trimmedToken.isNotBlank()) {
+                requestBuilder.header("X-Relay-Dev-Token", trimmedToken)
+            }
+            val request = requestBuilder.build()
             client.newCall(request).enqueue(
                 object : okhttp3.Callback {
                     override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
@@ -133,6 +140,9 @@ class RelayClient(
             .put("type", type)
             .put("sent_at", java.time.Instant.now().toString())
             .put("payload", payload)
+        if (devToken.isNotBlank()) {
+            message.put("auth", JSONObject().put("dev_token", devToken))
+        }
         socket?.send(message.toString())
     }
 
@@ -147,6 +157,9 @@ class RelayClient(
 
     private fun summarizeHealth(raw: String): String {
         val json = JSONObject(raw)
+        if (json.optBoolean("auth_required", false) && json.isNull("counts")) {
+            return "health reachable: dev token required for diagnostics"
+        }
         val counts = json.optJSONObject("counts")
         val listen = json.optJSONObject("listen")
         val hosts = counts?.optInt("online_hosts") ?: counts?.optInt("hosts") ?: 0

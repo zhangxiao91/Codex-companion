@@ -91,8 +91,22 @@ App 会本地保存最近 session、timeline events、selected session 和每个
 
 ```powershell
 $env:RELAY_HOST='0.0.0.0'
+$env:RELAY_DEV_TOKEN='choose-a-random-dev-token'
 npm run relay
 ```
+
+Host Bridge 使用同一个临时 dev token 连接 Relay：
+
+```powershell
+$env:RELAY_URL='ws://127.0.0.1:8787'
+$env:RELAY_DEV_TOKEN='choose-a-random-dev-token'
+npm run bridge
+```
+
+App 内 Relay 面板需要填写：
+
+- Relay URL: `ws://<电脑局域网 IP>:8787`
+- Dev token: 与 Relay/Bridge 的 `RELAY_DEV_TOKEN` 相同
 
 App 内 Relay 面板的 Test 按钮会请求 `<Relay HTTP URL>/health`。例如 `ws://192.168.1.20:8787` 会检查 `http://192.168.1.20:8787/health`，用于确认手机是否能访问电脑上的 Relay。
 
@@ -100,8 +114,27 @@ App 内 Relay 面板的 Test 按钮会请求 `<Relay HTTP URL>/health`。例如 
 
 ```powershell
 npm run verify:delivery-strategy
+npm run verify:relay-dev-token
 npm run verify:relay-health
 npm run verify:relay-timeline-cache
 npm run verify:app-server-prompt
 npm run check:android-toolchain
 ```
+
+## Development Security
+
+当前安全边界仍是开发原型，但已经加入临时 dev token：
+
+- Relay 配置 `RELAY_DEV_TOKEN` 后，所有 WebSocket 协议消息必须携带 `auth.dev_token`。
+- Relay 监听 `0.0.0.0` 时必须设置 `RELAY_DEV_TOKEN`，否则拒绝启动。
+- `/health` 在启用 token 后只对带 `X-Relay-Dev-Token` 的请求返回详细诊断；未认证请求只显示可达和认证要求。
+- Relay/Bridge 日志不再打印 prompt 正文，减少本地日志泄露。
+
+后续还需要补强：
+
+- 正式 pairing flow：一次性配对码 + 设备密钥，替代手填共享 token。
+- WSS/TLS：离开本机或受信任局域网时必须加密传输。
+- Host-side policy：高风险 shell/Git/文件操作必须继续由 Host Bridge 做能力限制和审批。
+- 审计日志：记录谁在何时向哪个 session 发送了什么类型的控制动作。
+- 速率限制和连接限制：避免局域网内错误客户端刷爆 Relay。
+- Secret redaction：timeline、health、日志和通知都要做敏感字段过滤。

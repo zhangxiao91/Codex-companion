@@ -8,6 +8,7 @@ import {
 } from '../packages/protocol/index.mjs';
 
 const processes = [];
+const devToken = 'relay-cache-test-token';
 
 try {
   const relayPort = '8797';
@@ -15,7 +16,8 @@ try {
   const relay = spawnProcess('relay', 'node', ['relay/service/server.mjs'], {
     ...process.env,
     RELAY_PORT: relayPort,
-    RELAY_TIMELINE_CACHE_LIMIT: '10'
+    RELAY_TIMELINE_CACHE_LIMIT: '10',
+    RELAY_DEV_TOKEN: devToken
   });
   processes.push(relay);
   await waitForOutput(relay, '[relay] listening', 5000);
@@ -177,5 +179,9 @@ function waitForTimelineEvent(socket, timeoutMs) {
 }
 
 function send(socket, type, payload) {
-  socket.send(encodeMessage(createMessage(type, payload)));
+  socket.send(encodeMessage(createMessage(type, payload, {
+    auth: {
+      dev_token: devToken
+    }
+  })));
 }

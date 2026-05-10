@@ -14,6 +14,12 @@ class RelaySettings(context: Context) {
         preferences.edit().putString(KEY_RELAY_URL, url).apply()
     }
 
+    fun devToken(): String = preferences.getString(KEY_DEV_TOKEN, "") ?: ""
+
+    fun saveDevToken(token: String) {
+        preferences.edit().putString(KEY_DEV_TOKEN, token).apply()
+    }
+
     fun selectedSessionId(): String? = preferences.getString(KEY_SELECTED_SESSION_ID, null)
 
     fun saveSelectedSessionId(sessionId: String?) {
@@ -101,6 +107,7 @@ class RelaySettings(context: Context) {
     private companion object {
         const val PREFERENCES_NAME = "relay_settings"
         const val KEY_RELAY_URL = "relay_url"
+        const val KEY_DEV_TOKEN = "dev_token"
         const val KEY_SELECTED_SESSION_ID = "selected_session_id"
         const val KEY_SESSIONS = "sessions"
         const val KEY_TIMELINE = "timeline"

@@ -7,6 +7,7 @@ import {
 } from '../../packages/protocol/index.mjs';
 
 const relayUrl = process.env.RELAY_URL ?? DEFAULT_RELAY_URL;
+const devToken = process.env.RELAY_DEV_TOKEN ?? process.env.DEV_TOKEN ?? '';
 const hostId = process.env.HOST_ID ?? 'local-dev-host';
 const promptText = process.argv.slice(2).join(' ') || 'Reply with exactly: OK';
 const timeoutMs = Number.parseInt(process.env.EPHEMERAL_CLIENT_TIMEOUT_MS ?? '60000', 10);
@@ -84,5 +85,9 @@ socket.addEventListener('error', () => {
 });
 
 function send(type, payload) {
-  socket.send(encodeMessage(createMessage(type, payload)));
+  socket.send(encodeMessage(createMessage(type, payload, authOptions())));
+}
+
+function authOptions() {
+  return devToken ? { auth: { dev_token: devToken } } : {};
 }

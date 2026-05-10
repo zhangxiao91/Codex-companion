@@ -2,18 +2,28 @@ import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const processes = [];
+const devToken = 'delivery-strategy-test-token';
 
 try {
-  const relay = spawnProcess('relay', 'node', ['relay/service/server.mjs']);
+  const relay = spawnProcess('relay', 'node', ['relay/service/server.mjs'], {
+    ...process.env,
+    RELAY_DEV_TOKEN: devToken
+  });
   processes.push(relay);
   await waitForOutput(relay, '[relay] listening', 5000);
 
-  const bridge = spawnProcess('bridge', 'node', ['bridge/host-bridge/index.mjs']);
+  const bridge = spawnProcess('bridge', 'node', ['bridge/host-bridge/index.mjs'], {
+    ...process.env,
+    RELAY_DEV_TOKEN: devToken
+  });
   processes.push(bridge);
   await waitForOutput(bridge, '[bridge] connected', 5000);
   await waitForOutput(relay, '[relay] session snapshot', 5000);
 
-  const client = spawnProcess('test-client', 'node', ['tools/test-client/index.mjs', '总结当前进度']);
+  const client = spawnProcess('test-client', 'node', ['tools/test-client/index.mjs', '总结当前进度'], {
+    ...process.env,
+    RELAY_DEV_TOKEN: devToken
+  });
   processes.push(client);
 
   const exitCode = await waitForExit(client, 10000);
@@ -33,10 +43,10 @@ try {
   await delay(250);
 }
 
-function spawnProcess(label, command, args) {
+function spawnProcess(label, command, args, env = process.env) {
   const child = spawn(command, args, {
     cwd: process.cwd(),
-    env: process.env,
+    env,
     stdio: ['ignore', 'pipe', 'pipe']
   });
 
@@ -83,4 +93,3 @@ function waitForExit(child, timeoutMs) {
     });
   });
 }
-

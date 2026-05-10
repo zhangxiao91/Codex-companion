@@ -32,6 +32,7 @@
 - Android 已接入 Relay WebSocket，支持 session snapshot、timeline event 和 prompt send 的第一版真实链路。
 - Android 已支持 Relay URL 编辑保存、重连和基础连接诊断，模拟器/真机可以切换不同 Relay 地址。
 - Android 已用 SharedPreferences 持久化最近 sessions、timeline events、selected session 和 cursor recovery 状态。
+- Relay 已加入临时 `RELAY_DEV_TOKEN`：局域网监听必须配置 token，Android/Bridge/Node clients 会随消息携带 token，`/health` 详细诊断也需要 token。
 - 详细记录见 `docs/progress.md`。
 
 ## 2. Milestone 0: Research Spike

@@ -40,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
@@ -60,7 +61,7 @@ class MainActivity : ComponentActivity() {
             CompanionApp(
                 uiState = uiState,
                 onReconnect = viewModel::connect,
-                onRelayUrlSave = viewModel::saveRelayUrl,
+                onRelaySettingsSave = viewModel::saveRelaySettings,
                 onHealthCheck = viewModel::testConnection,
                 onSessionSelected = viewModel::selectSession,
                 onPromptSend = viewModel::sendPrompt
@@ -73,7 +74,7 @@ class MainActivity : ComponentActivity() {
 private fun CompanionApp(
     uiState: RelayUiState,
     onReconnect: () -> Unit,
-    onRelayUrlSave: (String) -> Unit,
+    onRelaySettingsSave: (String, String) -> Unit,
     onHealthCheck: () -> Unit,
     onSessionSelected: (String) -> Unit,
     onPromptSend: (String) -> Unit
@@ -92,7 +93,7 @@ private fun CompanionApp(
             SessionDashboard(
                 uiState = uiState,
                 onReconnect = onReconnect,
-                onRelayUrlSave = onRelayUrlSave,
+                onRelaySettingsSave = onRelaySettingsSave,
                 onHealthCheck = onHealthCheck,
                 onSessionSelected = onSessionSelected,
                 onPromptSend = onPromptSend
@@ -105,7 +106,7 @@ private fun CompanionApp(
 private fun SessionDashboard(
     uiState: RelayUiState,
     onReconnect: () -> Unit,
-    onRelayUrlSave: (String) -> Unit,
+    onRelaySettingsSave: (String, String) -> Unit,
     onHealthCheck: () -> Unit,
     onSessionSelected: (String) -> Unit,
     onPromptSend: (String) -> Unit
@@ -122,7 +123,7 @@ private fun SessionDashboard(
         HostSummary(
             uiState = uiState,
             onReconnect = onReconnect,
-            onRelayUrlSave = onRelayUrlSave,
+            onRelaySettingsSave = onRelaySettingsSave,
             onHealthCheck = onHealthCheck
         )
         SessionSummary(
@@ -173,10 +174,11 @@ private fun Header(status: String) {
 private fun HostSummary(
     uiState: RelayUiState,
     onReconnect: () -> Unit,
-    onRelayUrlSave: (String) -> Unit,
+    onRelaySettingsSave: (String, String) -> Unit,
     onHealthCheck: () -> Unit
 ) {
     var relayUrlDraft by remember(uiState.relayUrl) { mutableStateOf(uiState.relayUrl) }
+    var devTokenDraft by remember(uiState.devToken) { mutableStateOf(uiState.devToken) }
 
     Panel {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -203,13 +205,21 @@ private fun HostSummary(
                 onValueChange = { relayUrlDraft = it },
                 singleLine = true
             )
+            TextField(
+                modifier = Modifier.fillMaxWidth(),
+                value = devTokenDraft,
+                onValueChange = { devTokenDraft = it },
+                singleLine = true,
+                label = { Text("Dev token") },
+                visualTransformation = PasswordVisualTransformation()
+            )
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Button(
-                    onClick = { onRelayUrlSave(relayUrlDraft) },
+                    onClick = { onRelaySettingsSave(relayUrlDraft, devTokenDraft) },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF176B52))
                 ) {
                     Text("Save")

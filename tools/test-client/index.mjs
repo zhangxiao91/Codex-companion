@@ -7,6 +7,7 @@ import {
 } from '../../packages/protocol/index.mjs';
 
 const relayUrl = process.env.RELAY_URL ?? DEFAULT_RELAY_URL;
+const devToken = process.env.RELAY_DEV_TOKEN ?? process.env.DEV_TOKEN ?? '';
 const promptText = process.argv.slice(2).join(' ') || '总结当前进度';
 const timeoutMs = Number.parseInt(process.env.TEST_CLIENT_TIMEOUT_MS ?? '10000', 10);
 const expectedEventType = process.env.TEST_CLIENT_EXPECT_EVENT_TYPE;
@@ -73,5 +74,9 @@ socket.addEventListener('error', () => {
 });
 
 function send(type, payload) {
-  socket.send(encodeMessage(createMessage(type, payload)));
+  socket.send(encodeMessage(createMessage(type, payload, authOptions())));
+}
+
+function authOptions() {
+  return devToken ? { auth: { dev_token: devToken } } : {};
 }

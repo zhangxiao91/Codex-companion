@@ -10,7 +10,8 @@ try {
     env: {
       ...process.env,
       RELAY_PORT: relayPort,
-      RELAY_HOST: '127.0.0.1'
+      RELAY_HOST: '127.0.0.1',
+      RELAY_DEV_TOKEN: ''
     },
     stdio: ['ignore', 'pipe', 'pipe']
   });

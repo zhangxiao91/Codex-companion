@@ -27,12 +27,18 @@ export const SessionStatus = Object.freeze({
 });
 
 export function createMessage(type, payload, options = {}) {
-  return {
+  const message = {
     id: options.id ?? randomUUID(),
     type,
     sent_at: new Date().toISOString(),
     payload
   };
+
+  if (options.auth) {
+    message.auth = options.auth;
+  }
+
+  return message;
 }
 
 export function createMockSession(hostId) {

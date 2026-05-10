@@ -653,6 +653,16 @@ cd android
 .\gradlew.bat :app:assembleDebug
 ```
 
+本机当前 shell 如果未配置 Java/Android SDK，需要临时带上：
+
+```powershell
+$env:JAVA_HOME='C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot'
+$env:ANDROID_HOME='C:\Users\13372\AppData\Local\Android\Sdk'
+$env:ANDROID_SDK_ROOT=$env:ANDROID_HOME
+$env:Path="$env:JAVA_HOME\bin;$env:ANDROID_HOME\platform-tools;$env:Path"
+.\gradlew.bat :app:assembleDebug
+```
+
 下一步建议：
 
 1. 接入 Relay WebSocket，把静态首页替换为真实 session/timeline 数据。
@@ -889,3 +899,81 @@ BUILD SUCCESSFUL
 1. 增加临时 dev token，避免局域网任意设备可发 prompt。
 2. 实现 approval request/decision 映射。
 3. 做真机端到端操作记录和故障排查文档。
+
+## 2026-05-10: Relay temporary dev token guard
+
+状态：完成。
+
+本次目标：
+
+- 给 Relay 增加临时 `RELAY_DEV_TOKEN`，避免局域网任意设备连接后发送 `session.prompt`。
+- 让 Android、Host Bridge 和 Node 测试客户端都能携带同一个 dev token。
+- 顺手减少 prompt 正文在本机日志中的暴露。
+
+完成内容：
+
+- 协议层 `createMessage()` 支持顶层 `auth` 对象。
+- Relay 在设置 `RELAY_DEV_TOKEN` 后校验所有 WebSocket 入站消息的 `auth.dev_token`。
+- Relay 监听 `0.0.0.0` 时如果没有 `RELAY_DEV_TOKEN` 会拒绝启动。
+- Relay `/health` 支持 `X-Relay-Dev-Token`：
+  - 未认证时只返回 `auth_required` 和基础可达信息。
+  - 认证后返回完整 host/session/client/cache 诊断。
+- Host Bridge 支持读取 `RELAY_DEV_TOKEN` 并给注册、心跳、session snapshot、timeline event 带 token。
+- test/timeline/ephemeral/steer 客户端支持读取 `RELAY_DEV_TOKEN`。
+- Android App 新增 Dev token 设置项，保存到 SharedPreferences。
+- Android WebSocket 消息携带 `auth.dev_token`，Test Connection 会设置 `X-Relay-Dev-Token`。
+- Relay 和 Bridge 日志不再打印 prompt 正文。
+- 新增 `npm run verify:relay-dev-token`。
+
+运行命令：
+
+```powershell
+$env:RELAY_HOST='0.0.0.0'
+$env:RELAY_DEV_TOKEN='choose-a-random-dev-token'
+npm run relay
+
+$env:RELAY_URL='ws://127.0.0.1:8787'
+$env:RELAY_DEV_TOKEN='choose-a-random-dev-token'
+npm run bridge
+```
+
+Android 真机设置：
+
+- Relay URL: `ws://<电脑局域网 IP>:8787`
+- Dev token: 与 Relay/Bridge 的 `RELAY_DEV_TOKEN` 相同
+
+验证命令：
+
+```powershell
+npm run verify:relay-dev-token
+npm run verify:relay-health
+npm run verify:delivery-strategy
+npm run verify:relay-timeline-cache
+cd android
+.\gradlew.bat :app:assembleDebug
+```
+
+验证结果：
+
+```text
+[verify] Relay dev-token guard verified.
+[verify] Relay health endpoint verified.
+[verify] Delivery Strategy main path verified.
+[verify] Relay timeline cache cursor replay verified.
+BUILD SUCCESSFUL
+```
+
+当前限制：
+
+- 这是临时共享 token，不是正式认证体系；token 一旦泄露，需要手动更换。
+- Android 端目前用 SharedPreferences 保存 token，适合开发原型；后续应迁移到 Android Keystore。
+- 仍未启用 TLS/WSS，受信任局域网之外不能使用明文 WebSocket。
+- Relay 还没有 per-device identity、审计日志、速率限制或 host 操作策略。
+
+后续安全建议：
+
+1. 做 pairing flow：一次性配对码 + 设备密钥，替代手填共享 token。
+2. Android 使用 Keystore 保存设备密钥或 token。
+3. Relay 增加连接数、消息频率和 prompt 长度限制。
+4. Host Bridge 增加 command policy：危险操作仍需审批，且按能力白名单执行。
+5. 对 timeline、health、日志、通知做统一 secret redaction。

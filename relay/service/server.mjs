@@ -12,6 +12,12 @@ import { handleWebSocketUpgrade } from './ws-server.mjs';
 const port = Number.parseInt(process.env.RELAY_PORT ?? '8787', 10);
 const host = process.env.RELAY_HOST ?? '127.0.0.1';
 const timelineCacheLimit = Number.parseInt(process.env.RELAY_TIMELINE_CACHE_LIMIT ?? '200', 10);
+const devToken = process.env.RELAY_DEV_TOKEN ?? '';
+
+if (host === '0.0.0.0' && !devToken) {
+  console.error('[relay] refusing to listen on 0.0.0.0 without RELAY_DEV_TOKEN');
+  process.exit(1);
+}
 
 const state = {
   hosts: new Map(),
@@ -26,7 +32,7 @@ const state = {
 const server = createServer((request, response) => {
   if (request.url === '/health') {
     response.writeHead(200, { 'content-type': 'application/json' });
-    response.end(JSON.stringify(createHealthPayload()));
+    response.end(JSON.stringify(createHealthPayload(request)));
     return;
   }
 
@@ -55,6 +61,10 @@ server.listen(port, host, () => {
 function handleMessage(connection, raw) {
   try {
     const message = decodeMessage(raw);
+    if (!isAuthorized(message)) {
+      sendError(connection, 'Unauthorized: missing or invalid RELAY_DEV_TOKEN.');
+      return;
+    }
 
     switch (message.type) {
       case MessageType.HostRegister:
@@ -89,13 +99,27 @@ function handleMessage(connection, raw) {
   }
 }
 
-function createHealthPayload() {
+function createHealthPayload(request) {
+  const authRequired = Boolean(devToken);
+  const authorized = isHealthRequestAuthorized(request);
+
+  if (authRequired && !authorized) {
+    return {
+      ok: true,
+      service: 'codex-mobile-companion-relay',
+      auth_required: true,
+      detail: 'Set X-Relay-Dev-Token to receive detailed diagnostics.',
+      checked_at: new Date().toISOString()
+    };
+  }
+
   const cachedTimelineEvents = [...state.timelineEvents.values()]
     .reduce((total, events) => total + events.length, 0);
 
   return {
     ok: true,
     service: 'codex-mobile-companion-relay',
+    auth_required: authRequired,
     listen: {
       host,
       port,
@@ -118,6 +142,22 @@ function createHealthPayload() {
     },
     checked_at: new Date().toISOString()
   };
+}
+
+function isAuthorized(message) {
+  if (!devToken) {
+    return true;
+  }
+
+  return message.auth?.dev_token === devToken;
+}
+
+function isHealthRequestAuthorized(request) {
+  if (!devToken) {
+    return true;
+  }
+
+  return request.headers['x-relay-dev-token'] === devToken;
 }
 
 function handleHostRegister(connection, message) {
@@ -224,7 +264,7 @@ function handleSessionPrompt(connection, message) {
     return;
   }
 
-  console.log(`[relay] routing prompt to host ${session.host_id}: ${message.payload.text}`);
+  console.log(`[relay] routing prompt to host ${session.host_id}: ${message.payload.session_id}`);
   send(hostConnection, message);
 }
 

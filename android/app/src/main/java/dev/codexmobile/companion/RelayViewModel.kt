@@ -13,6 +13,7 @@ class RelayViewModel(
     private val _uiState = MutableStateFlow(
         RelayUiState(
             relayUrl = settings.relayUrl(),
+            devToken = settings.devToken(),
             sessions = settings.sessions(),
             selectedSessionId = settings.selectedSessionId(),
             timeline = settings.timeline()
@@ -22,7 +23,7 @@ class RelayViewModel(
 
     fun connect() {
         _uiState.update { it.copy(connectionStatus = "Connecting", lastError = null) }
-        relayClient.connect(_uiState.value.relayUrl)
+        relayClient.connect(_uiState.value.relayUrl, _uiState.value.devToken)
     }
 
     fun saveRelayUrl(url: String) {
@@ -48,9 +49,50 @@ class RelayViewModel(
         connect()
     }
 
+    fun saveRelaySettings(url: String, token: String) {
+        val normalizedUrl = url.trim()
+        if (!isValidRelayUrl(normalizedUrl)) {
+            _uiState.update { it.copy(lastError = "Relay URL must start with ws:// or wss://") }
+            return
+        }
+
+        val normalizedToken = token.trim()
+        settings.saveRelayUrl(normalizedUrl)
+        settings.saveDevToken(normalizedToken)
+        settings.clearSessionCache()
+        _uiState.update {
+            it.copy(
+                relayUrl = normalizedUrl,
+                devToken = normalizedToken,
+                connectionStatus = "Disconnected",
+                sessions = emptyList(),
+                selectedSessionId = null,
+                timeline = emptyList(),
+                lastConnectedAt = null,
+                lastHealthCheck = null,
+                lastError = null
+            )
+        }
+        connect()
+    }
+
     fun testConnection() {
         _uiState.update { it.copy(lastError = null, lastHealthCheck = "Checking ${it.relayUrl}/health") }
-        relayClient.testHealth(_uiState.value.relayUrl)
+        relayClient.testHealth(_uiState.value.relayUrl, _uiState.value.devToken)
+    }
+
+    fun saveDevToken(token: String) {
+        val normalizedToken = token.trim()
+        settings.saveDevToken(normalizedToken)
+        _uiState.update {
+            it.copy(
+                devToken = normalizedToken,
+                connectionStatus = "Disconnected",
+                lastError = null,
+                lastHealthCheck = null
+            )
+        }
+        connect()
     }
 
     fun selectSession(sessionId: String) {
