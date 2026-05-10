@@ -19,6 +19,7 @@ class RelayClient(
         fun onDisconnected(reason: String)
         fun onSessionSnapshot(session: CodexSession)
         fun onApprovalRequest(approval: ApprovalItem)
+        fun onGitSnapshot(snapshot: GitSnapshot)
         fun onTimelineEvent(event: TimelineItem)
         fun onHealthCheck(summary: String)
         fun onPairingComplete(deviceId: String, deviceToken: String)
@@ -80,6 +81,15 @@ class RelayClient(
             JSONObject()
                 .put("session_id", sessionId)
                 .put("text", text)
+        )
+    }
+
+    fun requestGit(sessionId: String, action: String) {
+        send(
+            "git.request",
+            JSONObject()
+                .put("session_id", sessionId)
+                .put("action", action)
         )
     }
 
@@ -186,6 +196,10 @@ class RelayClient(
                     parseApproval(message.getJSONObject("payload").getJSONObject("approval"))
                 )
 
+                "git.snapshot" -> listener.onGitSnapshot(
+                    parseGitSnapshot(message.getJSONObject("payload").getJSONObject("snapshot"))
+                )
+
                 "timeline.event" -> listener.onTimelineEvent(
                     parseTimelineEvent(message.getJSONObject("payload").getJSONObject("event"))
                 )
@@ -286,6 +300,37 @@ class RelayClient(
         status = json.optString("status", "pending"),
         requestedAt = json.optString("requested_at", "")
     )
+
+    private fun parseGitSnapshot(json: JSONObject): GitSnapshot {
+        val filesJson = json.optJSONArray("files")
+        val files = if (filesJson == null) {
+            emptyList()
+        } else {
+            List(filesJson.length()) { index ->
+                val item = filesJson.getJSONObject(index)
+                GitFileChange(
+                    path = item.optString("path", ""),
+                    indexStatus = item.optString("index_status", ""),
+                    worktreeStatus = item.optString("worktree_status", "")
+                )
+            }
+        }
+        val result = json.optJSONObject("result")
+        return GitSnapshot(
+            sessionId = json.getString("session_id"),
+            action = json.optString("action", "status"),
+            repoPath = json.optString("repo_path", ""),
+            branch = json.optString("branch", "unknown"),
+            isGitRepo = json.optBoolean("is_git_repo", false),
+            statusSummary = json.optString("status_summary", ""),
+            files = files,
+            diffStat = json.optString("diff_stat", ""),
+            resultOk = result?.takeIf { it.has("ok") }?.optBoolean("ok"),
+            resultMessage = result?.optString("message", "") ?: "",
+            error = json.optString("error", ""),
+            updatedAt = json.optString("updated_at", "")
+        )
+    }
 
     companion object {
         const val DEFAULT_RELAY_URL = "ws://10.0.2.2:8787"

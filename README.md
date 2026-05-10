@@ -153,7 +153,30 @@ npm run check:android-toolchain
 还没完成但属于 MVP 应补能力：
 
 - Approval request/decision：协议壳、Relay 路由、Android 卡片和真实 Codex App Server request/response 映射已完成；真实危险操作端到端触发仍建议单独手测。
-- Git status/diff/commit/push：还没有移动端 Git 收尾入口。
+- Git status/diff/commit/push：已完成移动端 Status/Diff summary 最小入口；commit/push 仍默认禁用，等待 diff review、二次确认和 audit log。
 - Android foreground/background 通知：当前需要打开 App 看 timeline，还没有系统通知。
 - Relay/Bridge 重连策略：断线后基础重连能手动触发，自动退避重连还不完整。
 - 真机端到端手册：需要补一份从电脑 IP、防火墙、Relay、Bridge、App 安装到故障排查的测试清单。
+
+## Git MVP Status
+
+The current prototype includes a minimal Git status path:
+
+- Android can request Git Status or Diff summary for the selected session.
+- Relay routes `git.request` to the owning Host Bridge.
+- Host Bridge runs local read-only Git commands in the session repository and returns `git.snapshot`.
+- Commit and push are guarded by `GIT_WRITE_ACTIONS_ENABLED=true` and are not exposed in the Android UI yet.
+
+Verification:
+
+```powershell
+npm run verify:git-flow
+```
+
+Remaining before Git is truly user-facing:
+
+- file-level diff review on Android
+- explicit commit confirmation flow
+- tracked/untracked file handling
+- audit log for Git actions
+- push confirmation and host policy checks

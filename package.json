@@ -20,6 +20,7 @@
     "verify:app-server-approval-mapper": "node tools/verify-app-server-approval-mapper.mjs",
     "verify:relay-dev-token": "node tools/verify-relay-dev-token.mjs",
     "verify:approval-flow": "node tools/verify-approval-flow.mjs",
+    "verify:git-flow": "node tools/verify-git-flow.mjs",
     "verify:relay-health": "node tools/verify-relay-health.mjs",
     "verify:relay-timeline-cache": "node tools/verify-relay-timeline-cache.mjs",
     "verify:live-notification-mapper": "node tools/verify-live-notification-mapper.mjs",

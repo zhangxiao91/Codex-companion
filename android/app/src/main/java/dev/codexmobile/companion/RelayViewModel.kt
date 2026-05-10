@@ -45,6 +45,7 @@ class RelayViewModel(
                 selectedSessionId = null,
                 timeline = emptyList(),
                 approvals = emptyList(),
+                gitSnapshots = emptyMap(),
                 lastConnectedAt = null,
                 lastError = null
             )
@@ -75,6 +76,7 @@ class RelayViewModel(
                 selectedSessionId = null,
                 timeline = emptyList(),
                 approvals = emptyList(),
+                gitSnapshots = emptyMap(),
                 lastConnectedAt = null,
                 lastHealthCheck = null,
                 lastError = null
@@ -111,6 +113,14 @@ class RelayViewModel(
             return
         }
         relayClient.sendPrompt(sessionId, text.trim())
+    }
+
+    fun requestGitStatus() {
+        requestGit("status")
+    }
+
+    fun requestGitDiff() {
+        requestGit("diff")
     }
 
     fun decideApproval(approvalId: String, decision: String) {
@@ -153,6 +163,12 @@ class RelayViewModel(
             val approvals = (listOf(approval) + state.approvals.filter { it.approvalId != approval.approvalId })
                 .take(MAX_APPROVAL_ITEMS)
             state.copy(approvals = approvals)
+        }
+    }
+
+    override fun onGitSnapshot(snapshot: GitSnapshot) {
+        _uiState.update { state ->
+            state.copy(gitSnapshots = state.gitSnapshots + (snapshot.sessionId to snapshot))
         }
     }
 
@@ -204,4 +220,9 @@ class RelayViewModel(
         .mapNotNull { it.cursor?.toLongOrNull() }
         .maxOrNull()
         ?.toString()
+
+    private fun requestGit(action: String) {
+        val sessionId = _uiState.value.selectedSessionId ?: return
+        relayClient.requestGit(sessionId, action)
+    }
 }

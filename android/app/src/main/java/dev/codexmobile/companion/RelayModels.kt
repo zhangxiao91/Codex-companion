@@ -32,6 +32,27 @@ data class ApprovalItem(
     val requestedAt: String
 )
 
+data class GitFileChange(
+    val path: String,
+    val indexStatus: String,
+    val worktreeStatus: String
+)
+
+data class GitSnapshot(
+    val sessionId: String,
+    val action: String,
+    val repoPath: String,
+    val branch: String,
+    val isGitRepo: Boolean,
+    val statusSummary: String,
+    val files: List<GitFileChange>,
+    val diffStat: String,
+    val resultOk: Boolean?,
+    val resultMessage: String,
+    val error: String,
+    val updatedAt: String
+)
+
 data class RelayUiState(
     val relayUrl: String = RelayClient.DEFAULT_RELAY_URL,
     val pairingToken: String = "",
@@ -42,6 +63,7 @@ data class RelayUiState(
     val selectedSessionId: String? = null,
     val timeline: List<TimelineItem> = emptyList(),
     val approvals: List<ApprovalItem> = emptyList(),
+    val gitSnapshots: Map<String, GitSnapshot> = emptyMap(),
     val lastConnectedAt: String? = null,
     val lastHealthCheck: String? = null,
     val lastError: String? = null
@@ -51,6 +73,9 @@ data class RelayUiState(
 
     val pendingApprovals: List<ApprovalItem>
         get() = approvals.filter { it.status == "pending" }
+
+    val selectedGitSnapshot: GitSnapshot?
+        get() = selectedSessionId?.let { gitSnapshots[it] }
 
     val activeAuthToken: String
         get() = deviceToken.ifBlank { pairingToken }

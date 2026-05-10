@@ -96,6 +96,12 @@ function handleMessage(connection, raw) {
       case MessageType.ApprovalDecision:
         handleApprovalDecision(connection, message);
         break;
+      case MessageType.GitRequest:
+        handleGitRequest(connection, message);
+        break;
+      case MessageType.GitSnapshot:
+        handleGitSnapshot(connection, message);
+        break;
       case MessageType.SessionCreateEphemeral:
         handleSessionCreateEphemeral(connection, message);
         break;
@@ -218,12 +224,14 @@ function isHostMessage(type) {
   return type === MessageType.HostRegister
     || type === MessageType.HostHeartbeat
     || type === MessageType.ApprovalRequest
+    || type === MessageType.GitSnapshot
     || type === MessageType.SessionSnapshot
     || type === MessageType.TimelineEvent;
 }
 
 function isClientMessage(type) {
   return type === MessageType.ApprovalDecision
+    || type === MessageType.GitRequest
     || type === MessageType.SessionCreateEphemeral
     || type === MessageType.SessionSubscribe
     || type === MessageType.SessionPrompt
@@ -415,6 +423,41 @@ function handleApprovalDecision(connection, message) {
   broadcastToClients(createMessage(MessageType.ApprovalRequest, { approval: resolvedApproval }));
 }
 
+function handleGitRequest(connection, message) {
+  requirePayloadField(message, 'session_id');
+  requirePayloadField(message, 'action');
+
+  connection.role = SenderRole.Client;
+  state.clients.add(connection);
+
+  const session = state.sessions.get(message.payload.session_id);
+  if (!session) {
+    sendError(connection, `Unknown session: ${message.payload.session_id}`);
+    return;
+  }
+
+  const hostConnection = state.hostConnections.get(session.host_id);
+  if (!hostConnection) {
+    sendError(connection, `Host is offline: ${session.host_id}`);
+    return;
+  }
+
+  const subscriptions = state.subscriptions.get(connection) ?? new Set();
+  subscriptions.add(message.payload.session_id);
+  state.subscriptions.set(connection, subscriptions);
+
+  console.log(`[relay] routing git ${message.payload.action} to host ${session.host_id}: ${message.payload.session_id}`);
+  send(hostConnection, message);
+}
+
+function handleGitSnapshot(connection, message) {
+  requirePayloadField(message, 'snapshot');
+
+  const snapshot = message.payload.snapshot;
+  console.log(`[relay] git snapshot: ${snapshot.session_id} ${snapshot.action}`);
+  broadcastToClients(message);
+}
+
 function handleSessionSnapshot(connection, message) {
   requirePayloadField(message, 'session');
 
@@ -552,7 +595,8 @@ function broadcastToClients(message) {
   for (const client of state.clients) {
     const eventSessionId = message.payload?.event?.session_id;
     const snapshotSessionId = message.payload?.session?.session_id;
-    const sessionId = eventSessionId ?? snapshotSessionId;
+    const gitSessionId = message.payload?.snapshot?.session_id;
+    const sessionId = eventSessionId ?? snapshotSessionId ?? gitSessionId;
     const subscriptions = state.subscriptions.get(client);
 
     if (!sessionId || !subscriptions || subscriptions.has('*') || subscriptions.has(sessionId)) {

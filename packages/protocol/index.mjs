@@ -8,6 +8,8 @@ export const MessageType = Object.freeze({
   HostHeartbeat: 'host.heartbeat',
   ApprovalRequest: 'approval.request',
   ApprovalDecision: 'approval.decision',
+  GitRequest: 'git.request',
+  GitSnapshot: 'git.snapshot',
   SessionCreateEphemeral: 'session.create_ephemeral',
   SessionSnapshot: 'session.snapshot',
   SessionSubscribe: 'session.subscribe',

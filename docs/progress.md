@@ -762,6 +762,61 @@ cd android
 BUILD SUCCESSFUL
 ```
 
+## 2026-05-10: Git status snapshot MVP
+
+Status: completed.
+
+Goal:
+
+- Advance the next MVP milestone by adding a minimal mobile Git workflow.
+- Keep the phone as an information/control window, not a mobile IDE.
+- Validate that Android/test client can request Git status for the selected Codex session and receive a structured snapshot.
+- Keep Git write actions disabled by default.
+
+Changes:
+
+- Protocol added `git.request` and `git.snapshot`.
+- Relay now routes `git.request` from paired clients to the Host Bridge that owns the target session.
+- Relay broadcasts `git.snapshot` only to clients subscribed to that session.
+- Host Bridge now declares `git.status` and `git.diff` capabilities.
+- Host Bridge added `bridge/host-bridge/git-adapter.mjs`.
+- Git adapter supports read-only status/diff summary and guarded commit/push.
+- Android added a compact Git panel for branch, changed file count, diff stat preview, Status, and Diff.
+- Added `tools/verify-git-flow.mjs` and `npm run verify:git-flow`.
+
+Verification commands:
+
+```powershell
+npm run verify:git-flow
+cd android
+$env:JAVA_HOME='C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot'
+$env:ANDROID_HOME='C:\Users\13372\AppData\Local\Android\Sdk'
+$env:ANDROID_SDK_ROOT=$env:ANDROID_HOME
+$env:Path="$env:JAVA_HOME\bin;$env:ANDROID_HOME\platform-tools;$env:Path"
+.\gradlew.bat :app:assembleDebug
+```
+
+Verification result:
+
+```text
+[verify] Git status snapshot flow verified.
+BUILD SUCCESSFUL
+```
+
+Current limitations:
+
+- Android currently exposes only Status and Diff summary. It does not show full file diff yet.
+- Commit and push exist in the Host Bridge adapter but are intentionally hidden from Android UI and disabled unless `GIT_WRITE_ACTIONS_ENABLED=true`.
+- Commit currently uses `git commit -am`, so it only commits tracked files. Untracked files need an explicit stage/add design before this becomes user-facing.
+- Relay still does not persist Git snapshots; they are live messages only.
+- There is no audit log yet for Git requests.
+
+Next recommended step:
+
+1. Add a file-level diff request and compact Android diff review view.
+2. Add Git action audit events in Relay/Bridge.
+3. After diff review is usable, add a guarded commit flow with explicit confirmation and tracked/untracked file handling.
+
 当前限制：
 
 - 只保存 Relay URL，还没有保存 selected session、timeline cursor 或最近 events。

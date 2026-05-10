@@ -68,6 +68,8 @@ class MainActivity : ComponentActivity() {
                 onPairDevice = viewModel::pairDevice,
                 onHealthCheck = viewModel::testConnection,
                 onSessionSelected = viewModel::selectSession,
+                onGitStatus = viewModel::requestGitStatus,
+                onGitDiff = viewModel::requestGitDiff,
                 onApprovalDecision = viewModel::decideApproval,
                 onPromptSend = viewModel::sendPrompt
             )
@@ -83,6 +85,8 @@ private fun CompanionApp(
     onPairDevice: () -> Unit,
     onHealthCheck: () -> Unit,
     onSessionSelected: (String) -> Unit,
+    onGitStatus: () -> Unit,
+    onGitDiff: () -> Unit,
     onApprovalDecision: (String, String) -> Unit,
     onPromptSend: (String) -> Unit
 ) {
@@ -104,6 +108,8 @@ private fun CompanionApp(
                 onPairDevice = onPairDevice,
                 onHealthCheck = onHealthCheck,
                 onSessionSelected = onSessionSelected,
+                onGitStatus = onGitStatus,
+                onGitDiff = onGitDiff,
                 onApprovalDecision = onApprovalDecision,
                 onPromptSend = onPromptSend
             )
@@ -119,6 +125,8 @@ private fun SessionDashboard(
     onPairDevice: () -> Unit,
     onHealthCheck: () -> Unit,
     onSessionSelected: (String) -> Unit,
+    onGitStatus: () -> Unit,
+    onGitDiff: () -> Unit,
     onApprovalDecision: (String, String) -> Unit,
     onPromptSend: (String) -> Unit
 ) {
@@ -144,6 +152,13 @@ private fun SessionDashboard(
             sessions = uiState.sessions,
             selectedSession = uiState.selectedSession,
             onSessionSelected = onSessionSelected
+        )
+        GitPanel(
+            selectedSession = uiState.selectedSession,
+            snapshot = uiState.selectedGitSnapshot,
+            connectionStatus = uiState.connectionStatus,
+            onStatus = onGitStatus,
+            onDiff = onGitDiff
         )
         ApprovalInbox(
             approvals = uiState.pendingApprovals,
@@ -398,6 +413,96 @@ private fun SessionRow(session: CodexSession, selected: Boolean, onClick: () -> 
 }
 
 @Composable
+private fun GitPanel(
+    selectedSession: CodexSession?,
+    snapshot: GitSnapshot?,
+    connectionStatus: String,
+    onStatus: () -> Unit,
+    onDiff: () -> Unit
+) {
+    Panel {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Git", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        text = gitSummary(selectedSession, snapshot),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF5E6978),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                StatusPill(text = snapshot?.branch ?: selectedSession?.branch ?: "unknown")
+            }
+            if (snapshot != null) {
+                Text(
+                    text = "changes=${snapshot.files.size}, status=${snapshot.statusSummary.ifBlank { "unknown" }}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF344054),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (snapshot.diffStat.isNotBlank()) {
+                    Text(
+                        text = snapshot.diffStat,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF5E6978),
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (snapshot.resultMessage.isNotBlank()) {
+                    Text(
+                        text = snapshot.resultMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (snapshot.resultOk == false) Color(0xFFB42318) else Color(0xFF176B52),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (snapshot.error.isNotBlank()) {
+                    Text(
+                        text = snapshot.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFB42318),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                CompactActionButton(
+                    modifier = Modifier.weight(1f),
+                    text = "Status",
+                    onClick = onStatus
+                )
+                CompactActionButton(
+                    modifier = Modifier.weight(1f),
+                    text = "Diff",
+                    onClick = onDiff
+                )
+            }
+            if (selectedSession == null || connectionStatus != "Online") {
+                Text(
+                    text = "Select an online session to refresh Git status.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF8A94A6)
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun ApprovalInbox(
     approvals: List<ApprovalItem>,
     selectedSessionId: String?,
@@ -597,4 +702,17 @@ private fun diagnosticsSummary(uiState: RelayUiState): String {
     val connectedAt = uiState.lastConnectedAt ?: "never"
     val selected = uiState.selectedSession?.projectName ?: "none"
     return "sessions=${uiState.sessions.size}, approvals=${uiState.pendingApprovals.size}, events=${uiState.timeline.size}, selected=$selected, last connected=$connectedAt"
+}
+
+private fun gitSummary(selectedSession: CodexSession?, snapshot: GitSnapshot?): String {
+    if (selectedSession == null) {
+        return "No selected session"
+    }
+    if (snapshot == null) {
+        return selectedSession.repoPath.ifBlank { "No Git snapshot yet" }
+    }
+    if (!snapshot.isGitRepo) {
+        return "Not a git repo"
+    }
+    return snapshot.repoPath.ifBlank { selectedSession.repoPath }
 }

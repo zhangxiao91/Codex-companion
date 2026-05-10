@@ -6,6 +6,7 @@ import {
   encodeMessage
 } from '../../packages/protocol/index.mjs';
 import { createCodexAdapter } from './codex-adapter.mjs';
+import { handleGitRequest } from './git-adapter.mjs';
 
 const relayUrl = process.env.RELAY_URL ?? DEFAULT_RELAY_URL;
 const devToken = process.env.RELAY_DEV_TOKEN ?? process.env.DEV_TOKEN ?? '';
@@ -39,10 +40,10 @@ socket.addEventListener('open', async () => {
     display_name: displayName,
     kind: 'local_pc',
     bridge_version: bridgeVersion,
-    capabilities: ['session.list', 'session.prompt', 'timeline.event']
+    capabilities: ['session.list', 'session.prompt', 'timeline.event', 'git.status', 'git.diff']
   });
 
-  console.log('[bridge] registered host capabilities: session.list, session.prompt, timeline.event');
+  console.log('[bridge] registered host capabilities: session.list, session.prompt, timeline.event, git.status, git.diff');
 
   for (const session of adapter.listSessions()) {
     send(MessageType.SessionSnapshot, { session });
@@ -99,6 +100,18 @@ socket.addEventListener('message', async (event) => {
       console.log(`[bridge] received approval decision for ${message.payload.approval_id}: ${message.payload.decision}`);
       const response = await adapter.resolveApproval(message.payload);
       socket.send(encodeMessage(withAuth(response)));
+      return;
+    }
+
+    if (message.type === MessageType.GitRequest) {
+      const session = adapter.listSessions().find((item) => item.session_id === message.payload.session_id);
+      if (!session) {
+        throw new Error(`Unknown session for git request: ${message.payload.session_id}`);
+      }
+
+      console.log(`[bridge] received git ${message.payload.action} for ${message.payload.session_id}`);
+      const snapshot = await handleGitRequest(session, message.payload);
+      socket.send(encodeMessage(createRelayMessage(MessageType.GitSnapshot, { snapshot })));
       return;
     }
 
