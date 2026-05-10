@@ -658,3 +658,56 @@ cd android
 1. 接入 Relay WebSocket，把静态首页替换为真实 session/timeline 数据。
 2. 加入本地状态模型和 cursor 保存。
 3. 增加 prompt send 的真实调用路径。
+
+## 2026-05-10: Android Relay WebSocket MVP
+
+状态：完成第一版真实链路。
+
+本次目标：
+
+- 将 Android shell 从静态 mock UI 升级为连接本地 Relay 的信息流窗口。
+- 显示真实 `session.snapshot` 和 `timeline.event`。
+- 让 prompt composer 通过 `session.prompt` 发送指令。
+
+完成内容：
+
+- 新增 `RelayClient`，使用 OkHttp WebSocket 连接 Relay。
+- 新增 `RelayViewModel`，维护连接状态、sessions、selected session 和 timeline。
+- 新增 `RelayModels`，定义 Android 端 session/timeline/ui state。
+- App 启动后自动连接 `ws://10.0.2.2:8787`。
+- 连接成功后发送 `session.subscribe`，订阅全部 sessions。
+- 收到 session 后自动请求该 session 的 timeline。
+- session list、timeline list 和 prompt composer 已改为真实状态驱动。
+- Send 按钮发送 `session.prompt`。
+- Android manifest 允许本地明文 WebSocket 调试。
+
+验证命令：
+
+```powershell
+cd android
+.\gradlew.bat :app:assembleDebug
+npm run verify:delivery-strategy
+npm run verify:relay-timeline-cache
+```
+
+验证结果：
+
+```text
+BUILD SUCCESSFUL
+[verify] Delivery Strategy main path verified.
+[verify] Relay timeline cache cursor replay verified.
+```
+
+当前限制：
+
+- Relay URL 仍写死为模拟器地址 `ws://10.0.2.2:8787`。
+- 真机需要后续增加设置页或 build config，改用电脑局域网 IP。
+- Android 端还没有本地 Room cache，cursor 只在内存中计算。
+- 还没有处理 approval card、push notification、Git 页面。
+- 未做 UI 自动化测试或真机截图验证。
+
+下一步建议：
+
+1. 增加 Relay URL 设置和连接诊断。
+2. 持久化 selected session、timeline cursor 和最近 events。
+3. 实现 approval request/decision 映射，并在 Android 首页做“需要处理”入口。

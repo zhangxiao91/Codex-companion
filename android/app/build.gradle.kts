@@ -49,5 +49,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
+    implementation("com.squareup.okhttp3:okhttp:5.3.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

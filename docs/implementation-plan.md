@@ -29,6 +29,7 @@
 - prompt 验证已升级为等待 live `assistant_delta` 或 `turn_completed`，证明移动端可看到真实 Codex 回答事件。
 - Relay 已实现最小内存 timeline cache 和 `after_cursor` 补发，可支撑移动端断线重连后的事件恢复原型。
 - Android 应用骨架已开始构建，Gradle wrapper 已生成，`.\gradlew.bat :app:assembleDebug` 已通过。
+- Android 已接入 Relay WebSocket，支持 session snapshot、timeline event 和 prompt send 的第一版真实链路。
 - 详细记录见 `docs/progress.md`。
 
 ## 2. Milestone 0: Research Spike

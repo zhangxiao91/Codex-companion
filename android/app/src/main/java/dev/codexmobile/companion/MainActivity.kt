@@ -3,7 +3,9 @@ package dev.codexmobile.companion
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.viewModels
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,10 +24,13 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DividerDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,16 +44,34 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 class MainActivity : ComponentActivity() {
+    private val viewModel by viewModels<RelayViewModel>()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            CompanionApp()
+            val uiState by viewModel.uiState.collectAsState()
+
+            LaunchedEffect(Unit) {
+                viewModel.connect()
+            }
+
+            CompanionApp(
+                uiState = uiState,
+                onReconnect = viewModel::connect,
+                onSessionSelected = viewModel::selectSession,
+                onPromptSend = viewModel::sendPrompt
+            )
         }
     }
 }
 
 @Composable
-private fun CompanionApp() {
+private fun CompanionApp(
+    uiState: RelayUiState,
+    onReconnect: () -> Unit,
+    onSessionSelected: (String) -> Unit,
+    onPromptSend: (String) -> Unit
+) {
     MaterialTheme(
         colorScheme = MaterialTheme.colorScheme.copy(
             primary = Color(0xFF176B52),
@@ -60,19 +83,24 @@ private fun CompanionApp() {
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.background
         ) {
-            SessionDashboard()
+            SessionDashboard(
+                uiState = uiState,
+                onReconnect = onReconnect,
+                onSessionSelected = onSessionSelected,
+                onPromptSend = onPromptSend
+            )
         }
     }
 }
 
 @Composable
-private fun SessionDashboard() {
+private fun SessionDashboard(
+    uiState: RelayUiState,
+    onReconnect: () -> Unit,
+    onSessionSelected: (String) -> Unit,
+    onPromptSend: (String) -> Unit
+) {
     var prompt by remember { mutableStateOf("总结当前进度") }
-    val events = listOf(
-        TimelineItem("running", "Prompt sent to Codex", "Started turn on ephemeral session."),
-        TimelineItem("live", "Assistant message delta", "OK"),
-        TimelineItem("cache", "Cursor recovery ready", "Relay can replay missed timeline events.")
-    )
 
     Column(
         modifier = Modifier
@@ -80,19 +108,36 @@ private fun SessionDashboard() {
             .padding(horizontal = 16.dp, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Header()
-        HostSummary()
-        SessionSummary()
-        TimelineList(events = events, modifier = Modifier.weight(1f))
+        Header(status = uiState.connectionStatus)
+        HostSummary(
+            relayUrl = uiState.relayUrl,
+            status = uiState.connectionStatus,
+            lastError = uiState.lastError,
+            onReconnect = onReconnect
+        )
+        SessionSummary(
+            sessions = uiState.sessions,
+            selectedSession = uiState.selectedSession,
+            onSessionSelected = onSessionSelected
+        )
+        TimelineList(
+            events = uiState.timeline.filter { it.sessionId == uiState.selectedSessionId },
+            modifier = Modifier.weight(1f)
+        )
         PromptComposer(
             value = prompt,
-            onValueChange = { prompt = it }
+            enabled = uiState.selectedSessionId != null && uiState.connectionStatus == "Online",
+            onValueChange = { prompt = it },
+            onSend = {
+                onPromptSend(prompt)
+                prompt = ""
+            }
         )
     }
 }
 
 @Composable
-private fun Header() {
+private fun Header(status: String) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -110,12 +155,17 @@ private fun Header() {
                 color = Color(0xFF5E6978)
             )
         }
-        StatusPill(text = "Local relay")
+        StatusPill(text = status)
     }
 }
 
 @Composable
-private fun HostSummary() {
+private fun HostSummary(
+    relayUrl: String,
+    status: String,
+    lastError: String?,
+    onReconnect: () -> Unit
+) {
     Panel {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -125,34 +175,91 @@ private fun HostSummary() {
             Column(modifier = Modifier.weight(1f)) {
                 Text("local-dev-host", fontWeight = FontWeight.SemiBold)
                 Text(
-                    text = "ws://127.0.0.1:8787",
+                    text = relayUrl,
                     style = MaterialTheme.typography.bodySmall,
                     color = Color(0xFF5E6978),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                if (!lastError.isNullOrBlank()) {
+                    Text(
+                        text = lastError,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFB42318),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
-            StatusPill(text = "Online")
+            OutlinedButton(onClick = onReconnect) {
+                Text(if (status == "Online") "Refresh" else "Connect")
+            }
         }
     }
 }
 
 @Composable
-private fun SessionSummary() {
+private fun SessionSummary(
+    sessions: List<CodexSession>,
+    selectedSession: CodexSession?,
+    onSessionSelected: (String) -> Unit
+) {
     Panel {
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Sessions", fontWeight = FontWeight.SemiBold)
+            if (sessions.isEmpty()) {
+                Text(
+                    text = "No sessions yet. Start Relay and Host Bridge, then reconnect.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color(0xFF5E6978)
+                )
+            } else {
+                sessions.take(4).forEach { session ->
+                    SessionRow(
+                        session = session,
+                        selected = session.sessionId == selectedSession?.sessionId,
+                        onClick = { onSessionSelected(session.sessionId) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SessionRow(session: CodexSession, selected: Boolean, onClick: () -> Unit) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick),
+        color = if (selected) Color(0xFFE8F7F0) else Color(0xFFF7F8FA),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Ephemeral prompt verification", fontWeight = FontWeight.SemiBold)
-                StatusPill(text = "Running")
+                Text(
+                    text = session.projectName,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                StatusPill(text = session.status)
             }
             Text(
-                text = "Live assistant events and cursor recovery are available for the mobile shell.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color(0xFF344054)
+                text = session.summary.ifBlank { session.repoPath },
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF5E6978),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }
@@ -164,9 +271,17 @@ private fun TimelineList(events: List<TimelineItem>, modifier: Modifier = Modifi
         Column(modifier = Modifier.fillMaxSize()) {
             Text("Timeline", fontWeight = FontWeight.SemiBold)
             Spacer(modifier = Modifier.height(8.dp))
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                items(events) { item ->
-                    TimelineRow(item)
+            if (events.isEmpty()) {
+                Text(
+                    text = "No timeline events for the selected session yet.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color(0xFF5E6978)
+                )
+            } else {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    items(events, key = { it.eventId }) { item ->
+                        TimelineRow(item)
+                    }
                 }
             }
         }
@@ -190,6 +305,11 @@ private fun TimelineRow(item: TimelineItem) {
                 style = MaterialTheme.typography.bodySmall,
                 color = Color(0xFF5E6978)
             )
+            Text(
+                text = item.type,
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFF8A94A6)
+            )
             HorizontalDivider(
                 modifier = Modifier.padding(top = 10.dp),
                 color = DividerDefaults.color.copy(alpha = 0.6f)
@@ -199,7 +319,12 @@ private fun TimelineRow(item: TimelineItem) {
 }
 
 @Composable
-private fun PromptComposer(value: String, onValueChange: (String) -> Unit) {
+private fun PromptComposer(
+    value: String,
+    enabled: Boolean,
+    onValueChange: (String) -> Unit,
+    onSend: () -> Unit
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -209,10 +334,12 @@ private fun PromptComposer(value: String, onValueChange: (String) -> Unit) {
             modifier = Modifier.weight(1f),
             value = value,
             onValueChange = onValueChange,
+            enabled = enabled,
             singleLine = true
         )
         Button(
-            onClick = {},
+            enabled = enabled && value.isNotBlank(),
+            onClick = onSend,
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF176B52))
         ) {
             Text("Send")
@@ -250,9 +377,3 @@ private fun StatusPill(text: String) {
         )
     }
 }
-
-private data class TimelineItem(
-    val type: String,
-    val title: String,
-    val summary: String
-)
