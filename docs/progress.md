@@ -584,3 +584,76 @@ npm run verify:app-server-prompt
 1. 补齐 Android 工具链并创建 Kotlin + Jetpack Compose skeleton。
 2. 实现 approval request/decision 映射，支撑移动端“需要处理”入口。
 3. 将 Relay cache 从内存抽象成接口，后续替换为 Redis/PostgreSQL。
+
+## 2026-05-10: Android toolchain preparation and shell skeleton
+
+状态：部分完成；构建验证受本机工具链阻塞。
+
+本次目标：
+
+- 在不依赖本机 Android 工具链的前提下，先创建 Android MVP Shell 可编辑骨架。
+- 增加工具链自检脚本，明确剩余人工安装项。
+- 记录 Android 构建版本组合和安装路径。
+
+完成内容：
+
+- 新增 `android/` Gradle/Kotlin DSL 项目骨架。
+- 新增 `android/app` Android application 模块。
+- 新增 Kotlin + Jetpack Compose 静态首页：
+  - host summary
+  - session summary
+  - timeline list
+  - prompt composer
+- 新增基础 manifest、theme、launcher icon、资源文件。
+- 新增 `.gitignore`，忽略 Gradle/Android 构建产物和 local properties。
+- 新增 `tools/check-android-toolchain.mjs`。
+- 新增 `npm run check:android-toolchain`。
+- 新增 `docs/android-toolchain.md`。
+
+选用版本：
+
+- Android Gradle Plugin: `9.2.0`
+- Gradle: `9.4.1`
+- JDK: `17`
+- Android SDK Platform: `36`
+- Android SDK Build Tools: `36.0.0`
+- Kotlin Gradle plugin: `2.2.21`
+- Compose BOM: `2026.04.01`
+- Activity Compose: `1.12.4`
+
+验证命令：
+
+```powershell
+npm run check:android-toolchain
+```
+
+验证结果：
+
+```text
+[missing] Java: spawn java ENOENT
+[warn] Gradle: spawn gradle ENOENT
+[warn] ADB: spawn adb ENOENT
+[missing] Android SDK: set ANDROID_HOME or ANDROID_SDK_ROOT
+```
+
+当前阻塞：
+
+- 本机缺少 JDK/Java。
+- 本机缺少 Gradle。
+- 本机缺少 Android SDK / adb。
+- `winget` 存在，但 `winget search` 在当前 shell 中超时，不适合作为本轮自动安装路径。
+- 因为没有 Java/Gradle，本轮未生成 Gradle wrapper，也未执行 `:app:assembleDebug`。
+
+需要人工安装：
+
+1. Android Studio。
+2. JDK 17。
+3. Android SDK Platform 36。
+4. Android SDK Build Tools 36.0.0。
+5. Android SDK Platform Tools。
+
+下一步建议：
+
+1. 用户安装 Android 工具链后，运行 `npm run check:android-toolchain`。
+2. 工具链就绪后在 `android/` 目录生成 Gradle wrapper 并执行 `gradle :app:assembleDebug`。
+3. 编译通过后接入 Relay WebSocket，把静态首页替换为真实 session/timeline 数据。

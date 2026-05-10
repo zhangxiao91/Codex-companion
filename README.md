@@ -67,10 +67,11 @@ Codex Mobile Companion 是一个 Android 优先的 Codex 移动协作入口。�
 - [codex-mobile-android-analysis.md](codex-mobile-android-analysis.md)：竞品调研、产品定位和总体分析。
 - [docs/architecture.md](docs/architecture.md)：系统架构、组件职责、协议边界和安全模型。
 - [docs/implementation-plan.md](docs/implementation-plan.md)：分阶段施工计划、里程碑和验收标准。
+- [docs/android-toolchain.md](docs/android-toolchain.md)：Android 构建工具链安装和验证说明。
 
 ## Current Status
 
-当前仓库已完成 Node 原型主链路验证，但还没有 Android 应用代码。
+当前仓库已完成 Node 原型主链路验证，并已创建 Android MVP Shell 骨架。
 
 已验证：
 
@@ -81,7 +82,7 @@ Codex Mobile Companion 是一个 Android 优先的 Codex 移动协作入口。�
 - prompt 后等待真实 `assistant_delta` 或 `turn_completed`。
 - Relay 内存 timeline cache 和 `after_cursor` 补发。
 
-当前机器尚未检测到 Java、Gradle 或 adb，因此 Android MVP Shell 需要等 Android 工具链可用后启动。缓存/cursor 已完成后，产品上已经可以开始 Android shell：先做 host/session/timeline/prompt 信息流，不做手机 IDE。
+Android 骨架位于 [android/](android/)，使用 Kotlin + Jetpack Compose。当前机器尚未检测到 Java、Gradle 或 adb，因此暂时不能执行 Gradle build。工具链安装说明见 [docs/android-toolchain.md](docs/android-toolchain.md)。
 
 常用验证命令：
 
@@ -89,4 +90,5 @@ Codex Mobile Companion 是一个 Android 优先的 Codex 移动协作入口。�
 npm run verify:delivery-strategy
 npm run verify:relay-timeline-cache
 npm run verify:app-server-prompt
+npm run check:android-toolchain
 ```

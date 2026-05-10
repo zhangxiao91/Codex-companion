@@ -10,6 +10,7 @@
     "test-client": "node tools/test-client/index.mjs",
     "ephemeral-prompt-client": "node tools/ephemeral-prompt-client/index.mjs",
     "steer-client": "node tools/steer-client/index.mjs",
+    "check:android-toolchain": "node tools/check-android-toolchain.mjs",
     "probe:codex-app-server": "node tools/probe-codex-app-server.mjs",
     "verify:app-server-readonly": "node tools/verify-app-server-readonly.mjs",
     "verify:app-server-timeline": "node tools/verify-app-server-timeline.mjs",

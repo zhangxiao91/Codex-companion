@@ -1,0 +1,14 @@
+.gradle/
+build/
+local.properties
+
+android/.gradle/
+android/build/
+android/**/build/
+android/.idea/
+android/captures/
+android/.cxx/
+android/local.properties
+
+*.iml
+*.log
