@@ -763,3 +763,57 @@ BUILD SUCCESSFUL
 1. 持久化 selected session、timeline cursor 和最近 events。
 2. 实现 approval request/decision 映射。
 3. 增加 pairing/auth，替换开放局域网开发模式。
+
+## 2026-05-10: Android local session and timeline cache
+
+状态：完成轻量持久化。
+
+本次目标：
+
+- App 重启后不再从空白状态开始。
+- 保存 selected session、最近 sessions、最近 timeline events 和 cursor。
+- 重连后使用本地 cursor 向 Relay 补齐新事件。
+
+完成内容：
+
+- `RelaySettings` 新增 SharedPreferences 持久化：
+  - Relay URL
+  - selected session id
+  - 最近 20 个 sessions
+  - 最近 100 条 timeline events
+- `RelayViewModel` 初始化时加载本地缓存。
+- 收到 `session.snapshot` 后更新并保存 session cache。
+- 收到 `timeline.event` 后更新并保存 timeline cache。
+- 切换 selected session 时保存 selected session id。
+- 连接成功后对 selected session 使用本地最新 cursor 请求增量 timeline。
+- 切换 Relay URL 时清空旧 session/timeline cache，避免跨 host 混淆。
+- UI 连接诊断增加 selected session 信息。
+
+验证命令：
+
+```powershell
+cd android
+.\gradlew.bat :app:assembleDebug
+npm run verify:delivery-strategy
+npm run verify:relay-timeline-cache
+```
+
+验证结果：
+
+```text
+BUILD SUCCESSFUL
+[verify] Delivery Strategy main path verified.
+[verify] Relay timeline cache cursor replay verified.
+```
+
+当前限制：
+
+- 当前持久化使用 SharedPreferences + JSON，适合 MVP，不适合长期大规模 timeline。
+- timeline event 去重只按 `event_id`，如果上游 event id 不稳定，后续需要更强的去重键。
+- 只对 selected session 自动做 cursor recovery；多 session 背景同步留到后续。
+
+下一步建议：
+
+1. 实现 approval request/decision 映射。
+2. 增加 Android “需要处理”入口。
+3. 后续再把 SharedPreferences cache 替换为 Room。

@@ -10,7 +10,14 @@ class RelayViewModel(
     private val settings: RelaySettings
 ) : ViewModel(), RelayClient.Listener {
     private val relayClient = RelayClient(this)
-    private val _uiState = MutableStateFlow(RelayUiState(relayUrl = settings.relayUrl()))
+    private val _uiState = MutableStateFlow(
+        RelayUiState(
+            relayUrl = settings.relayUrl(),
+            sessions = settings.sessions(),
+            selectedSessionId = settings.selectedSessionId(),
+            timeline = settings.timeline()
+        )
+    )
     val uiState: StateFlow<RelayUiState> = _uiState
 
     fun connect() {
@@ -26,6 +33,7 @@ class RelayViewModel(
         }
 
         settings.saveRelayUrl(normalizedUrl)
+        settings.clearSessionCache()
         _uiState.update {
             it.copy(
                 relayUrl = normalizedUrl,
@@ -47,6 +55,7 @@ class RelayViewModel(
             .maxOrNull()
             ?.toString()
         _uiState.update { it.copy(selectedSessionId = sessionId) }
+        settings.saveSelectedSessionId(sessionId)
         relayClient.requestTimeline(sessionId, afterCursor)
     }
 
@@ -66,6 +75,9 @@ class RelayViewModel(
                 lastError = null
             )
         }
+        _uiState.value.selectedSessionId?.let { sessionId ->
+            relayClient.requestTimeline(sessionId, latestCursorFor(sessionId))
+        }
     }
 
     override fun onDisconnected(reason: String) {
@@ -78,8 +90,11 @@ class RelayViewModel(
             val selectedSessionId = state.selectedSessionId ?: session.sessionId
             state.copy(sessions = sessions, selectedSessionId = selectedSessionId)
         }
+        val state = _uiState.value
+        settings.saveSessions(state.sessions)
+        settings.saveSelectedSessionId(state.selectedSessionId)
         if (_uiState.value.selectedSessionId == session.sessionId) {
-            relayClient.requestTimeline(session.sessionId)
+            relayClient.requestTimeline(session.sessionId, latestCursorFor(session.sessionId))
         }
     }
 
@@ -89,6 +104,7 @@ class RelayViewModel(
                 .take(MAX_TIMELINE_ITEMS)
             state.copy(timeline = timeline)
         }
+        settings.saveTimeline(_uiState.value.timeline)
     }
 
     override fun onError(message: String) {
@@ -106,4 +122,10 @@ class RelayViewModel(
         fun isValidRelayUrl(url: String): Boolean =
             url.startsWith("ws://") || url.startsWith("wss://")
     }
+
+    private fun latestCursorFor(sessionId: String): String? = _uiState.value.timeline
+        .filter { it.sessionId == sessionId }
+        .mapNotNull { it.cursor?.toLongOrNull() }
+        .maxOrNull()
+        ?.toString()
 }

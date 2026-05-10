@@ -85,6 +85,7 @@ Codex Mobile Companion 是一个 Android 优先的 Codex 移动协作入口。�
 Android 骨架位于 [android/](android/)，使用 Kotlin + Jetpack Compose。当前机器已安装命令行 Android SDK，并已通过 `.\gradlew.bat :app:assembleDebug`。工具链说明见 [docs/android-toolchain.md](docs/android-toolchain.md)。
 
 Android 当前已接入本地 Relay WebSocket。模拟器默认连接 `ws://10.0.2.2:8787`，能接收 `session.snapshot` / `timeline.event`，并通过 Send 发送 `session.prompt`。Relay URL 可以在 App 内编辑保存；真机调试请改为电脑局域网 IP，例如 `ws://192.168.1.20:8787`。
+App 会本地保存最近 session、timeline events、selected session 和每个 session 的最新 cursor；重启后会先显示本地缓存，再用 `after_cursor` 向 Relay 补齐新事件。
 
 真机局域网调试时 Relay 需要监听非 localhost 地址：
 

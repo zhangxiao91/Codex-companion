@@ -403,5 +403,6 @@ private fun StatusPill(text: String) {
 
 private fun diagnosticsSummary(uiState: RelayUiState): String {
     val connectedAt = uiState.lastConnectedAt ?: "never"
-    return "sessions=${uiState.sessions.size}, events=${uiState.timeline.size}, last connected=$connectedAt"
+    val selected = uiState.selectedSession?.projectName ?: "none"
+    return "sessions=${uiState.sessions.size}, events=${uiState.timeline.size}, selected=$selected, last connected=$connectedAt"
 }
