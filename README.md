@@ -94,10 +94,13 @@ $env:RELAY_HOST='0.0.0.0'
 npm run relay
 ```
 
+App 内 Relay 面板的 Test 按钮会请求 `<Relay HTTP URL>/health`。例如 `ws://192.168.1.20:8787` 会检查 `http://192.168.1.20:8787/health`，用于确认手机是否能访问电脑上的 Relay。
+
 常用验证命令：
 
 ```powershell
 npm run verify:delivery-strategy
+npm run verify:relay-health
 npm run verify:relay-timeline-cache
 npm run verify:app-server-prompt
 npm run check:android-toolchain

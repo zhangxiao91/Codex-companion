@@ -26,7 +26,7 @@ const state = {
 const server = createServer((request, response) => {
   if (request.url === '/health') {
     response.writeHead(200, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({ ok: true, hosts: state.hosts.size, sessions: state.sessions.size }));
+    response.end(JSON.stringify(createHealthPayload()));
     return;
   }
 
@@ -87,6 +87,37 @@ function handleMessage(connection, raw) {
   } catch (error) {
     sendError(connection, error.message);
   }
+}
+
+function createHealthPayload() {
+  const cachedTimelineEvents = [...state.timelineEvents.values()]
+    .reduce((total, events) => total + events.length, 0);
+
+  return {
+    ok: true,
+    service: 'codex-mobile-companion-relay',
+    listen: {
+      host,
+      port,
+      websocket_url: `ws://${host}:${port}`,
+      health_url: `http://${host}:${port}/health`,
+      lan_access_enabled: host === '0.0.0.0'
+    },
+    counts: {
+      hosts: state.hosts.size,
+      online_hosts: state.hostConnections.size,
+      sessions: state.sessions.size,
+      clients: state.clients.size,
+      subscriptions: state.subscriptions.size,
+      cached_timeline_sessions: state.timelineEvents.size,
+      cached_timeline_events: cachedTimelineEvents
+    },
+    cache: {
+      timeline_cache_limit: timelineCacheLimit,
+      next_timeline_cursor: String(state.nextTimelineCursor)
+    },
+    checked_at: new Date().toISOString()
+  };
 }
 
 function handleHostRegister(connection, message) {

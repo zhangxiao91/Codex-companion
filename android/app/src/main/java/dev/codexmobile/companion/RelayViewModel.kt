@@ -48,6 +48,11 @@ class RelayViewModel(
         connect()
     }
 
+    fun testConnection() {
+        _uiState.update { it.copy(lastError = null, lastHealthCheck = "Checking ${it.relayUrl}/health") }
+        relayClient.testHealth(_uiState.value.relayUrl)
+    }
+
     fun selectSession(sessionId: String) {
         val afterCursor = _uiState.value.timeline
             .filter { it.sessionId == sessionId }
@@ -105,6 +110,10 @@ class RelayViewModel(
             state.copy(timeline = timeline)
         }
         settings.saveTimeline(_uiState.value.timeline)
+    }
+
+    override fun onHealthCheck(summary: String) {
+        _uiState.update { it.copy(lastHealthCheck = summary, lastError = null) }
     }
 
     override fun onError(message: String) {

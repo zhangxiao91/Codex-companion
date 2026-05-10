@@ -17,6 +17,7 @@ class RelayClient(
         fun onDisconnected(reason: String)
         fun onSessionSnapshot(session: CodexSession)
         fun onTimelineEvent(event: TimelineItem)
+        fun onHealthCheck(summary: String)
         fun onError(message: String)
     }
 
@@ -76,6 +77,33 @@ class RelayClient(
         )
     }
 
+    fun testHealth(url: String = DEFAULT_RELAY_URL) {
+        runCatching {
+            val request = Request.Builder().url(healthUrlFor(url)).build()
+            client.newCall(request).enqueue(
+                object : okhttp3.Callback {
+                    override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
+                        listener.onError("Health check failed: ${e.message}")
+                    }
+
+                    override fun onResponse(call: okhttp3.Call, response: Response) {
+                        response.use {
+                            val body = it.body.string()
+                            if (!it.isSuccessful) {
+                                listener.onError("Health check failed: HTTP ${it.code}")
+                                return
+                            }
+
+                            listener.onHealthCheck(summarizeHealth(body))
+                        }
+                    }
+                }
+            )
+        }.onFailure { error ->
+            listener.onError(error.message ?: "Invalid Relay URL")
+        }
+    }
+
     private fun handleMessage(raw: String) {
         runCatching {
             val message = JSONObject(raw)
@@ -106,6 +134,27 @@ class RelayClient(
             .put("sent_at", java.time.Instant.now().toString())
             .put("payload", payload)
         socket?.send(message.toString())
+    }
+
+    private fun healthUrlFor(url: String): String {
+        val base = when {
+            url.startsWith("ws://") -> url.replaceFirst("ws://", "http://")
+            url.startsWith("wss://") -> url.replaceFirst("wss://", "https://")
+            else -> throw IllegalArgumentException("Relay URL must start with ws:// or wss://")
+        }.trimEnd('/')
+        return "$base/health"
+    }
+
+    private fun summarizeHealth(raw: String): String {
+        val json = JSONObject(raw)
+        val counts = json.optJSONObject("counts")
+        val listen = json.optJSONObject("listen")
+        val hosts = counts?.optInt("online_hosts") ?: counts?.optInt("hosts") ?: 0
+        val sessions = counts?.optInt("sessions") ?: 0
+        val clients = counts?.optInt("clients") ?: 0
+        val cachedEvents = counts?.optInt("cached_timeline_events") ?: 0
+        val lan = listen?.optBoolean("lan_access_enabled") ?: false
+        return "health ok: hosts=$hosts, sessions=$sessions, clients=$clients, cached_events=$cachedEvents, lan=$lan"
     }
 
     private fun parseSession(json: JSONObject): CodexSession = CodexSession(

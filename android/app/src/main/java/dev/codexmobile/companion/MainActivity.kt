@@ -61,6 +61,7 @@ class MainActivity : ComponentActivity() {
                 uiState = uiState,
                 onReconnect = viewModel::connect,
                 onRelayUrlSave = viewModel::saveRelayUrl,
+                onHealthCheck = viewModel::testConnection,
                 onSessionSelected = viewModel::selectSession,
                 onPromptSend = viewModel::sendPrompt
             )
@@ -73,6 +74,7 @@ private fun CompanionApp(
     uiState: RelayUiState,
     onReconnect: () -> Unit,
     onRelayUrlSave: (String) -> Unit,
+    onHealthCheck: () -> Unit,
     onSessionSelected: (String) -> Unit,
     onPromptSend: (String) -> Unit
 ) {
@@ -91,6 +93,7 @@ private fun CompanionApp(
                 uiState = uiState,
                 onReconnect = onReconnect,
                 onRelayUrlSave = onRelayUrlSave,
+                onHealthCheck = onHealthCheck,
                 onSessionSelected = onSessionSelected,
                 onPromptSend = onPromptSend
             )
@@ -103,6 +106,7 @@ private fun SessionDashboard(
     uiState: RelayUiState,
     onReconnect: () -> Unit,
     onRelayUrlSave: (String) -> Unit,
+    onHealthCheck: () -> Unit,
     onSessionSelected: (String) -> Unit,
     onPromptSend: (String) -> Unit
 ) {
@@ -118,7 +122,8 @@ private fun SessionDashboard(
         HostSummary(
             uiState = uiState,
             onReconnect = onReconnect,
-            onRelayUrlSave = onRelayUrlSave
+            onRelayUrlSave = onRelayUrlSave,
+            onHealthCheck = onHealthCheck
         )
         SessionSummary(
             sessions = uiState.sessions,
@@ -165,7 +170,12 @@ private fun Header(status: String) {
 }
 
 @Composable
-private fun HostSummary(uiState: RelayUiState, onReconnect: () -> Unit, onRelayUrlSave: (String) -> Unit) {
+private fun HostSummary(
+    uiState: RelayUiState,
+    onReconnect: () -> Unit,
+    onRelayUrlSave: (String) -> Unit,
+    onHealthCheck: () -> Unit
+) {
     var relayUrlDraft by remember(uiState.relayUrl) { mutableStateOf(uiState.relayUrl) }
 
     Panel {
@@ -207,6 +217,18 @@ private fun HostSummary(uiState: RelayUiState, onReconnect: () -> Unit, onRelayU
                 OutlinedButton(onClick = onReconnect) {
                     Text(if (uiState.connectionStatus == "Online") "Refresh" else "Connect")
                 }
+                OutlinedButton(onClick = onHealthCheck) {
+                    Text("Test")
+                }
+            }
+            if (!uiState.lastHealthCheck.isNullOrBlank()) {
+                Text(
+                    text = uiState.lastHealthCheck,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF176B52),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
             if (!uiState.lastError.isNullOrBlank()) {
                 Text(

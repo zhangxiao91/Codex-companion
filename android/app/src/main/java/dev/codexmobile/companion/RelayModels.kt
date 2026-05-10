@@ -27,6 +27,7 @@ data class RelayUiState(
     val selectedSessionId: String? = null,
     val timeline: List<TimelineItem> = emptyList(),
     val lastConnectedAt: String? = null,
+    val lastHealthCheck: String? = null,
     val lastError: String? = null
 ) {
     val selectedSession: CodexSession?

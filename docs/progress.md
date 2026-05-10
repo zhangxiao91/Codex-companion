@@ -817,3 +817,75 @@ BUILD SUCCESSFUL
 1. 实现 approval request/decision 映射。
 2. 增加 Android “需要处理”入口。
 3. 后续再把 SharedPreferences cache 替换为 Room。
+
+## 2026-05-10: Relay health diagnostics for mobile LAN setup
+
+状态：完成。
+
+本次目标：
+
+- 增强 Relay `/health`，让真机局域网调试时能快速判断 Relay 是否可达。
+- 在 Android App 中增加 Test Connection，直接检查当前 Relay URL 对应的 `/health`。
+
+完成内容：
+
+- Relay `/health` 返回更完整诊断：
+  - service name
+  - listen host/port
+  - websocket URL
+  - health URL
+  - LAN access flag
+  - host/session/client/subscription counts
+  - timeline cache counts
+  - next cursor
+- Android `RelayClient` 新增 `testHealth()`。
+- Android 将 `ws://` 转换为 `http://.../health`，将 `wss://` 转换为 `https://.../health`。
+- Android Relay 面板新增 Test 按钮。
+- Android UI 显示 health check 摘要或错误。
+- 新增 `npm run verify:relay-health`。
+
+验证命令：
+
+```powershell
+npm run verify:relay-health
+npm run verify:delivery-strategy
+npm run verify:relay-timeline-cache
+cd android
+.\gradlew.bat :app:assembleDebug
+```
+
+验证结果：
+
+```text
+[verify] Relay health endpoint verified.
+[verify] Delivery Strategy main path verified.
+[verify] Relay timeline cache cursor replay verified.
+BUILD SUCCESSFUL
+```
+
+真机调试路径：
+
+1. 电脑启动 Relay：
+   ```powershell
+   $env:RELAY_HOST='0.0.0.0'
+   npm run relay
+   ```
+2. 电脑启动 Bridge：
+   ```powershell
+   $env:RELAY_URL='ws://127.0.0.1:8787'
+   npm run bridge
+   ```
+3. 手机 App Relay URL 填 `ws://<电脑局域网 IP>:8787`。
+4. 点击 Test，确认 health 显示 `health ok`。
+
+当前限制：
+
+- `/health` 未加认证，只适合受信任局域网开发模式。
+- Test Connection 只验证 HTTP health，不保证 WebSocket prompt 权限。
+- Windows 防火墙仍可能阻止真机访问，需要用户手动放行端口 8787。
+
+下一步建议：
+
+1. 增加临时 dev token，避免局域网任意设备可发 prompt。
+2. 实现 approval request/decision 映射。
+3. 做真机端到端操作记录和故障排查文档。
