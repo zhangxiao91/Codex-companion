@@ -34,7 +34,7 @@
 - Android 已用 SharedPreferences 持久化最近 sessions、timeline events、selected session 和 cursor recovery 状态。
 - Relay 已加入临时配对安全模型：局域网监听必须配置 `RELAY_DEV_TOKEN`，Host Bridge 用 pairing token 注册，Android/Node client 必须通过 `/pair` 换取 device token 后才能订阅 session、请求 timeline 或发送 prompt。
 - Approval request/decision 的协议壳、Relay 路由、Android 待处理卡片和真实 App Server approval request/response 映射已完成；真实危险操作端到端触发仍待手动验证。
-- Git Workflow MVP 已开始：Relay/Bridge 支持 `git.request` / `git.snapshot`，Host Bridge 增加本地 Git adapter，Android 增加选中 session 的 Git status/diff summary 面板、file-level diff preview、commit confirmation UI 和 tracked/untracked commit strategy，Relay 已产生 metadata-only Git action audit timeline events。commit/push 执行仍默认禁用，等 host write policy 补完后再开放。
+- Git Workflow MVP 已开始：Relay/Bridge 支持 `git.request` / `git.snapshot`，Host Bridge 增加本地 Git adapter，Android 增加选中 session 的 Git status/diff summary 面板、file-level diff preview、commit confirmation UI 和 tracked/untracked commit strategy，Relay 已产生 metadata-only Git action audit timeline events，并将 Git audit 以 NDJSON 持久化到 `RELAY_GIT_AUDIT_LOG_PATH` / `.relay/git-audit.ndjson`。commit/push 执行仍默认禁用，等 host write policy 补完后再开放。
 - 详细记录见 `docs/progress.md`。
 
 ## 2. Milestone 0: Research Spike
@@ -191,7 +191,7 @@ UI 要求：
 - 已完成最小 status snapshot 链路：Android/test client -> Relay -> Host Bridge -> local Git adapter -> Relay -> Android/test client。
 - 已验证 `npm run verify:git-flow`。
 - Android 已有紧凑 Git 面板，支持 Status / Diff summary 和点击 changed file 查看单文件 diff preview。
-- Relay 已有 metadata-only Git action audit，记录 requested/completed、device、action、file path 和结果摘要；当前仍是内存态，未持久化查询。
+- Relay 已有 metadata-only Git action audit，记录 requested/completed、device、action、file path 和结果摘要；当前已支持 NDJSON 持久化和 `GET /git/audit` 查询。
 - Android 已有 commit message 输入和二次确认 UI；commit 执行默认受 `GIT_WRITE_ACTIONS_ENABLED=true` 保护。
 - Git snapshot 已区分 tracked/untracked files；Android commit confirmation 支持 `tracked_only` 和 `include_untracked` 两种策略。`include_untracked` 只有在 Host Bridge 显式启用 `GIT_WRITE_ACTIONS_ENABLED=true` 后才会执行 `git add -A`。
 - push 已接入 Android 二次确认 UI 和 Host Bridge policy；执行需同时启用 `GIT_WRITE_ACTIONS_ENABLED=true` 与 `GIT_PUSH_ACTIONS_ENABLED=true`，并要求已知 branch、upstream tracking branch 和 clean worktree。

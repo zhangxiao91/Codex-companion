@@ -170,6 +170,7 @@ The current prototype includes a minimal Git status and file diff path:
 - Relay routes `git.request` to the owning Host Bridge.
 - Host Bridge runs local read-only Git commands in the session repository and returns `git.snapshot`.
 - Relay emits metadata-only `git_audit` timeline events for Git request/completion.
+- Relay persists Git audit events as NDJSON and exposes `GET /git/audit` for authenticated queries.
 - Commit execution is guarded by `GIT_WRITE_ACTIONS_ENABLED=true`; `include_untracked` stages tracked and untracked files with `git add -A` only after that host-side gate is enabled.
 - Push execution is guarded by both `GIT_WRITE_ACTIONS_ENABLED=true` and `GIT_PUSH_ACTIONS_ENABLED=true`; Host Bridge also requires a known branch, upstream tracking branch, and clean worktree.
 
@@ -179,7 +180,13 @@ Verification:
 npm run verify:git-flow
 ```
 
+Git audit storage:
+
+- Default path: `.relay/git-audit.ndjson`
+- Override with `RELAY_GIT_AUDIT_LOG_PATH`
+- Query: `GET /git/audit?session_id=<session>&action=<action>&limit=100`
+- Auth: same headers as `/health`, for example `X-Relay-Device-Token` or `X-Relay-Dev-Token`
+
 Remaining before Git is truly user-facing:
 
-- persistent/queryable audit storage
 - real-device push dry-run/manual test against a disposable remote

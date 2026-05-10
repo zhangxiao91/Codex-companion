@@ -1,5 +1,8 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import { dirname, resolve } from 'node:path';
 import {
   MessageType,
   SenderRole,
@@ -17,6 +20,7 @@ const devToken = process.env.RELAY_DEV_TOKEN ?? '';
 const maxMessageBytes = Number.parseInt(process.env.RELAY_MAX_MESSAGE_BYTES ?? '65536', 10);
 const maxPromptLength = Number.parseInt(process.env.RELAY_MAX_PROMPT_LENGTH ?? '4000', 10);
 const auditLogLimit = Number.parseInt(process.env.RELAY_AUDIT_LOG_LIMIT ?? '500', 10);
+const gitAuditLogPath = resolve(process.env.RELAY_GIT_AUDIT_LOG_PATH ?? '.relay/git-audit.ndjson');
 
 if (host === '0.0.0.0' && !devToken) {
   console.error('[relay] refusing to listen on 0.0.0.0 without RELAY_DEV_TOKEN');
@@ -37,7 +41,8 @@ const state = {
 };
 
 const server = createServer(async (request, response) => {
-  const path = new URL(request.url ?? '/', 'http://relay.local').pathname;
+  const url = new URL(request.url ?? '/', 'http://relay.local');
+  const path = url.pathname;
 
   if (path === '/health') {
     response.writeHead(200, { 'content-type': 'application/json' });
@@ -47,6 +52,11 @@ const server = createServer(async (request, response) => {
 
   if (path === '/pair' && request.method === 'POST') {
     await handlePairRequest(request, response);
+    return;
+  }
+
+  if (path === '/git/audit' && request.method === 'GET') {
+    handleGitAuditQuery(request, response, url);
     return;
   }
 
@@ -67,6 +77,8 @@ server.on('upgrade', (request, socket, head) => {
     });
   });
 });
+
+await loadGitAuditEvents();
 
 server.listen(port, host, () => {
   console.log(`[relay] listening on ws://${host}:${port}`);
@@ -173,6 +185,11 @@ function createHealthPayload(request) {
     cache: {
       timeline_cache_limit: timelineCacheLimit,
       next_timeline_cursor: String(state.nextTimelineCursor)
+    },
+    audit: {
+      git_audit_log_path: gitAuditLogPath,
+      audit_log_limit: auditLogLimit,
+      persistent_git_audit_enabled: true
     },
     checked_at: new Date().toISOString()
   };
@@ -294,6 +311,83 @@ async function handlePairRequest(request, response) {
       detail: error.message
     });
   }
+}
+
+function handleGitAuditQuery(request, response, url) {
+  if (!isHealthRequestAuthorized(request)) {
+    writeJson(response, 401, {
+      ok: false,
+      error: 'unauthorized',
+      detail: 'Missing or invalid Relay auth token.'
+    });
+    return;
+  }
+
+  const sessionId = url.searchParams.get('session_id') ?? '';
+  const hostId = url.searchParams.get('host_id') ?? '';
+  const action = url.searchParams.get('action') ?? '';
+  const phase = url.searchParams.get('phase') ?? '';
+  const limit = clampInteger(url.searchParams.get('limit'), 1, auditLogLimit, 100);
+  const events = state.gitAuditEvents
+    .filter((event) => !sessionId || event.session_id === sessionId)
+    .filter((event) => !hostId || event.host_id === hostId)
+    .filter((event) => !action || event.action === action)
+    .filter((event) => !phase || event.phase === phase)
+    .slice(-limit)
+    .reverse();
+
+  writeJson(response, 200, {
+    ok: true,
+    events,
+    count: events.length,
+    total_in_memory: state.gitAuditEvents.length,
+    audit_log_path: gitAuditLogPath
+  });
+}
+
+function clampInteger(value, min, max, fallback) {
+  const parsed = Number.parseInt(value ?? '', 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.min(Math.max(parsed, min), max);
+}
+
+async function loadGitAuditEvents() {
+  try {
+    const content = await readFile(gitAuditLogPath, 'utf8');
+    const events = content
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter(isGitAuditEvent);
+    state.gitAuditEvents = events.slice(-auditLogLimit);
+    console.log(`[relay] loaded ${state.gitAuditEvents.length} git audit event(s) from ${gitAuditLogPath}`);
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      console.error(`[relay] failed to load git audit log: ${error.message}`);
+    }
+  }
+}
+
+function persistGitAuditEvent(event) {
+  try {
+    mkdirSync(dirname(gitAuditLogPath), { recursive: true });
+    appendFileSync(gitAuditLogPath, `${JSON.stringify(event)}\n`, 'utf8');
+  } catch (error) {
+    console.error(`[relay] failed to persist git audit event: ${error.message}`);
+  }
+}
+
+function isGitAuditEvent(event) {
+  return event
+    && typeof event.event_id === 'string'
+    && typeof event.audit_id === 'string'
+    && typeof event.phase === 'string'
+    && typeof event.session_id === 'string'
+    && typeof event.host_id === 'string'
+    && typeof event.action === 'string';
 }
 
 function writeJson(response, statusCode, payload) {
@@ -670,6 +764,7 @@ function appendGitAuditEvent(event) {
   while (state.gitAuditEvents.length > auditLogLimit) {
     state.gitAuditEvents.shift();
   }
+  persistGitAuditEvent(auditEvent);
 
   const timelineEvent = cacheTimelineEvent(createGitAuditTimelineEvent(auditEvent));
   broadcastToClients(createMessage(MessageType.TimelineEvent, { event: timelineEvent }));

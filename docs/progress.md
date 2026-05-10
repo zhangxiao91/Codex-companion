@@ -1632,3 +1632,56 @@ Next recommended step:
 
 1. Add persistent/queryable Git audit storage.
 2. Add a disposable-remote manual test checklist before enabling push for real repositories.
+
+## 2026-05-10: Persistent Git audit storage
+
+Status: completed.
+
+Goal:
+
+- Preserve Git action audit events across Relay restarts.
+- Provide a small authenticated query endpoint before Git write operations are used on real repositories.
+
+Changes:
+
+- Relay now writes Git audit events as NDJSON.
+- Default audit path is `.relay/git-audit.ndjson`.
+- `RELAY_GIT_AUDIT_LOG_PATH` can override the audit file location.
+- Relay loads the latest `RELAY_AUDIT_LOG_LIMIT` events from the audit file on startup.
+- Added authenticated `GET /git/audit` query endpoint.
+- Query filters:
+  - `session_id`
+  - `host_id`
+  - `action`
+  - `phase`
+  - `limit`
+- `/health` detailed diagnostics now include Git audit storage settings.
+- `.relay/` is ignored by Git.
+- Added `npm run verify:git-audit-storage`.
+
+Verification commands:
+
+```powershell
+npm run verify:git-audit-storage
+npm run verify:git-flow
+npm run verify:relay-health
+```
+
+Verification result:
+
+```text
+[verify] Git audit persistent storage and query endpoint verified.
+[verify] Git status, file diff, commit strategy, push policy, and audit flow verified.
+[verify] Relay health endpoint verified.
+```
+
+Current limitations:
+
+- Audit storage is a local append-only NDJSON file, not a database.
+- There is no Android audit browser yet; audit events remain visible through timeline and queryable through Relay HTTP.
+- There is no log rotation/compaction beyond loading only the latest `RELAY_AUDIT_LOG_LIMIT` records into memory.
+
+Next recommended step:
+
+1. Add a disposable-remote manual test checklist before enabling push for real repositories.
+2. Consider Android read-only audit view after real-device Git testing.
