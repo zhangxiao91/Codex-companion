@@ -15,6 +15,14 @@ const pairingCode = createPairingCode({
 
 const children = [];
 
+const relay = spawnProcess('relay', 'node', ['relay/service/server.mjs'], {
+  ...process.env,
+  RELAY_HOST: '0.0.0.0',
+  RELAY_PORT: relayPort,
+  RELAY_DEV_TOKEN: token
+});
+children.push(relay);
+
 console.log('[pairing] Starting Codex Mobile Companion dev pair.');
 console.log(`[pairing] Relay URL for Android: ${relayUrlForAndroid}`);
 console.log('[pairing] Pairing code:');
@@ -22,20 +30,19 @@ console.log(pairingCode);
 console.log('');
 console.log('[pairing] Paste this code into Android > Relay connection > Pairing code, then tap Use code.');
 console.log('[pairing] Keep this terminal running while using the app.');
+if (lanHost.startsWith('169.254.')) {
+  console.log('[pairing] Warning: selected a 169.254.x.x link-local address. Set RELAY_LAN_HOST to your Wi-Fi/LAN IPv4 address if Android cannot connect.');
+}
 console.log('');
 
-children.push(spawnProcess('relay', 'node', ['relay/service/server.mjs'], {
-  ...process.env,
-  RELAY_HOST: '0.0.0.0',
-  RELAY_PORT: relayPort,
-  RELAY_DEV_TOKEN: token
-}));
+await waitForOutput(relay, '[relay] listening', 5000);
 
-children.push(spawnProcess('bridge', 'node', ['bridge/host-bridge/index.mjs'], {
+const bridge = spawnProcess('bridge', 'node', ['bridge/host-bridge/index.mjs'], {
   ...process.env,
   RELAY_URL: relayUrlForBridge,
   RELAY_DEV_TOKEN: token
-}));
+});
+children.push(bridge);
 
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
@@ -46,15 +53,36 @@ function createPairingCode(payload) {
 }
 
 function findLanAddress() {
+  const candidates = [];
   for (const addresses of Object.values(networkInterfaces())) {
     for (const address of addresses ?? []) {
       if (address.family === 'IPv4' && !address.internal) {
-        return address.address;
+        candidates.push(address.address);
       }
     }
   }
 
-  return '127.0.0.1';
+  return candidates.find(isPrivateLanAddress)
+    ?? candidates.find((address) => !address.startsWith('169.254.'))
+    ?? candidates[0]
+    ?? '127.0.0.1';
+}
+
+function isPrivateLanAddress(address) {
+  if (address.startsWith('10.')) {
+    return true;
+  }
+  if (address.startsWith('192.168.')) {
+    return true;
+  }
+
+  const match = address.match(/^172\.(\d+)\./);
+  if (!match) {
+    return false;
+  }
+
+  const second = Number.parseInt(match[1], 10);
+  return second >= 16 && second <= 31;
 }
 
 function spawnProcess(label, command, args, env) {
@@ -64,12 +92,18 @@ function spawnProcess(label, command, args, env) {
     stdio: ['ignore', 'pipe', 'pipe']
   });
 
+  child.output = '';
+
   child.stdout.on('data', (chunk) => {
-    process.stdout.write(`[${label}] ${chunk}`);
+    const text = chunk.toString();
+    child.output += text;
+    process.stdout.write(`[${label}] ${text}`);
   });
 
   child.stderr.on('data', (chunk) => {
-    process.stderr.write(`[${label}:err] ${chunk}`);
+    const text = chunk.toString();
+    child.output += text;
+    process.stderr.write(`[${label}:err] ${text}`);
   });
 
   child.on('exit', (code, signal) => {
@@ -79,6 +113,17 @@ function spawnProcess(label, command, args, env) {
   });
 
   return child;
+}
+
+async function waitForOutput(child, needle, timeoutMs) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (child.output.includes(needle)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`Timed out waiting for output: ${needle}`);
 }
 
 function shutdown() {

@@ -1930,3 +1930,25 @@ Next recommended step:
 
 1. Test `npm run dev:pair` with the Android app on the local network.
 2. Consider adding QR code output after text pairing is validated.
+
+## 2026-05-10: Dev pairing startup ordering fix
+
+Status: completed.
+
+Changes:
+
+- `npm run dev:pair` now waits for Relay to print `listening` before starting Host Bridge.
+- LAN IP detection now prefers private LAN ranges (`10.x`, `172.16-31.x`, `192.168.x`) and avoids `169.254.x.x` when another address is available.
+- The script prints a warning if only a `169.254.x.x` link-local address is selected.
+
+Verification:
+
+```powershell
+npm run verify:dev-pairing-code
+```
+
+Result:
+
+```text
+[verify] Dev pairing code generation verified.
+```
