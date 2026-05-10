@@ -1,0 +1,17 @@
+{
+  "name": "codex-mobile-companion",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Android-first companion control plane prototype for Codex sessions.",
+  "scripts": {
+    "relay": "node relay/service/server.mjs",
+    "bridge": "node bridge/host-bridge/index.mjs",
+    "test-client": "node tools/test-client/index.mjs",
+    "verify:delivery-strategy": "node tools/verify-delivery-strategy.mjs"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
+

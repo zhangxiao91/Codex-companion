@@ -13,6 +13,14 @@
 
 不要在早期投入完整 IDE、复杂代码编辑器或大型平台能力。
 
+当前执行状态（2026-05-10）：
+
+- 第一条主链路已用 Node test client 代替 Android App 验证通过。
+- 已完成最小 Relay、Host Bridge、MockCodexAdapter 和 test client。
+- 当前机器未检测到 Android 工具链，Android MVP Shell 暂缓到 Java/Gradle/Android SDK 可用后执行。
+- 当前 `codex --help` 和 `codex --version` 返回 `Access is denied`，真实 Codex adapter 进入 Milestone 0 后续调研。
+- 详细记录见 `docs/progress.md`。
+
 ## 2. Milestone 0: Research Spike
 
 目标：确认 Host Bridge 与 Codex Runtime 的可行集成方式。
@@ -283,4 +291,3 @@ MVP 完成应满足：
 - 手机可以 commit/push。
 - 关键敏感信息不会进入 Relay 长期存储。
 - 所有高风险动作都有确认和审计。
-
