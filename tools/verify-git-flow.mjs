@@ -90,7 +90,8 @@ try {
   send(client, MessageType.GitRequest, {
     session_id: 'mock-session-001',
     action: 'commit',
-    message: 'Verify disabled mobile commit'
+    message: 'Verify disabled mobile commit',
+    commit_strategy: 'include_untracked'
   }, deviceToken);
   const commitSnapshot = await waitForGitSnapshot(client, 'commit', 5000);
   await commitRequestedAudit;
@@ -101,8 +102,11 @@ try {
   if (commitSnapshot.result?.ok !== false) {
     throw new Error('Expected commit to be disabled by default.');
   }
-  if (!commitSnapshot.result?.message?.includes('untracked file')) {
-    throw new Error('Expected commit result to warn about untracked files.');
+  if (commitSnapshot.commit_strategy !== 'include_untracked') {
+    throw new Error(`Expected include_untracked strategy, received ${commitSnapshot.commit_strategy}`);
+  }
+  if (!commitSnapshot.result?.message?.includes('stages tracked and untracked files')) {
+    throw new Error('Expected commit result to preserve include_untracked strategy.');
   }
 
   const health = await readHealth(relayPort, deviceToken);

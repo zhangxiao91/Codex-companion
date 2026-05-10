@@ -1525,3 +1525,55 @@ Next recommended step:
 
 1. Add an explicit stage/add policy for untracked files.
 2. Add push confirmation after commit semantics are clear.
+
+## 2026-05-10: Explicit Git commit strategy
+
+Status: completed.
+
+Goal:
+
+- Let mobile users choose whether a commit request should cover tracked files only or include untracked files.
+- Keep real Git writes host-gated and disabled by default.
+
+Changes:
+
+- Protocol payloads now accept `commit_strategy` on `git.request`.
+- Host Bridge normalizes commit strategy to:
+  - `tracked_only`
+  - `include_untracked`
+- `tracked_only` keeps the existing `git commit -am` behavior when Git writes are enabled.
+- `include_untracked` runs `git add -A` and then `git commit -m` only when `GIT_WRITE_ACTIONS_ENABLED=true`.
+- When Git writes are disabled, commit requests still return a blocked `git.snapshot`, but the selected strategy is preserved in `commit_strategy` and result messaging.
+- Android Git panel shows a two-option strategy selector when untracked files exist.
+- Android confirmation dialog reflects whether untracked files will be excluded or staged.
+- `npm run verify:git-flow` now sends `commit_strategy: "include_untracked"` and verifies the disabled path preserves that strategy.
+
+Verification commands:
+
+```powershell
+npm run verify:git-flow
+cd android
+$env:JAVA_HOME='C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot'
+$env:ANDROID_HOME='C:\Users\13372\AppData\Local\Android\Sdk'
+$env:ANDROID_SDK_ROOT=$env:ANDROID_HOME
+$env:Path="$env:JAVA_HOME\bin;$env:ANDROID_HOME\platform-tools;$env:Path"
+.\gradlew.bat :app:assembleDebug
+```
+
+Verification result:
+
+```text
+[verify] Git status, file diff, and audit flow verified.
+BUILD SUCCESSFUL
+```
+
+Current limitations:
+
+- Real commit execution is still gated by `GIT_WRITE_ACTIONS_ENABLED=true`.
+- Push confirmation is still not implemented.
+- Git audit events remain in-memory metadata events; they are not persistent/queryable yet.
+
+Next recommended step:
+
+1. Add push confirmation with host policy checks.
+2. Add persistent/queryable Git audit storage.

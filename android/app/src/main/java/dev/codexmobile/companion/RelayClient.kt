@@ -84,7 +84,13 @@ class RelayClient(
         )
     }
 
-    fun requestGit(sessionId: String, action: String, filePath: String? = null, message: String? = null) {
+    fun requestGit(
+        sessionId: String,
+        action: String,
+        filePath: String? = null,
+        message: String? = null,
+        commitStrategy: String? = null
+    ) {
         val payload = JSONObject()
             .put("session_id", sessionId)
             .put("action", action)
@@ -93,6 +99,9 @@ class RelayClient(
         }
         if (!message.isNullOrBlank()) {
             payload.put("message", message)
+        }
+        if (!commitStrategy.isNullOrBlank()) {
+            payload.put("commit_strategy", commitStrategy)
         }
         send("git.request", payload)
     }
@@ -330,7 +339,7 @@ class RelayClient(
             statusSummary = json.optString("status_summary", ""),
             trackedFileCount = json.optInt("tracked_file_count", files.count { it.tracked }),
             untrackedFileCount = json.optInt("untracked_file_count", files.count { !it.tracked }),
-            commitStrategy = json.optString("commit_strategy", "tracked_only_commit_am"),
+            commitStrategy = json.optString("commit_strategy", "tracked_only"),
             files = files,
             diffStat = json.optString("diff_stat", ""),
             selectedFilePath = json.optString("selected_file_path", ""),

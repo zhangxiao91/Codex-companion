@@ -130,11 +130,11 @@ class RelayViewModel(
         requestGit("diff", filePath)
     }
 
-    fun requestGitCommit(message: String) {
+    fun requestGitCommit(message: String, commitStrategy: String) {
         if (message.isBlank()) {
             return
         }
-        requestGit("commit", message = message.trim())
+        requestGit("commit", message = message.trim(), commitStrategy = commitStrategy)
     }
 
     fun decideApproval(approvalId: String, decision: String) {
@@ -235,8 +235,13 @@ class RelayViewModel(
         .maxOrNull()
         ?.toString()
 
-    private fun requestGit(action: String, filePath: String? = null, message: String? = null) {
+    private fun requestGit(
+        action: String,
+        filePath: String? = null,
+        message: String? = null,
+        commitStrategy: String? = null
+    ) {
         val sessionId = _uiState.value.selectedSessionId ?: return
-        relayClient.requestGit(sessionId, action, filePath, message)
+        relayClient.requestGit(sessionId, action, filePath, message, commitStrategy)
     }
 }

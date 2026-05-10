@@ -91,7 +91,7 @@ private fun CompanionApp(
     onGitStatus: () -> Unit,
     onGitDiff: () -> Unit,
     onGitFileDiff: (String) -> Unit,
-    onGitCommit: (String) -> Unit,
+    onGitCommit: (String, String) -> Unit,
     onApprovalDecision: (String, String) -> Unit,
     onPromptSend: (String) -> Unit
 ) {
@@ -135,7 +135,7 @@ private fun SessionDashboard(
     onGitStatus: () -> Unit,
     onGitDiff: () -> Unit,
     onGitFileDiff: (String) -> Unit,
-    onGitCommit: (String) -> Unit,
+    onGitCommit: (String, String) -> Unit,
     onApprovalDecision: (String, String) -> Unit,
     onPromptSend: (String) -> Unit
 ) {
@@ -431,9 +431,10 @@ private fun GitPanel(
     onStatus: () -> Unit,
     onDiff: () -> Unit,
     onFileDiff: (String) -> Unit,
-    onCommit: (String) -> Unit
+    onCommit: (String, String) -> Unit
 ) {
     var commitMessage by remember { mutableStateOf("") }
+    var commitStrategy by remember { mutableStateOf("tracked_only") }
     var confirmCommit by remember { mutableStateOf(false) }
     val canCommit = snapshot?.files?.isNotEmpty() == true && connectionStatus == "Online"
 
@@ -530,6 +531,12 @@ private fun GitPanel(
                 singleLine = true,
                 label = { Text("Commit message") }
             )
+            if ((snapshot?.untrackedFileCount ?: 0) > 0) {
+                CommitStrategySelector(
+                    selected = commitStrategy,
+                    onSelected = { commitStrategy = it }
+                )
+            }
             Button(
                 modifier = Modifier.fillMaxWidth(),
                 enabled = canCommit && commitMessage.isNotBlank(),
@@ -538,11 +545,11 @@ private fun GitPanel(
             ) {
                 Text("Commit")
             }
-            if (snapshot?.untrackedFileCount ?: 0 > 0) {
+            snapshot?.takeIf { it.untrackedFileCount > 0 }?.let { currentSnapshot ->
                 Text(
-                    text = "${snapshot?.untrackedFileCount} untracked file(s) will not be included by the current commit strategy.",
+                    text = commitStrategyWarning(currentSnapshot, commitStrategy),
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFFB42318),
+                    color = if (commitStrategy == "include_untracked") Color(0xFF176B52) else Color(0xFFB42318),
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -561,10 +568,11 @@ private fun GitPanel(
         CommitConfirmDialog(
             changedFileCount = snapshot?.files?.size ?: 0,
             message = commitMessage,
+            commitStrategy = commitStrategy,
             untrackedFileCount = snapshot?.untrackedFileCount ?: 0,
             onDismiss = { confirmCommit = false },
             onConfirm = {
-                onCommit(commitMessage)
+                onCommit(commitMessage, commitStrategy)
                 confirmCommit = false
             }
         )
@@ -572,9 +580,59 @@ private fun GitPanel(
 }
 
 @Composable
+private fun CommitStrategySelector(
+    selected: String,
+    onSelected: (String) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        StrategyButton(
+            modifier = Modifier.weight(1f),
+            text = "Tracked",
+            selected = selected == "tracked_only",
+            onClick = { onSelected("tracked_only") }
+        )
+        StrategyButton(
+            modifier = Modifier.weight(1f),
+            text = "Include new",
+            selected = selected == "include_untracked",
+            onClick = { onSelected("include_untracked") }
+        )
+    }
+}
+
+@Composable
+private fun StrategyButton(
+    modifier: Modifier = Modifier,
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    if (selected) {
+        Button(
+            modifier = modifier.height(40.dp),
+            onClick = onClick,
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF176B52))
+        ) {
+            Text(text)
+        }
+    } else {
+        OutlinedButton(
+            modifier = modifier.height(40.dp),
+            onClick = onClick
+        ) {
+            Text(text)
+        }
+    }
+}
+
+@Composable
 private fun CommitConfirmDialog(
     changedFileCount: Int,
     message: String,
+    commitStrategy: String,
     untrackedFileCount: Int,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit
@@ -591,15 +649,19 @@ private fun CommitConfirmDialog(
             ) {
                 Text("Confirm commit", fontWeight = FontWeight.SemiBold)
                 Text(
-                    text = commitConfirmText(changedFileCount, untrackedFileCount),
+                    text = commitConfirmText(changedFileCount, untrackedFileCount, commitStrategy),
                     style = MaterialTheme.typography.bodySmall,
                     color = Color(0xFF5E6978)
                 )
                 if (untrackedFileCount > 0) {
                     Text(
-                        text = "$untrackedFileCount untracked file(s) will not be committed by the current tracked-only strategy.",
+                        text = if (commitStrategy == "include_untracked") {
+                            "$untrackedFileCount untracked file(s) will be staged if Host Bridge write actions are enabled."
+                        } else {
+                            "$untrackedFileCount untracked file(s) will not be committed by the current tracked-only strategy."
+                        },
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFFB42318)
+                        color = if (commitStrategy == "include_untracked") Color(0xFF176B52) else Color(0xFFB42318)
                     )
                 }
                 Text(
@@ -927,7 +989,23 @@ private fun gitChangeSummary(snapshot: GitSnapshot): String {
     return "changes=${snapshot.files.size}, tracked=${snapshot.trackedFileCount}, untracked=${snapshot.untrackedFileCount}, status=$status"
 }
 
-private fun commitConfirmText(changedFileCount: Int, untrackedFileCount: Int): String {
+private fun commitConfirmText(
+    changedFileCount: Int,
+    untrackedFileCount: Int,
+    commitStrategy: String
+): String {
     val trackedCount = (changedFileCount - untrackedFileCount).coerceAtLeast(0)
-    return "This requests a tracked-only commit for $trackedCount tracked changed file(s). Host Bridge will only execute it when Git write actions are explicitly enabled."
+    return if (commitStrategy == "include_untracked") {
+        "This requests a commit for $trackedCount tracked changed file(s) plus $untrackedFileCount untracked file(s). Host Bridge will only execute it when Git write actions are explicitly enabled."
+    } else {
+        "This requests a tracked-only commit for $trackedCount tracked changed file(s). Host Bridge will only execute it when Git write actions are explicitly enabled."
+    }
+}
+
+private fun commitStrategyWarning(snapshot: GitSnapshot, commitStrategy: String): String {
+    return if (commitStrategy == "include_untracked") {
+        "${snapshot.untrackedFileCount} untracked file(s) will be staged only if Host Bridge write actions are enabled."
+    } else {
+        "${snapshot.untrackedFileCount} untracked file(s) will not be included by the current commit strategy."
+    }
 }

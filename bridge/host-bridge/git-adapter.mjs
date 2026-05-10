@@ -2,6 +2,10 @@ import { spawn } from 'node:child_process';
 
 const gitWriteActionsEnabled = process.env.GIT_WRITE_ACTIONS_ENABLED === 'true';
 const maxFileDiffBytes = Number.parseInt(process.env.GIT_FILE_DIFF_MAX_BYTES ?? '20000', 10);
+const CommitStrategy = Object.freeze({
+  TrackedOnly: 'tracked_only',
+  IncludeUntracked: 'include_untracked'
+});
 
 export async function handleGitRequest(session, request) {
   const action = request.action;
@@ -20,26 +24,40 @@ export async function handleGitRequest(session, request) {
 
   if (action === 'commit') {
     const preCommitSnapshot = await readGitSnapshot(repoPath);
+    const commitStrategy = normalizeCommitStrategy(request.commit_strategy);
     if (!gitWriteActionsEnabled) {
       return createSnapshot(session, action, preCommitSnapshot, {
         ok: false,
-        message: commitPolicyMessage('Git commit is disabled. Set GIT_WRITE_ACTIONS_ENABLED=true on Host Bridge to enable it.', preCommitSnapshot)
-      }, undefined, auditId);
+        message: commitPolicyMessage('Git commit is disabled. Set GIT_WRITE_ACTIONS_ENABLED=true on Host Bridge to enable it.', preCommitSnapshot, commitStrategy)
+      }, undefined, auditId, commitStrategy);
     }
 
     const message = typeof request.message === 'string' ? request.message.trim() : '';
     if (!message) {
       return createSnapshot(session, action, preCommitSnapshot, {
         ok: false,
-        message: commitPolicyMessage('Commit message is required.', preCommitSnapshot)
-      }, undefined, auditId);
+        message: commitPolicyMessage('Commit message is required.', preCommitSnapshot, commitStrategy)
+      }, undefined, auditId, commitStrategy);
     }
 
-    const commit = await runGit(repoPath, ['commit', '-am', message]);
+    const stage = commitStrategy === CommitStrategy.IncludeUntracked
+      ? await runGit(repoPath, ['add', '-A'])
+      : { exitCode: 0, output: '', error: '' };
+    if (stage.exitCode !== 0) {
+      return createSnapshot(session, action, await readGitSnapshot(repoPath), {
+        ok: false,
+        message: stage.output.trim() || stage.error.trim()
+      }, undefined, auditId, commitStrategy);
+    }
+
+    const commitArgs = commitStrategy === CommitStrategy.IncludeUntracked
+      ? ['commit', '-m', message]
+      : ['commit', '-am', message];
+    const commit = await runGit(repoPath, commitArgs);
     return createSnapshot(session, action, await readGitSnapshot(repoPath), {
       ok: commit.exitCode === 0,
       message: commit.output.trim() || commit.error.trim()
-    }, undefined, auditId);
+    }, undefined, auditId, commitStrategy);
   }
 
   if (action === 'push') {
@@ -90,7 +108,15 @@ async function readGitSnapshot(repoPath) {
   };
 }
 
-function createSnapshot(session, action, git, result = { ok: true, message: '' }, fileDiff = undefined, auditId = '') {
+function createSnapshot(
+  session,
+  action,
+  git,
+  result = { ok: true, message: '' },
+  fileDiff = undefined,
+  auditId = '',
+  commitStrategy = CommitStrategy.TrackedOnly
+) {
   return {
     session_id: session.session_id,
     host_id: session.host_id,
@@ -101,7 +127,7 @@ function createSnapshot(session, action, git, result = { ok: true, message: '' }
     status_summary: git.status_summary,
     tracked_file_count: git.tracked_file_count,
     untracked_file_count: git.untracked_file_count,
-    commit_strategy: 'tracked_only_commit_am',
+    commit_strategy: commitStrategy,
     files: git.files,
     diff_stat: git.diff_stat,
     changed_files: git.changed_files,
@@ -167,12 +193,22 @@ function parsePorcelainLine(line) {
   };
 }
 
-function commitPolicyMessage(message, git) {
+function commitPolicyMessage(message, git, commitStrategy) {
+  if (commitStrategy === CommitStrategy.IncludeUntracked) {
+    return `${message} Current commit strategy stages tracked and untracked files.`;
+  }
+
   if (!git.untracked_file_count) {
     return `${message} Current commit strategy covers tracked files only.`;
   }
 
   return `${message} Current commit strategy covers tracked files only; ${git.untracked_file_count} untracked file(s) will not be committed.`;
+}
+
+function normalizeCommitStrategy(strategy) {
+  return strategy === CommitStrategy.IncludeUntracked
+    ? CommitStrategy.IncludeUntracked
+    : CommitStrategy.TrackedOnly;
 }
 
 function summarizeFiles(files) {
