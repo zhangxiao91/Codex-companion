@@ -1425,3 +1425,51 @@ Next recommended step:
 
 1. Add explicit commit confirmation UI and keep write execution behind `GIT_WRITE_ACTIONS_ENABLED=true`.
 2. Add persistent audit storage before broader use outside local development.
+
+## 2026-05-10: Android commit confirmation flow
+
+Status: completed.
+
+Goal:
+
+- Add the mobile-side confirmation step for Git commit without enabling writes by default.
+- Keep the write boundary on Host Bridge policy, not Android UI state alone.
+
+Changes:
+
+- Android Git panel now includes a commit message field.
+- Commit button is enabled only when there is a selected online session, changed files are present, and the message is non-empty.
+- Tapping Commit opens a confirmation dialog showing changed file count and commit message.
+- Confirm sends `git.request` with `action: "commit"` and `message`.
+- Host Bridge behavior remains unchanged: real commit execution requires `GIT_WRITE_ACTIONS_ENABLED=true`.
+- With default settings, confirmed commits return the existing blocked/disabled `git.snapshot` result and are covered by Git audit events.
+
+Verification commands:
+
+```powershell
+npm run verify:git-flow
+cd android
+$env:JAVA_HOME='C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot'
+$env:ANDROID_HOME='C:\Users\13372\AppData\Local\Android\Sdk'
+$env:ANDROID_SDK_ROOT=$env:ANDROID_HOME
+$env:Path="$env:JAVA_HOME\bin;$env:ANDROID_HOME\platform-tools;$env:Path"
+.\gradlew.bat :app:assembleDebug
+```
+
+Verification result:
+
+```text
+[verify] Git status, file diff, and audit flow verified.
+BUILD SUCCESSFUL
+```
+
+Current limitations:
+
+- The current commit adapter uses `git commit -am`, so it only covers tracked files.
+- Android does not yet distinguish tracked vs untracked files in the confirmation.
+- Push confirmation is still not implemented.
+
+Next recommended step:
+
+1. Add tracked/untracked handling before enabling real commit use.
+2. Then add push confirmation with host policy checks.

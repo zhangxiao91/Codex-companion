@@ -84,12 +84,15 @@ class RelayClient(
         )
     }
 
-    fun requestGit(sessionId: String, action: String, filePath: String? = null) {
+    fun requestGit(sessionId: String, action: String, filePath: String? = null, message: String? = null) {
         val payload = JSONObject()
             .put("session_id", sessionId)
             .put("action", action)
         if (!filePath.isNullOrBlank()) {
             payload.put("file_path", filePath)
+        }
+        if (!message.isNullOrBlank()) {
+            payload.put("message", message)
         }
         send("git.request", payload)
     }

@@ -31,6 +31,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
+import androidx.compose.ui.window.Dialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -71,6 +72,7 @@ class MainActivity : ComponentActivity() {
                 onGitStatus = viewModel::requestGitStatus,
                 onGitDiff = viewModel::requestGitDiff,
                 onGitFileDiff = viewModel::requestGitFileDiff,
+                onGitCommit = viewModel::requestGitCommit,
                 onApprovalDecision = viewModel::decideApproval,
                 onPromptSend = viewModel::sendPrompt
             )
@@ -89,6 +91,7 @@ private fun CompanionApp(
     onGitStatus: () -> Unit,
     onGitDiff: () -> Unit,
     onGitFileDiff: (String) -> Unit,
+    onGitCommit: (String) -> Unit,
     onApprovalDecision: (String, String) -> Unit,
     onPromptSend: (String) -> Unit
 ) {
@@ -113,6 +116,7 @@ private fun CompanionApp(
                 onGitStatus = onGitStatus,
                 onGitDiff = onGitDiff,
                 onGitFileDiff = onGitFileDiff,
+                onGitCommit = onGitCommit,
                 onApprovalDecision = onApprovalDecision,
                 onPromptSend = onPromptSend
             )
@@ -131,6 +135,7 @@ private fun SessionDashboard(
     onGitStatus: () -> Unit,
     onGitDiff: () -> Unit,
     onGitFileDiff: (String) -> Unit,
+    onGitCommit: (String) -> Unit,
     onApprovalDecision: (String, String) -> Unit,
     onPromptSend: (String) -> Unit
 ) {
@@ -163,7 +168,8 @@ private fun SessionDashboard(
             connectionStatus = uiState.connectionStatus,
             onStatus = onGitStatus,
             onDiff = onGitDiff,
-            onFileDiff = onGitFileDiff
+            onFileDiff = onGitFileDiff,
+            onCommit = onGitCommit
         )
         ApprovalInbox(
             approvals = uiState.pendingApprovals,
@@ -424,8 +430,13 @@ private fun GitPanel(
     connectionStatus: String,
     onStatus: () -> Unit,
     onDiff: () -> Unit,
-    onFileDiff: (String) -> Unit
+    onFileDiff: (String) -> Unit,
+    onCommit: (String) -> Unit
 ) {
+    var commitMessage by remember { mutableStateOf("") }
+    var confirmCommit by remember { mutableStateOf(false) }
+    val canCommit = snapshot?.files?.isNotEmpty() == true && connectionStatus == "Online"
+
     Panel {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(
@@ -511,12 +522,90 @@ private fun GitPanel(
                     onClick = onDiff
                 )
             }
+            TextField(
+                modifier = Modifier.fillMaxWidth(),
+                value = commitMessage,
+                onValueChange = { commitMessage = it },
+                enabled = canCommit,
+                singleLine = true,
+                label = { Text("Commit message") }
+            )
+            Button(
+                modifier = Modifier.fillMaxWidth(),
+                enabled = canCommit && commitMessage.isNotBlank(),
+                onClick = { confirmCommit = true },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF176B52))
+            ) {
+                Text("Commit")
+            }
             if (selectedSession == null || connectionStatus != "Online") {
                 Text(
                     text = "Select an online session to refresh Git status.",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color(0xFF8A94A6)
                 )
+            }
+        }
+    }
+
+    if (confirmCommit) {
+        CommitConfirmDialog(
+            changedFileCount = snapshot?.files?.size ?: 0,
+            message = commitMessage,
+            onDismiss = { confirmCommit = false },
+            onConfirm = {
+                onCommit(commitMessage)
+                confirmCommit = false
+            }
+        )
+    }
+}
+
+@Composable
+private fun CommitConfirmDialog(
+    changedFileCount: Int,
+    message: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(8.dp),
+            color = Color.White
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text("Confirm commit", fontWeight = FontWeight.SemiBold)
+                Text(
+                    text = "This requests a commit for $changedFileCount changed file(s). Host Bridge will only execute it when Git write actions are explicitly enabled.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF5E6978)
+                )
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF344054),
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton(
+                        modifier = Modifier.weight(1f),
+                        onClick = onDismiss
+                    ) {
+                        Text("Cancel")
+                    }
+                    Button(
+                        modifier = Modifier.weight(1f),
+                        onClick = onConfirm,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF176B52))
+                    ) {
+                        Text("Confirm")
+                    }
+                }
             }
         }
     }

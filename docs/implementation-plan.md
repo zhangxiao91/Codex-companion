@@ -34,7 +34,7 @@
 - Android 已用 SharedPreferences 持久化最近 sessions、timeline events、selected session 和 cursor recovery 状态。
 - Relay 已加入临时配对安全模型：局域网监听必须配置 `RELAY_DEV_TOKEN`，Host Bridge 用 pairing token 注册，Android/Node client 必须通过 `/pair` 换取 device token 后才能订阅 session、请求 timeline 或发送 prompt。
 - Approval request/decision 的协议壳、Relay 路由、Android 待处理卡片和真实 App Server approval request/response 映射已完成；真实危险操作端到端触发仍待手动验证。
-- Git Workflow MVP 已开始：Relay/Bridge 支持 `git.request` / `git.snapshot`，Host Bridge 增加本地 Git adapter，Android 增加选中 session 的 Git status/diff summary 面板和 file-level diff preview，Relay 已产生 metadata-only Git action audit timeline events。commit/push 仍默认禁用，等二次确认和写操作策略补完后再暴露。
+- Git Workflow MVP 已开始：Relay/Bridge 支持 `git.request` / `git.snapshot`，Host Bridge 增加本地 Git adapter，Android 增加选中 session 的 Git status/diff summary 面板、file-level diff preview 和 commit confirmation UI，Relay 已产生 metadata-only Git action audit timeline events。commit/push 执行仍默认禁用，等写操作策略补完后再开放。
 - 详细记录见 `docs/progress.md`。
 
 ## 2. Milestone 0: Research Spike
@@ -192,7 +192,8 @@ UI 要求：
 - 已验证 `npm run verify:git-flow`。
 - Android 已有紧凑 Git 面板，支持 Status / Diff summary 和点击 changed file 查看单文件 diff preview。
 - Relay 已有 metadata-only Git action audit，记录 requested/completed、device、action、file path 和结果摘要；当前仍是内存态，未持久化查询。
-- commit/push adapter 已预留，但默认受 `GIT_WRITE_ACTIONS_ENABLED=true` 保护，未在 Android 默认暴露。
+- Android 已有 commit message 输入和二次确认 UI；commit 执行默认受 `GIT_WRITE_ACTIONS_ENABLED=true` 保护。
+- push adapter 已预留，但尚未在 Android 默认暴露。
 
 任务：
 
@@ -201,11 +202,11 @@ UI 要求：
 - 支持 file diff summary。（已完成最小 diff stat）
 - 支持 file-level diff。（已完成 compact preview）
 - 支持生成 commit message。
-- 支持 commit。
+- 支持 commit。（已完成确认 UI；执行仍 gated）
 - 支持 push。
 - Android 实现 Git status 页面。（已完成紧凑面板）
 - Android 实现 diff review 页面。（已完成 Git 面板内 compact preview；后续可拆成完整页面）
-- Android 实现 commit/push confirmation flow。
+- Android 实现 commit/push confirmation flow。（已完成 commit confirmation；push 待做）
 
 验收标准：
 
