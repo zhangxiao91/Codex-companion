@@ -1874,3 +1874,59 @@ Next recommended step:
 
 1. Review on emulator/physical device and tune spacing.
 2. Consider splitting Git/Timeline/Approvals into tabs after manual use.
+
+## 2026-05-10: One-step development pairing code
+
+Status: completed.
+
+Goal:
+
+- Reduce mobile/computer pairing friction during local development.
+- Avoid manually copying Relay URL and pairing token into separate fields.
+
+Changes:
+
+- Added `npm run dev:pair`.
+- The script:
+  - generates a high-entropy random `RELAY_DEV_TOKEN`,
+  - detects a LAN IPv4 address,
+  - starts Relay on `0.0.0.0`,
+  - starts Host Bridge against `127.0.0.1`,
+  - prints a copyable `cmc1.<base64url-json>` pairing code.
+- Pairing code payload contains:
+  - `relay_url`,
+  - `pairing_token`,
+  - `created_at`.
+- Android Relay card now has a Pairing code field.
+- Tapping Use code parses the pairing code, saves Relay URL and pairing token, clears stale device/session cache, and calls `/pair` to get a device token.
+- Manual Relay URL and Pairing token fields remain available for troubleshooting.
+- Added `npm run verify:dev-pairing-code`.
+
+Verification commands:
+
+```powershell
+npm run verify:dev-pairing-code
+cd android
+$env:JAVA_HOME='C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot'
+$env:ANDROID_HOME='C:\Users\13372\AppData\Local\Android\Sdk'
+$env:ANDROID_SDK_ROOT=$env:ANDROID_HOME
+$env:Path="$env:JAVA_HOME\bin;$env:ANDROID_HOME\platform-tools;$env:Path"
+.\gradlew.bat :app:assembleDebug
+```
+
+Verification result:
+
+```text
+[verify] Dev pairing code generation verified.
+BUILD SUCCESSFUL
+```
+
+Current limitations:
+
+- Pairing code is still a development-mode shared secret, not a production one-time pairing protocol.
+- The code is text-copy based; QR scanning is not implemented yet.
+
+Next recommended step:
+
+1. Test `npm run dev:pair` with the Android app on the local network.
+2. Consider adding QR code output after text pairing is validated.

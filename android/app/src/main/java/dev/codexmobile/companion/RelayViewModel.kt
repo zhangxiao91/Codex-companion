@@ -2,9 +2,11 @@ package dev.codexmobile.companion
 
 import androidx.lifecycle.ViewModel
 import java.time.Instant
+import java.util.Base64
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import org.json.JSONObject
 
 class RelayViewModel(
     private val settings: RelaySettings
@@ -85,6 +87,44 @@ class RelayViewModel(
             )
         }
         connect()
+    }
+
+    fun applyPairingCode(pairingCode: String) {
+        val parsed = parsePairingCode(pairingCode)
+        if (parsed == null) {
+            _uiState.update { it.copy(lastError = "Invalid pairing code") }
+            return
+        }
+
+        val (relayUrl, pairingToken) = parsed
+        if (!isValidRelayUrl(relayUrl)) {
+            _uiState.update { it.copy(lastError = "Pairing code Relay URL must start with ws:// or wss://") }
+            return
+        }
+
+        settings.saveRelayUrl(relayUrl)
+        settings.savePairingToken(pairingToken)
+        settings.clearDevicePairing()
+        settings.clearSessionCache()
+        _uiState.update {
+            it.copy(
+                relayUrl = relayUrl,
+                pairingToken = pairingToken,
+                deviceToken = "",
+                deviceId = "",
+                connectionStatus = "Disconnected",
+                sessions = emptyList(),
+                selectedSessionId = null,
+                timeline = emptyList(),
+                approvals = emptyList(),
+                gitSnapshots = emptyMap(),
+                gitAudit = emptyMap(),
+                lastConnectedAt = null,
+                lastHealthCheck = "Pairing from code",
+                lastError = null
+            )
+        }
+        relayClient.pairDevice(relayUrl, pairingToken, _uiState.value.deviceId)
     }
 
     fun testConnection() {
@@ -252,6 +292,25 @@ class RelayViewModel(
 
         fun isValidRelayUrl(url: String): Boolean =
             url.startsWith("ws://") || url.startsWith("wss://")
+
+        fun parsePairingCode(raw: String): Pair<String, String>? {
+            val code = raw.trim()
+            if (!code.startsWith("cmc1.")) {
+                return null
+            }
+
+            return runCatching {
+                val encoded = code.removePrefix("cmc1.")
+                val json = JSONObject(String(Base64.getUrlDecoder().decode(encoded), Charsets.UTF_8))
+                val relayUrl = json.optString("relay_url", "").trim()
+                val pairingToken = json.optString("pairing_token", "").trim()
+                if (relayUrl.isBlank() || pairingToken.length < 32) {
+                    null
+                } else {
+                    relayUrl to pairingToken
+                }
+            }.getOrNull()
+        }
     }
 
     private fun latestCursorFor(sessionId: String): String? = _uiState.value.timeline

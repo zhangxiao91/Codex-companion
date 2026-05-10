@@ -67,6 +67,7 @@ class MainActivity : ComponentActivity() {
                 uiState = uiState,
                 onReconnect = viewModel::connect,
                 onRelaySettingsSave = viewModel::saveRelaySettings,
+                onPairingCodeApply = viewModel::applyPairingCode,
                 onPairDevice = viewModel::pairDevice,
                 onHealthCheck = viewModel::testConnection,
                 onSessionSelected = viewModel::selectSession,
@@ -88,6 +89,7 @@ private fun CompanionApp(
     uiState: RelayUiState,
     onReconnect: () -> Unit,
     onRelaySettingsSave: (String, String) -> Unit,
+    onPairingCodeApply: (String) -> Unit,
     onPairDevice: () -> Unit,
     onHealthCheck: () -> Unit,
     onSessionSelected: (String) -> Unit,
@@ -115,6 +117,7 @@ private fun CompanionApp(
                 uiState = uiState,
                 onReconnect = onReconnect,
                 onRelaySettingsSave = onRelaySettingsSave,
+                onPairingCodeApply = onPairingCodeApply,
                 onPairDevice = onPairDevice,
                 onHealthCheck = onHealthCheck,
                 onSessionSelected = onSessionSelected,
@@ -136,6 +139,7 @@ private fun SessionDashboard(
     uiState: RelayUiState,
     onReconnect: () -> Unit,
     onRelaySettingsSave: (String, String) -> Unit,
+    onPairingCodeApply: (String) -> Unit,
     onPairDevice: () -> Unit,
     onHealthCheck: () -> Unit,
     onSessionSelected: (String) -> Unit,
@@ -163,6 +167,7 @@ private fun SessionDashboard(
             uiState = uiState,
             onReconnect = onReconnect,
             onRelaySettingsSave = onRelaySettingsSave,
+            onPairingCodeApply = onPairingCodeApply,
             onPairDevice = onPairDevice,
             onHealthCheck = onHealthCheck
         )
@@ -255,11 +260,13 @@ private fun HostSummary(
     uiState: RelayUiState,
     onReconnect: () -> Unit,
     onRelaySettingsSave: (String, String) -> Unit,
+    onPairingCodeApply: (String) -> Unit,
     onPairDevice: () -> Unit,
     onHealthCheck: () -> Unit
 ) {
     var relayUrlDraft by remember(uiState.relayUrl) { mutableStateOf(uiState.relayUrl) }
     var pairingTokenDraft by remember(uiState.pairingToken) { mutableStateOf(uiState.pairingToken) }
+    var pairingCodeDraft by remember { mutableStateOf("") }
 
     Panel {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -279,6 +286,21 @@ private fun HostSummary(
                     )
                 }
                 StatusPill(text = uiState.connectionStatus, tone = statusTone(uiState.connectionStatus))
+            }
+            TextField(
+                modifier = Modifier.fillMaxWidth(),
+                value = pairingCodeDraft,
+                onValueChange = { pairingCodeDraft = it },
+                singleLine = true,
+                label = { Text("Pairing code") }
+            )
+            Button(
+                modifier = Modifier.fillMaxWidth(),
+                enabled = pairingCodeDraft.isNotBlank(),
+                onClick = { onPairingCodeApply(pairingCodeDraft) },
+                colors = ButtonDefaults.buttonColors(containerColor = Ink)
+            ) {
+                Text("Use code")
             }
             TextField(
                 modifier = Modifier.fillMaxWidth(),

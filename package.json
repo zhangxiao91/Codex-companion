@@ -7,6 +7,7 @@
   "scripts": {
     "relay": "node relay/service/server.mjs",
     "bridge": "node bridge/host-bridge/index.mjs",
+    "dev:pair": "node tools/dev-pairing-start.mjs",
     "test-client": "node tools/test-client/index.mjs",
     "ephemeral-prompt-client": "node tools/ephemeral-prompt-client/index.mjs",
     "steer-client": "node tools/steer-client/index.mjs",
@@ -26,7 +27,8 @@
     "verify:relay-health": "node tools/verify-relay-health.mjs",
     "verify:relay-timeline-cache": "node tools/verify-relay-timeline-cache.mjs",
     "verify:live-notification-mapper": "node tools/verify-live-notification-mapper.mjs",
-    "verify:delivery-strategy": "node tools/verify-delivery-strategy.mjs"
+    "verify:delivery-strategy": "node tools/verify-delivery-strategy.mjs",
+    "verify:dev-pairing-code": "node tools/verify-dev-pairing-code.mjs"
   },
   "engines": {
     "node": ">=24"

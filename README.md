@@ -92,14 +92,18 @@ App 会本地保存最近 session、timeline events、selected session 和每个
 真机局域网调试时 Relay 需要监听非 localhost 地址：
 
 ```powershell
+npm run dev:pair
+```
+
+脚本会生成高强度随机 token，启动 Relay 和 Host Bridge，并打印一条 `cmc1...` pairing code。把这条 code 粘贴到 Android 的 Pairing code 输入框，点击 Use code 即可自动保存 Relay URL、保存 pairing token，并换取 device token。
+
+如果需要手动启动，Host Bridge 仍可以使用同一个临时 dev token 连接 Relay：
+
+```powershell
 $env:RELAY_HOST='0.0.0.0'
 $env:RELAY_DEV_TOKEN='choose-a-random-dev-token'
 npm run relay
-```
 
-Host Bridge 使用同一个临时 dev token 连接 Relay：
-
-```powershell
 $env:RELAY_URL='ws://127.0.0.1:8787'
 $env:RELAY_DEV_TOKEN='choose-a-random-dev-token'
 npm run bridge
