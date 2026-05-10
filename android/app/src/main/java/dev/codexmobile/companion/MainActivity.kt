@@ -429,7 +429,7 @@ private fun SessionSummary(
                     color = MutedText
                 )
             } else {
-                sessions.take(4).forEach { session ->
+                sessions.forEach { session ->
                     SessionRow(
                         session = session,
                         selected = session.sessionId == selectedSession?.sessionId,
