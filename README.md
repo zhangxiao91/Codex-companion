@@ -69,6 +69,7 @@ Codex Mobile Companion 是一个 Android 优先的 Codex 移动协作入口。�
 - [docs/implementation-plan.md](docs/implementation-plan.md)：分阶段施工计划、里程碑和验收标准。
 - [docs/android-toolchain.md](docs/android-toolchain.md)：Android 构建工具链安装和验证说明。
 - [docs/manual-app-server-approval-test.md](docs/manual-app-server-approval-test.md)：真实 App Server approval 手测流程。
+- [docs/manual-android-git-workflow-test.md](docs/manual-android-git-workflow-test.md)：Android Git status/diff/commit/push/audit disposable repo 手测流程。
 
 ## Current Status
 
@@ -191,4 +192,4 @@ Git audit storage:
 
 Remaining before Git is truly user-facing:
 
-- real-device Git workflow test from Android against a disposable remote
+- run the Android Git workflow checklist on a physical device

@@ -1784,3 +1784,45 @@ Next recommended step:
 
 1. Add a real-device Git workflow checklist and run it against a disposable remote.
 2. Add a focused Android manual test checklist for audit refresh behavior.
+
+## 2026-05-10: Android Git workflow manual checklist
+
+Status: completed.
+
+Goal:
+
+- Provide a safe manual test path for Android Git status/diff/commit/push/audit.
+- Keep real repositories out of the first write-action test.
+
+Changes:
+
+- Added `docs/manual-android-git-workflow-test.md`.
+- The checklist uses a disposable working repo and local bare remote.
+- It documents Relay/Bridge startup with:
+  - `MOCK_SESSION_REPO_PATH`
+  - `GIT_WRITE_ACTIONS_ENABLED=true`
+  - `GIT_PUSH_ACTIONS_ENABLED=true`
+- It covers Android steps for:
+  - Pair,
+  - Test Connection,
+  - Status,
+  - file diff preview,
+  - commit confirmation,
+  - push confirmation,
+  - Git audit refresh.
+- It includes post-test remote verification commands.
+- README now links to the checklist.
+
+Verification:
+
+- Documentation-only change; no runtime verification required.
+
+Current limitations:
+
+- The checklist still needs to be run on a physical Android device.
+- It remains a development-token flow and is not suitable for public network exposure.
+
+Next recommended step:
+
+1. Run the Android Git workflow checklist on a physical device.
+2. Then tighten any UI or policy issues discovered during manual testing.
