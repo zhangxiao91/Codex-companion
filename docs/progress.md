@@ -1826,3 +1826,51 @@ Next recommended step:
 
 1. Run the Android Git workflow checklist on a physical device.
 2. Then tighten any UI or policy issues discovered during manual testing.
+
+## 2026-05-10: Android UI refinement pass
+
+Status: completed.
+
+Goal:
+
+- Make the Android app feel more like a compact mobile control plane and less like a raw prototype.
+- Keep backend/protocol behavior unchanged.
+
+Changes:
+
+- Reworked the header into a dark status console with selected session context.
+- Added top-level metric chips for sessions, approvals, and audit entries.
+- Standardized color tokens for canvas, panels, body text, muted text, green action state, warnings, and critical states.
+- Replaced several raw text status lines with compact notice surfaces.
+- Improved Relay connection card hierarchy and added a Relay URL label.
+- Improved Sessions panel styling and selected row treatment.
+- Reworked Git status summary into metric tiles for changed/tracked/new files.
+- Improved Git audit row readability.
+- Standardized status pill tones across online/running/warning/error states.
+
+Verification commands:
+
+```powershell
+cd android
+$env:JAVA_HOME='C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot'
+$env:ANDROID_HOME='C:\Users\13372\AppData\Local\Android\Sdk'
+$env:ANDROID_SDK_ROOT=$env:ANDROID_HOME
+$env:Path="$env:JAVA_HOME\bin;$env:ANDROID_HOME\platform-tools;$env:Path"
+.\gradlew.bat :app:assembleDebug
+```
+
+Verification result:
+
+```text
+BUILD SUCCESSFUL
+```
+
+Current limitations:
+
+- This is a first visual refinement pass; it has not been reviewed on a physical Android screen yet.
+- Layout is still a single scroll surface rather than a bottom-nav or tabbed app.
+
+Next recommended step:
+
+1. Review on emulator/physical device and tune spacing.
+2. Consider splitting Git/Timeline/Approvals into tabs after manual use.

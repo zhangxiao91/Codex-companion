@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -101,9 +102,9 @@ private fun CompanionApp(
 ) {
     MaterialTheme(
         colorScheme = MaterialTheme.colorScheme.copy(
-            primary = Color(0xFF176B52),
-            surface = Color(0xFFF7F8FA),
-            background = Color(0xFFF7F8FA)
+            primary = AppGreen,
+            surface = PanelWhite,
+            background = AppCanvas
         )
     ) {
         Surface(
@@ -157,7 +158,7 @@ private fun SessionDashboard(
             .padding(horizontal = 16.dp, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Header(status = uiState.connectionStatus)
+        Header(uiState = uiState)
         HostSummary(
             uiState = uiState,
             onReconnect = onReconnect,
@@ -204,25 +205,48 @@ private fun SessionDashboard(
 }
 
 @Composable
-private fun Header(status: String) {
-    Row(
+private fun Header(uiState: RelayUiState) {
+    Surface(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+        shape = RoundedCornerShape(8.dp),
+        color = Ink,
+        shadowElevation = 0.dp
     ) {
-        Column {
-            Text(
-                text = "Codex Companion",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.SemiBold
-            )
-            Text(
-                text = "Session control window",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color(0xFF5E6978)
-            )
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Codex Companion",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White
+                    )
+                    Text(
+                        text = uiState.selectedSession?.projectName ?: "Session control window",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFFB7C3CF),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                StatusPill(text = uiState.connectionStatus, tone = statusTone(uiState.connectionStatus))
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                StatChip(modifier = Modifier.weight(1f), label = "Sessions", value = uiState.sessions.size.toString())
+                StatChip(modifier = Modifier.weight(1f), label = "Approvals", value = uiState.pendingApprovals.size.toString())
+                StatChip(modifier = Modifier.weight(1f), label = "Audit", value = uiState.selectedGitAudit.size.toString())
+            }
         }
-        StatusPill(text = status)
     }
 }
 
@@ -245,22 +269,23 @@ private fun HostSummary(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Relay connection", fontWeight = FontWeight.SemiBold)
+                    SectionTitle("Relay connection")
                     Text(
                         text = diagnosticsSummary(uiState),
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF5E6978),
+                        color = MutedText,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                StatusPill(text = uiState.connectionStatus)
+                StatusPill(text = uiState.connectionStatus, tone = statusTone(uiState.connectionStatus))
             }
             TextField(
                 modifier = Modifier.fillMaxWidth(),
                 value = relayUrlDraft,
                 onValueChange = { relayUrlDraft = it },
-                singleLine = true
+                singleLine = true,
+                label = { Text("Relay URL") }
             )
             TextField(
                 modifier = Modifier.fillMaxWidth(),
@@ -270,14 +295,13 @@ private fun HostSummary(
                 label = { Text("Pairing token") },
                 visualTransformation = PasswordVisualTransformation()
             )
-            Text(
+            InlineNotice(
                 text = if (uiState.deviceToken.isNotBlank()) {
                     "Paired device ${uiState.deviceId.take(8)}"
                 } else {
                     "Not paired"
                 },
-                style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFF5E6978)
+                tone = if (uiState.deviceToken.isNotBlank()) NoticeTone.Positive else NoticeTone.Neutral
             )
             RelayActionButtons(
                 connectionStatus = uiState.connectionStatus,
@@ -290,7 +314,7 @@ private fun HostSummary(
                 Text(
                     text = uiState.lastHealthCheck,
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF176B52),
+                    color = AppGreen,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -299,7 +323,7 @@ private fun HostSummary(
                 Text(
                     text = uiState.lastError,
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFFB42318),
+                    color = Danger,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -327,7 +351,7 @@ private fun RelayActionButtons(
                     .weight(1f)
                     .heightIn(min = 44.dp),
                 onClick = onSave,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF176B52))
+                colors = ButtonDefaults.buttonColors(containerColor = AppGreen)
             ) {
                 Text("Save", maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
@@ -375,12 +399,12 @@ private fun SessionSummary(
 ) {
     Panel {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Sessions", fontWeight = FontWeight.SemiBold)
+            SectionTitle("Sessions")
             if (sessions.isEmpty()) {
                 Text(
                     text = "No sessions yet. Start Relay and Host Bridge, then reconnect.",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Color(0xFF5E6978)
+                    color = MutedText
                 )
             } else {
                 sessions.take(4).forEach { session ->
@@ -402,7 +426,7 @@ private fun SessionRow(session: CodexSession, selected: Boolean, onClick: () -> 
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onClick),
-        color = if (selected) Color(0xFFE8F7F0) else Color(0xFFF7F8FA),
+        color = if (selected) SoftGreen else SoftPanel,
         shape = RoundedCornerShape(8.dp)
     ) {
         Column(
@@ -421,12 +445,12 @@ private fun SessionRow(session: CodexSession, selected: Boolean, onClick: () -> 
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
-                StatusPill(text = session.status)
+                StatusPill(text = session.status, tone = statusTone(session.status))
             }
             Text(
                 text = session.summary.ifBlank { session.repoPath },
                 style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFF5E6978),
+                color = MutedText,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
@@ -462,30 +486,35 @@ private fun GitPanel(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Git", fontWeight = FontWeight.SemiBold)
+                    SectionTitle("Git")
                     Text(
                         text = gitSummary(selectedSession, snapshot),
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF5E6978),
+                        color = MutedText,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                StatusPill(text = snapshot?.branch ?: selectedSession?.branch ?: "unknown")
+                StatusPill(text = snapshot?.branch ?: selectedSession?.branch ?: "unknown", tone = NoticeTone.Neutral)
             }
             if (snapshot != null) {
-                Text(
-                    text = gitChangeSummary(snapshot),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF344054),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    MetricTile(modifier = Modifier.weight(1f), label = "Changed", value = snapshot.files.size.toString())
+                    MetricTile(modifier = Modifier.weight(1f), label = "Tracked", value = snapshot.trackedFileCount.toString())
+                    MetricTile(modifier = Modifier.weight(1f), label = "New", value = snapshot.untrackedFileCount.toString())
+                }
+                InlineNotice(
+                    text = snapshot.statusSummary.ifBlank { "clean" },
+                    tone = if (snapshot.files.isEmpty()) NoticeTone.Positive else NoticeTone.Warning
                 )
                 if (snapshot.diffStat.isNotBlank()) {
                     Text(
                         text = snapshot.diffStat,
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF5E6978),
+                        color = MutedText,
                         maxLines = 3,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -508,7 +537,7 @@ private fun GitPanel(
                     Text(
                         text = snapshot.resultMessage,
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (snapshot.resultOk == false) Color(0xFFB42318) else Color(0xFF176B52),
+                        color = if (snapshot.resultOk == false) Danger else AppGreen,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -517,7 +546,7 @@ private fun GitPanel(
                     Text(
                         text = snapshot.error,
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFFB42318),
+                        color = Danger,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -557,7 +586,7 @@ private fun GitPanel(
                 modifier = Modifier.fillMaxWidth(),
                 enabled = canCommit && commitMessage.isNotBlank(),
                 onClick = { confirmCommit = true },
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF176B52))
+                colors = ButtonDefaults.buttonColors(containerColor = AppGreen)
             ) {
                 Text("Commit")
             }
@@ -572,7 +601,7 @@ private fun GitPanel(
                 Text(
                     text = "Push is available only when the worktree is clean.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF8A94A6),
+                    color = SubtleText,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -581,7 +610,7 @@ private fun GitPanel(
                 Text(
                     text = commitStrategyWarning(currentSnapshot, commitStrategy),
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (commitStrategy == "include_untracked") Color(0xFF176B52) else Color(0xFFB42318),
+                    color = if (commitStrategy == "include_untracked") AppGreen else Danger,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -590,7 +619,7 @@ private fun GitPanel(
                 Text(
                     text = "Select an online session to refresh Git status.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF8A94A6)
+                    color = SubtleText
                 )
             }
             GitAuditPreview(
@@ -639,7 +668,7 @@ private fun GitAuditPreview(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Git audit", fontWeight = FontWeight.SemiBold)
+            SectionTitle("Git audit")
             OutlinedButton(
                 enabled = enabled,
                 onClick = onRefresh
@@ -651,7 +680,7 @@ private fun GitAuditPreview(
             Text(
                 text = "No audit events loaded.",
                 style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFF8A94A6)
+                color = SubtleText
             )
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -668,7 +697,7 @@ private fun GitAuditRow(event: GitAuditItem) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color(0xFFF7F8FA), RoundedCornerShape(8.dp))
+            .background(SoftPanel, RoundedCornerShape(8.dp))
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
@@ -676,14 +705,14 @@ private fun GitAuditRow(event: GitAuditItem) {
             text = gitAuditTitle(event),
             style = MaterialTheme.typography.bodySmall,
             fontWeight = FontWeight.Medium,
-            color = Color(0xFF344054),
+            color = BodyText,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
         Text(
             text = gitAuditDetail(event),
             style = MaterialTheme.typography.labelSmall,
-            color = Color(0xFF5E6978),
+            color = MutedText,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis
         )
@@ -725,7 +754,7 @@ private fun StrategyButton(
         Button(
             modifier = modifier.height(40.dp),
             onClick = onClick,
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF176B52))
+            colors = ButtonDefaults.buttonColors(containerColor = AppGreen)
         ) {
             Text(text)
         }
@@ -762,7 +791,7 @@ private fun CommitConfirmDialog(
                 Text(
                     text = commitConfirmText(changedFileCount, untrackedFileCount, commitStrategy),
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF5E6978)
+                    color = MutedText
                 )
                 if (untrackedFileCount > 0) {
                     Text(
@@ -772,13 +801,13 @@ private fun CommitConfirmDialog(
                             "$untrackedFileCount untracked file(s) will not be committed by the current tracked-only strategy."
                         },
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (commitStrategy == "include_untracked") Color(0xFF176B52) else Color(0xFFB42318)
+                        color = if (commitStrategy == "include_untracked") AppGreen else Danger
                     )
                 }
                 Text(
                     text = message,
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF344054),
+                    color = BodyText,
                     maxLines = 3,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -792,7 +821,7 @@ private fun CommitConfirmDialog(
                     Button(
                         modifier = Modifier.weight(1f),
                         onClick = onConfirm,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF176B52))
+                        colors = ButtonDefaults.buttonColors(containerColor = AppGreen)
                     ) {
                         Text("Confirm")
                     }
@@ -822,12 +851,12 @@ private fun PushConfirmDialog(
                 Text(
                     text = pushConfirmText(branch),
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF5E6978)
+                    color = MutedText
                 )
                 Text(
                     text = "Host Bridge will execute push only when write and push actions are explicitly enabled and host policy allows it.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFFB42318)
+                    color = Danger
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedButton(
@@ -839,7 +868,7 @@ private fun PushConfirmDialog(
                     Button(
                         modifier = Modifier.weight(1f),
                         onClick = onConfirm,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF176B52))
+                        colors = ButtonDefaults.buttonColors(containerColor = AppGreen)
                     ) {
                         Text("Push")
                     }
@@ -856,7 +885,7 @@ private fun GitFileRow(file: GitFileChange, selected: Boolean, onClick: () -> Un
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onClick),
-        color = if (selected) Color(0xFFE8F7F0) else Color(0xFFF7F8FA),
+        color = if (selected) SoftGreen else SoftPanel,
         shape = RoundedCornerShape(8.dp)
     ) {
         Row(
@@ -867,14 +896,14 @@ private fun GitFileRow(file: GitFileChange, selected: Boolean, onClick: () -> Un
             Text(
                 text = gitFileStatus(file),
                 style = MaterialTheme.typography.labelMedium,
-                color = Color(0xFF176B52),
+                color = AppGreen,
                 fontWeight = FontWeight.Medium
             )
             Text(
                 text = file.path,
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFF344054),
+                color = BodyText,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -886,7 +915,7 @@ private fun GitFileRow(file: GitFileChange, selected: Boolean, onClick: () -> Un
 private fun DiffPreview(snapshot: GitSnapshot) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = Color(0xFF101828),
+        color = Ink,
         shape = RoundedCornerShape(8.dp)
     ) {
         Column(
@@ -896,7 +925,7 @@ private fun DiffPreview(snapshot: GitSnapshot) {
             Text(
                 text = snapshot.selectedFilePath,
                 style = MaterialTheme.typography.labelMedium,
-                color = Color(0xFFE8F7F0),
+                color = SoftGreen,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -973,7 +1002,7 @@ private fun ApprovalRow(
             Text(
                 text = approval.summary.ifBlank { approval.kind },
                 style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFF5E6978),
+                color = MutedText,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
@@ -981,7 +1010,7 @@ private fun ApprovalRow(
                 Text(
                     text = approval.command,
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF344054),
+                    color = BodyText,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -989,7 +1018,7 @@ private fun ApprovalRow(
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Button(
                     onClick = { onDecision(approval.approvalId, "approve_once") },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF176B52))
+                    colors = ButtonDefaults.buttonColors(containerColor = AppGreen)
                 ) {
                     Text("Approve")
                 }
@@ -1005,13 +1034,13 @@ private fun ApprovalRow(
 private fun TimelineList(events: List<TimelineItem>, modifier: Modifier = Modifier) {
     Panel(modifier = modifier) {
         Column(modifier = Modifier.fillMaxSize()) {
-            Text("Timeline", fontWeight = FontWeight.SemiBold)
+            SectionTitle("Timeline")
             Spacer(modifier = Modifier.height(8.dp))
             if (events.isEmpty()) {
                 Text(
                     text = "No timeline events for the selected session yet.",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Color(0xFF5E6978)
+                    color = MutedText
                 )
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1032,19 +1061,19 @@ private fun TimelineRow(item: TimelineItem) {
                 .padding(top = 5.dp)
                 .size(9.dp)
                 .clip(RoundedCornerShape(9.dp))
-                .background(Color(0xFF176B52))
+                .background(AppGreen)
         )
         Column(modifier = Modifier.weight(1f)) {
             Text(item.title, fontWeight = FontWeight.Medium)
             Text(
                 text = item.summary,
                 style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFF5E6978)
+                color = MutedText
             )
             Text(
                 text = item.type,
                 style = MaterialTheme.typography.labelSmall,
-                color = Color(0xFF8A94A6)
+                color = SubtleText
             )
             HorizontalDivider(
                 modifier = Modifier.padding(top = 10.dp),
@@ -1076,7 +1105,7 @@ private fun PromptComposer(
         Button(
             enabled = enabled && value.isNotBlank(),
             onClick = onSend,
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF176B52))
+            colors = ButtonDefaults.buttonColors(containerColor = AppGreen)
         ) {
             Text("Send")
         }
@@ -1088,7 +1117,7 @@ private fun Panel(modifier: Modifier = Modifier, content: @Composable () -> Unit
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
-        color = Color.White,
+        color = PanelWhite,
         tonalElevation = 1.dp,
         shadowElevation = 0.dp
     ) {
@@ -1099,20 +1128,133 @@ private fun Panel(modifier: Modifier = Modifier, content: @Composable () -> Unit
 }
 
 @Composable
-private fun StatusPill(text: String) {
+private fun SectionTitle(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.SemiBold,
+        color = BodyText
+    )
+}
+
+@Composable
+private fun StatChip(modifier: Modifier = Modifier, label: String, value: String) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(8.dp),
+        color = Color(0xFF182536)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                text = value,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFFB7C3CF),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun MetricTile(modifier: Modifier = Modifier, label: String, value: String) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(8.dp),
+        color = SoftPanel,
+        border = BorderStroke(1.dp, Color(0xFFE2E8F0))
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                text = value,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = BodyText
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MutedText,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun InlineNotice(text: String, tone: NoticeTone) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = tone.background
+    ) {
+        Text(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = tone.foreground,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun StatusPill(text: String, tone: NoticeTone = NoticeTone.Positive) {
     Surface(
         shape = RoundedCornerShape(99.dp),
-        color = Color(0xFFE8F7F0)
+        color = tone.background
     ) {
         Text(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
             text = text,
             style = MaterialTheme.typography.labelMedium,
-            color = Color(0xFF176B52),
+            color = tone.foreground,
             fontWeight = FontWeight.Medium
         )
     }
 }
+
+private enum class NoticeTone(val background: Color, val foreground: Color) {
+    Positive(SoftGreen, AppGreen),
+    Warning(Color(0xFFFFF4D6), Color(0xFF9A5B00)),
+    Critical(Color(0xFFFFE7E3), Danger),
+    Neutral(Color(0xFFEFF3F7), MutedText)
+}
+
+private fun statusTone(status: String): NoticeTone {
+    val normalized = status.lowercase()
+    return when {
+        normalized == "online" || normalized == "running" || normalized == "completed" -> NoticeTone.Positive
+        normalized == "connecting" || normalized == "waiting_for_input" || normalized == "idle" -> NoticeTone.Warning
+        normalized == "disconnected" || normalized == "failed" || normalized == "error" -> NoticeTone.Critical
+        else -> NoticeTone.Neutral
+    }
+}
+
+private val AppCanvas = Color(0xFFF3F5F7)
+private val PanelWhite = Color(0xFFFFFFFF)
+private val SoftPanel = Color(0xFFF8FAFC)
+private val Ink = Color(0xFF111927)
+private val BodyText = Color(0xFF263241)
+private val MutedText = Color(0xFF5C6877)
+private val SubtleText = Color(0xFF8A94A6)
+private val AppGreen = Color(0xFF176B52)
+private val SoftGreen = Color(0xFFE6F4EF)
+private val Danger = Color(0xFFB42318)
 
 private fun diagnosticsSummary(uiState: RelayUiState): String {
     val connectedAt = uiState.lastConnectedAt ?: "never"
