@@ -99,6 +99,13 @@ npm run dev:pair
 
 如果默认 `8787` 端口被占用，脚本会自动选择后续可用端口，并把正确端口写入 pairing code。
 
+`npm run dev:pair` 默认使用真实 `CODEX_ADAPTER=app-server`，手机端会看到真实 Codex threads。需要回退到 mock 数据时可显式运行：
+
+```powershell
+$env:CODEX_ADAPTER='mock'
+npm run dev:pair
+```
+
 如果需要手动启动，Host Bridge 仍可以使用同一个临时 dev token 连接 Relay：
 
 ```powershell

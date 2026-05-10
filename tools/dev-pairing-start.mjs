@@ -6,6 +6,7 @@ import { createServer } from 'node:net';
 const relayPort = await resolveRelayPort();
 const lanHost = process.env.RELAY_LAN_HOST || findLanAddress();
 const token = process.env.RELAY_DEV_TOKEN || `cmc_${randomBytes(32).toString('base64url')}`;
+const codexAdapter = process.env.CODEX_ADAPTER || 'app-server';
 const relayUrlForAndroid = process.env.RELAY_ANDROID_URL || `ws://${lanHost}:${relayPort}`;
 const relayUrlForBridge = `ws://127.0.0.1:${relayPort}`;
 const pairingCode = createPairingCode({
@@ -30,6 +31,7 @@ children.push(relay);
 await waitForOutput(relay, '[relay] listening', 5000);
 
 console.log(`[pairing] Relay URL for Android: ${relayUrlForAndroid}`);
+console.log(`[pairing] Host Bridge adapter: ${codexAdapter}`);
 console.log('[pairing] Pairing code:');
 console.log(pairingCode);
 console.log('');
@@ -42,6 +44,7 @@ console.log('');
 
 const bridge = spawnProcess('bridge', 'node', ['bridge/host-bridge/index.mjs'], {
   ...process.env,
+  CODEX_ADAPTER: codexAdapter,
   RELAY_URL: relayUrlForBridge,
   RELAY_DEV_TOKEN: token
 });

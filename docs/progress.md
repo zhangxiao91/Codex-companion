@@ -1975,3 +1975,25 @@ Result:
 ```text
 [verify] Dev pairing code generation verified.
 ```
+
+## 2026-05-10: Dev pairing defaults to real Codex adapter
+
+Status: completed.
+
+Changes:
+
+- `npm run dev:pair` now starts Host Bridge with `CODEX_ADAPTER=app-server` by default.
+- Android pairing through the generated code should now show real Codex threads instead of the mock session.
+- Mock data remains available by explicitly setting `CODEX_ADAPTER=mock` before running `npm run dev:pair`.
+
+Verification:
+
+```powershell
+npm run verify:dev-pairing-code
+```
+
+Result:
+
+```text
+[verify] Dev pairing code generation verified.
+```
