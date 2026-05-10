@@ -1,8 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import { networkInterfaces } from 'node:os';
 import { spawn } from 'node:child_process';
+import { createServer } from 'node:net';
 
-const relayPort = process.env.RELAY_PORT ?? '8787';
+const relayPort = await resolveRelayPort();
 const lanHost = process.env.RELAY_LAN_HOST || findLanAddress();
 const token = process.env.RELAY_DEV_TOKEN || `cmc_${randomBytes(32).toString('base64url')}`;
 const relayUrlForAndroid = process.env.RELAY_ANDROID_URL || `ws://${lanHost}:${relayPort}`;
@@ -15,15 +16,19 @@ const pairingCode = createPairingCode({
 
 const children = [];
 
+console.log('[pairing] Starting Codex Mobile Companion dev pair.');
+console.log(`[pairing] Starting Relay on port ${relayPort}.`);
+
 const relay = spawnProcess('relay', 'node', ['relay/service/server.mjs'], {
   ...process.env,
   RELAY_HOST: '0.0.0.0',
-  RELAY_PORT: relayPort,
+  RELAY_PORT: String(relayPort),
   RELAY_DEV_TOKEN: token
 });
 children.push(relay);
 
-console.log('[pairing] Starting Codex Mobile Companion dev pair.');
+await waitForOutput(relay, '[relay] listening', 5000);
+
 console.log(`[pairing] Relay URL for Android: ${relayUrlForAndroid}`);
 console.log('[pairing] Pairing code:');
 console.log(pairingCode);
@@ -34,8 +39,6 @@ if (lanHost.startsWith('169.254.')) {
   console.log('[pairing] Warning: selected a 169.254.x.x link-local address. Set RELAY_LAN_HOST to your Wi-Fi/LAN IPv4 address if Android cannot connect.');
 }
 console.log('');
-
-await waitForOutput(relay, '[relay] listening', 5000);
 
 const bridge = spawnProcess('bridge', 'node', ['bridge/host-bridge/index.mjs'], {
   ...process.env,
@@ -50,6 +53,32 @@ process.on('SIGTERM', shutdown);
 function createPairingCode(payload) {
   const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
   return `cmc1.${encoded}`;
+}
+
+async function resolveRelayPort() {
+  if (process.env.RELAY_PORT) {
+    return Number.parseInt(process.env.RELAY_PORT, 10);
+  }
+
+  const start = 8787;
+  for (let port = start; port < start + 20; port += 1) {
+    if (await isPortAvailable(port)) {
+      return port;
+    }
+  }
+
+  throw new Error('Could not find an available Relay port from 8787 to 8806.');
+}
+
+function isPortAvailable(port) {
+  return new Promise((resolve) => {
+    const server = createServer();
+    server.once('error', () => resolve(false));
+    server.once('listening', () => {
+      server.close(() => resolve(true));
+    });
+    server.listen(port, '0.0.0.0');
+  });
 }
 
 function findLanAddress() {

@@ -97,6 +97,8 @@ npm run dev:pair
 
 脚本会生成高强度随机 token，启动 Relay 和 Host Bridge，并打印一条 `cmc1...` pairing code。把这条 code 粘贴到 Android 的 Pairing code 输入框，点击 Use code 即可自动保存 Relay URL、保存 pairing token，并换取 device token。
 
+如果默认 `8787` 端口被占用，脚本会自动选择后续可用端口，并把正确端口写入 pairing code。
+
 如果需要手动启动，Host Bridge 仍可以使用同一个临时 dev token 连接 Relay：
 
 ```powershell

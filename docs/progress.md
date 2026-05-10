@@ -1952,3 +1952,26 @@ Result:
 ```text
 [verify] Dev pairing code generation verified.
 ```
+
+## 2026-05-10: Dev pairing port fallback
+
+Status: completed.
+
+Changes:
+
+- `npm run dev:pair` now probes for an available Relay port when `RELAY_PORT` is not explicitly set.
+- Default search range is `8787` through `8806`.
+- Pairing code is now printed only after Relay successfully starts listening.
+- If `8787` is occupied by an old Relay process, the script automatically uses the next available port and embeds that port in the Android pairing code.
+
+Verification:
+
+```powershell
+npm run verify:dev-pairing-code
+```
+
+Result:
+
+```text
+[verify] Dev pairing code generation verified.
+```
