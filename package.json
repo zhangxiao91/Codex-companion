@@ -15,6 +15,7 @@
     "verify:app-server-timeline": "node tools/verify-app-server-timeline.mjs",
     "verify:app-server-prompt": "node tools/verify-app-server-prompt.mjs",
     "verify:app-server-steer": "node tools/verify-app-server-steer.mjs",
+    "verify:relay-timeline-cache": "node tools/verify-relay-timeline-cache.mjs",
     "verify:live-notification-mapper": "node tools/verify-live-notification-mapper.mjs",
     "verify:delivery-strategy": "node tools/verify-delivery-strategy.mjs"
   },

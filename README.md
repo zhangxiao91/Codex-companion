@@ -70,10 +70,23 @@ Codex Mobile Companion 是一个 Android 优先的 Codex 移动协作入口。�
 
 ## Current Status
 
-当前仓库处于产品与架构设计阶段，还没有应用代码。下一步建议先做技术验证：
+当前仓库已完成 Node 原型主链路验证，但还没有 Android 应用代码。
 
-- 验证 Codex App Server/SDK 或 CLI wrapper 能否稳定输出 session events。
-- 实现最小 Host Bridge。
-- 实现最小 Relay。
-- 实现 Android session timeline 原型。
+已验证：
 
+- 最小 Relay、Host Bridge、MockCodexAdapter 和测试客户端。
+- Codex App Server adapter 的 `thread/list`、`thread/read`、`turn/start`、`turn/steer`。
+- App Server live notifications 到移动端 timeline events 的映射。
+- 专用 ephemeral test thread，避免污染真实历史会话。
+- prompt 后等待真实 `assistant_delta` 或 `turn_completed`。
+- Relay 内存 timeline cache 和 `after_cursor` 补发。
+
+当前机器尚未检测到 Java、Gradle 或 adb，因此 Android MVP Shell 需要等 Android 工具链可用后启动。缓存/cursor 已完成后，产品上已经可以开始 Android shell：先做 host/session/timeline/prompt 信息流，不做手机 IDE。
+
+常用验证命令：
+
+```powershell
+npm run verify:delivery-strategy
+npm run verify:relay-timeline-cache
+npm run verify:app-server-prompt
+```

@@ -10,13 +10,16 @@ import {
 import { handleWebSocketUpgrade } from './ws-server.mjs';
 
 const port = Number.parseInt(process.env.RELAY_PORT ?? '8787', 10);
+const timelineCacheLimit = Number.parseInt(process.env.RELAY_TIMELINE_CACHE_LIMIT ?? '200', 10);
 
 const state = {
   hosts: new Map(),
   hostConnections: new Map(),
   sessions: new Map(),
   clients: new Set(),
-  subscriptions: new Map()
+  subscriptions: new Map(),
+  timelineEvents: new Map(),
+  nextTimelineCursor: 1
 };
 
 const server = createServer((request, response) => {
@@ -163,6 +166,10 @@ function handleSessionSubscribe(connection, message) {
   const session = state.sessions.get(sessionId);
   if (session) {
     send(connection, createMessage(MessageType.SessionSnapshot, { session }));
+    sendCachedTimeline(connection, sessionId, {
+      afterCursor: message.payload.after_cursor,
+      limit: message.payload.limit
+    });
   }
 }
 
@@ -205,6 +212,15 @@ function handleSessionTimelineRequest(connection, message) {
   subscriptions.add(message.payload.session_id);
   state.subscriptions.set(connection, subscriptions);
 
+  sendCachedTimeline(connection, message.payload.session_id, {
+    afterCursor: message.payload.after_cursor,
+    limit: message.payload.limit
+  });
+
+  if (message.payload.cache_only === true) {
+    return;
+  }
+
   const hostConnection = state.hostConnections.get(session.host_id);
   if (!hostConnection) {
     sendError(connection, `Host is offline: ${session.host_id}`);
@@ -217,8 +233,9 @@ function handleSessionTimelineRequest(connection, message) {
 
 function handleTimelineEvent(connection, message) {
   requirePayloadField(message, 'event');
-  console.log(`[relay] timeline event: ${message.payload.event.title}`);
-  broadcastToClients(message);
+  const event = cacheTimelineEvent(message.payload.event);
+  console.log(`[relay] timeline event: ${event.title}`);
+  broadcastToClients(createMessage(MessageType.TimelineEvent, { event }));
 }
 
 function handleClose(connection) {
@@ -248,6 +265,58 @@ function broadcastToClients(message) {
       send(client, message);
     }
   }
+}
+
+function cacheTimelineEvent(event) {
+  const cursor = state.nextTimelineCursor;
+  state.nextTimelineCursor += 1;
+
+  const cachedEvent = {
+    ...event,
+    cursor: String(cursor),
+    cached_at: new Date().toISOString()
+  };
+
+  const events = state.timelineEvents.get(cachedEvent.session_id) ?? [];
+  events.push(cachedEvent);
+
+  while (events.length > timelineCacheLimit) {
+    events.shift();
+  }
+
+  state.timelineEvents.set(cachedEvent.session_id, events);
+  return cachedEvent;
+}
+
+function sendCachedTimeline(connection, sessionId, options = {}) {
+  const cachedEvents = state.timelineEvents.get(sessionId) ?? [];
+  if (cachedEvents.length === 0) {
+    return;
+  }
+
+  const afterCursor = parseCursor(options.afterCursor);
+  const limit = Number.isInteger(options.limit) && options.limit > 0 ? options.limit : cachedEvents.length;
+  const selectedEvents = cachedEvents
+    .filter((event) => parseCursor(event.cursor) > afterCursor)
+    .slice(0, limit);
+
+  for (const event of selectedEvents) {
+    send(connection, createMessage(MessageType.TimelineEvent, {
+      event: {
+        ...event,
+        replayed_from_cache: true
+      }
+    }));
+  }
+}
+
+function parseCursor(cursor) {
+  if (cursor === undefined || cursor === null || cursor === '') {
+    return 0;
+  }
+
+  const parsed = Number.parseInt(cursor, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }
 
 function send(connection, message) {

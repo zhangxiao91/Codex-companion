@@ -525,3 +525,62 @@ npm run verify:app-server-timeline
 1. 为 Relay 增加最小 timeline cache/cursor，支持移动端断线重连后补齐 live events。
 2. 将 `assistant_delta` 聚合为移动端可稳定展示的 assistant message 状态。
 3. 实现 approval request/decision 映射，让等待用户处理的 Codex 请求进入移动端主入口。
+
+## 2026-05-10: Relay timeline cache and cursor recovery
+
+状态：完成 Node 原型。
+
+本次目标：
+
+- 让 Relay 不只是即时广播 timeline event，而是能短期缓存最近事件。
+- 为移动端断线重连提供 `after_cursor` 补发能力。
+- 保持实现为内存版，避免过早引入数据库或 Redis。
+
+完成内容：
+
+- Relay 新增每个 timeline event 的单调递增 `cursor`。
+- Relay 按 session 缓存最近 timeline events。
+- 新增环境变量 `RELAY_TIMELINE_CACHE_LIMIT`，默认每个 session 保留 200 条。
+- `session.timeline.request` 支持 `after_cursor`，会先补发缓存中 cursor 更大的事件。
+- `session.timeline.request` 支持 `cache_only: true`，用于只从 Relay 缓存恢复，不打到 Host Bridge。
+- `session.subscribe` 支持带 `after_cursor` 订阅单个 session 时补发缓存事件。
+- 新增 `npm run verify:relay-timeline-cache`。
+
+验证命令：
+
+```powershell
+npm run verify:relay-timeline-cache
+npm run verify:delivery-strategy
+npm run verify:live-notification-mapper
+npm run verify:app-server-prompt
+```
+
+验证结果摘要：
+
+```text
+[relay] timeline event: First cached event
+[relay] timeline event: Second cached event
+[verify] Relay timeline cache cursor replay verified.
+[verify] Delivery Strategy main path verified.
+[verify] Live notification mapper verified.
+[verify] App Server ephemeral prompt produced a live assistant/completion event through Relay.
+```
+
+当前限制：
+
+- 缓存仍是 Relay 进程内存，Relay 重启后会丢失。
+- `cursor` 当前是 Relay 进程内全局递增值，还不是持久化事件序列。
+- 未实现客户端 ack、过期策略、按用户/host 隔离的存储策略或 Redis/PostgreSQL 后端。
+- cached event 补发目前是逐条 WebSocket message，后续 Android 端需要做本地去重。
+
+关于何时开始构建 Android 应用：
+
+- 从产品闭环看，现在可以开始 Android MVP Shell。主链路已经包括 session list、timeline、prompt、live assistant event 和 cursor recovery。
+- 从当前机器环境看，还不能直接构建 Android，因为 `java`、`gradle` 和 `adb` 都不可用。
+- 推荐下一步并行：一边补 Android 工具链，一边继续做 approval request/decision 映射。工具链一可用，就先做 host/session/timeline/prompt 的 Android 信息流壳。
+
+下一步建议：
+
+1. 补齐 Android 工具链并创建 Kotlin + Jetpack Compose skeleton。
+2. 实现 approval request/decision 映射，支撑移动端“需要处理”入口。
+3. 将 Relay cache 从内存抽象成接口，后续替换为 Redis/PostgreSQL。

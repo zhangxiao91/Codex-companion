@@ -194,12 +194,15 @@ Timeline Event 是移动端进度流的基本单元。
 
 - `event_id`
 - `session_id`
+- `cursor`
 - `created_at`
 - `type`
 - `title`
 - `summary`
 - `payload`
 - `redaction_level`
+
+Relay 会为收到的 timeline event 附加单调递增的 `cursor`，并按 session 保留短期内存缓存。客户端断线重连后可以在 `session.timeline.request` 或 `session.subscribe` 中携带 `after_cursor`，Relay 先补发缓存中 cursor 更大的事件，再按需把 timeline request 转发给 Host Bridge。
 
 ### 4.4 Approval Request
 
@@ -420,4 +423,3 @@ Real-time channel:
 - Codex Cloud 官方任务是否有可用 API 支持第三方移动端订阅。
 - 初版 Relay 是否需要多租户，还是先做单用户自托管。
 - GitHub PR 能力应直接接 GitHub API，还是通过 Codex/Git CLI 间接完成。
-

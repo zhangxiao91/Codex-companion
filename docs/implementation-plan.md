@@ -27,6 +27,8 @@
 - prompt 验证已改为创建专用 ephemeral thread，避免污染用户真实历史会话。
 - active turn 的 `turn/steer` prompt routing 已完成，移动端后续指令可以追加到正在运行的 Codex turn。
 - prompt 验证已升级为等待 live `assistant_delta` 或 `turn_completed`，证明移动端可看到真实 Codex 回答事件。
+- Relay 已实现最小内存 timeline cache 和 `after_cursor` 补发，可支撑移动端断线重连后的事件恢复原型。
+- Android 应用可以在 cache/cursor 完成后开始构建；当前机器仍缺 Java、Gradle 和 adb，需先补齐 Android 工具链。
 - 详细记录见 `docs/progress.md`。
 
 ## 2. Milestone 0: Research Spike
@@ -92,8 +94,8 @@
 - 实现 host registration。
 - 实现 pairing code flow。
 - 实现 WebSocket/SSE event subscription。
-- 实现 event cursor。
-- 实现短期 event cache。
+- 实现 event cursor。（Node 原型已完成内存版）
+- 实现短期 event cache。（Node 原型已完成内存版）
 - 实现 audit log。
 - 实现 push notification stub。
 
@@ -107,6 +109,12 @@
 ## 5. Milestone 3: Android MVP Shell
 
 目标：做出 Android 端的基本信息流体验。
+
+启动条件：
+
+- Relay/Bridge 已支持 session list、timeline、prompt 和 cursor recovery 原型。
+- 开发机器具备 JDK、Gradle/Android Gradle Plugin、Android SDK 和 adb。
+- 初版 Android 只连接本地开发 Relay，不做账号体系、推送和复杂 Git 操作。
 
 任务：
 
