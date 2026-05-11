@@ -672,6 +672,9 @@ function handleSessionSubscribe(connection, message) {
 
   if (sessionId === '*') {
     for (const session of state.sessions.values()) {
+      if (!state.hostConnections.has(session.host_id)) {
+        continue;
+      }
       send(connection, createMessage(MessageType.SessionSnapshot, { session }));
     }
     for (const approval of state.approvals.values()) {
@@ -683,7 +686,7 @@ function handleSessionSubscribe(connection, message) {
   }
 
   const session = state.sessions.get(sessionId);
-  if (session) {
+  if (session && state.hostConnections.has(session.host_id)) {
     send(connection, createMessage(MessageType.SessionSnapshot, { session }));
     for (const approval of state.approvals.values()) {
       if (approval.session_id === sessionId && approval.status === 'pending') {
@@ -778,7 +781,16 @@ function handleClose(connection) {
     }
 
     state.hostConnections.delete(connection.hostId);
+    clearSessionsForHost(connection.hostId);
     console.log(`[relay] host disconnected: ${connection.hostId}`);
+  }
+}
+
+function clearSessionsForHost(hostId) {
+  for (const [sessionId, session] of state.sessions.entries()) {
+    if (session.host_id === hostId) {
+      state.sessions.delete(sessionId);
+    }
   }
 }
 

@@ -2224,3 +2224,44 @@ Next recommended step:
 1. Deploy Relay behind HTTPS/WSS on the server.
 2. Run `npm run server:smoke` against the real server URL.
 3. Start the local PC Host Bridge against the same server Relay and verify Android can pair, see sessions, and send a prompt over mobile data.
+
+## 2026-05-12: Hide stale sessions for offline hosts
+
+Status: completed.
+
+Problem:
+
+- Server smoke and local Host Bridge could register successfully, but Android could still hit `Host is offline`.
+- The likely cause was Relay keeping live session snapshots after a host disconnected or restarted.
+- Android could then subscribe to or select a stale session whose owning host no longer had an active WebSocket connection.
+
+Changes:
+
+- Relay now clears in-memory sessions owned by a host when that host disconnects.
+- `session.subscribe "*" ` now only returns sessions whose owning host is currently online.
+- Direct session subscription no longer replays a snapshot for a session whose owning host is offline.
+- Added `npm run verify:relay-offline-host-sessions`.
+
+Verification:
+
+```powershell
+npm run verify:relay-offline-host-sessions
+npm run verify:server-smoke-local
+npm run verify:relay-identity-storage
+npm run verify:server-bridge-start
+```
+
+Result:
+
+```text
+[verify] Relay offline host session cleanup verified.
+[smoke] Server Relay smoke test passed.
+[verify] Relay identity storage verified.
+[verify] Server Host Bridge startup helper verified.
+```
+
+Operational note:
+
+- Deploy this Relay update to the server and restart Relay.
+- Restart the local PC Host Bridge so it republishes fresh live sessions.
+- In Android, reconnect or re-apply the pairing code if the UI still has cached old sessions.

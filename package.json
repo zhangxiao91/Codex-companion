@@ -31,6 +31,7 @@
     "verify:git-push-disposable": "node tools/verify-git-push-disposable.mjs",
     "verify:relay-health": "node tools/verify-relay-health.mjs",
     "verify:relay-identity-storage": "node tools/verify-relay-identity-storage.mjs",
+    "verify:relay-offline-host-sessions": "node tools/verify-relay-offline-host-sessions.mjs",
     "verify:relay-public-url": "node tools/verify-relay-public-url.mjs",
     "verify:relay-timeline-cache": "node tools/verify-relay-timeline-cache.mjs",
     "verify:server-bridge-start": "node tools/verify-server-bridge-start.mjs",
