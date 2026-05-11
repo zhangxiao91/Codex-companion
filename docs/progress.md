@@ -2191,3 +2191,36 @@ Next recommended step:
 
 1. Run a real server smoke test: Android -> server Relay -> local PC Host Bridge.
 2. Split the current shared long-lived token into short-lived pairing codes, per-host tokens, and revocable device tokens before broad public exposure.
+
+## 2026-05-11: Server Relay smoke test script
+
+Status: completed.
+
+Changes:
+
+- Added `npm run server:smoke`.
+- Added `npm run verify:server-smoke-local` for local deterministic verification.
+- The script can run against a real server Relay using `RELAY_PUBLIC_HTTP_URL`, `RELAY_PUBLIC_WS_URL`, and `RELAY_DEV_TOKEN`.
+- The script can also start a local temporary Relay with `CMC_SMOKE_START_LOCAL=1` for deterministic verification.
+- Smoke coverage includes `/health`, `/pair`, authorized health diagnostics, WebSocket host registration, session visibility, prompt routing to host, and timeline event return to client.
+- Updated `README.md` and `docs/server-relay-plan.md` with the smoke-test command.
+
+Verification:
+
+```powershell
+npm run verify:server-smoke-local
+npm run verify:server-bridge-start
+```
+
+Result:
+
+```text
+[smoke] Server Relay smoke test passed.
+[verify] Server Host Bridge startup helper verified.
+```
+
+Next recommended step:
+
+1. Deploy Relay behind HTTPS/WSS on the server.
+2. Run `npm run server:smoke` against the real server URL.
+3. Start the local PC Host Bridge against the same server Relay and verify Android can pair, see sessions, and send a prompt over mobile data.

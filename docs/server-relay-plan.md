@@ -179,6 +179,21 @@ For local deterministic verification, use:
 npm run verify:server-bridge-start
 ```
 
+For a full server Relay smoke test, use:
+
+```powershell
+$env:RELAY_PUBLIC_HTTP_URL='https://relay.example.com'
+$env:RELAY_PUBLIC_WS_URL='wss://relay.example.com'
+$env:RELAY_DEV_TOKEN='use-the-current-server-secret'
+npm run server:smoke
+```
+
+The smoke test verifies `/health`, `/pair`, device-token authorized health diagnostics, WebSocket host registration, session visibility, prompt routing to the host, and timeline event return to the client. For local deterministic validation without a real server, run:
+
+```powershell
+npm run verify:server-smoke-local
+```
+
 ## Milestone 3: Durable Identity and Cursor State
 
 Goal: Relay restart should not force full re-pairing.

@@ -11,6 +11,7 @@
     "server:relay": "node tools/server-relay-start.mjs",
     "server:bridge": "node tools/server-host-bridge-start.mjs",
     "server:pairing-code": "node tools/server-pairing-code.mjs",
+    "server:smoke": "node tools/server-smoke-test.mjs",
     "test-client": "node tools/test-client/index.mjs",
     "ephemeral-prompt-client": "node tools/ephemeral-prompt-client/index.mjs",
     "steer-client": "node tools/steer-client/index.mjs",
@@ -35,6 +36,7 @@
     "verify:server-bridge-start": "node tools/verify-server-bridge-start.mjs",
     "verify:server-pairing-code": "node tools/verify-server-pairing-code.mjs",
     "verify:server-relay-start": "node tools/verify-server-relay-start.mjs",
+    "verify:server-smoke-local": "node tools/verify-server-smoke-local.mjs",
     "verify:live-notification-mapper": "node tools/verify-live-notification-mapper.mjs",
     "verify:delivery-strategy": "node tools/verify-delivery-strategy.mjs",
     "verify:dev-pairing-code": "node tools/verify-dev-pairing-code.mjs"

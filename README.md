@@ -105,14 +105,23 @@ npm run server:relay
 
 Host Bridge from a local PC to the server Relay:
 
-For public or campus-network access, run the Node Relay behind an HTTPS/WSS reverse proxy and bind Relay itself to `127.0.0.1`. Concrete Caddy and Nginx examples are in [docs/server-relay-plan.md](docs/server-relay-plan.md).
-
 ```powershell
 $env:RELAY_URL='wss://relay.example.com'
 $env:RELAY_HOST_TOKEN='choose-a-long-random-token'
 $env:HOST_ID='local-pc'
 $env:HOST_NAME='Local PC'
 npm run server:bridge
+```
+
+For public or campus-network access, run the Node Relay behind an HTTPS/WSS reverse proxy and bind Relay itself to `127.0.0.1`. Concrete Caddy and Nginx examples are in [docs/server-relay-plan.md](docs/server-relay-plan.md).
+
+Server Relay smoke test:
+
+```powershell
+$env:RELAY_PUBLIC_HTTP_URL='https://relay.example.com'
+$env:RELAY_PUBLIC_WS_URL='wss://relay.example.com'
+$env:RELAY_DEV_TOKEN='choose-a-long-random-token'
+npm run server:smoke
 ```
 
 当前仓库已完成 Node 原型主链路验证，并已创建 Android MVP Shell 骨架。
