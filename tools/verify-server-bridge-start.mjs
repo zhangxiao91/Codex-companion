@@ -1,9 +1,13 @@
 import { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const relayPort = '8817';
 const relayUrl = `ws://127.0.0.1:${relayPort}`;
 const token = 'server-bridge-start-token';
+const tempDir = mkdtempSync(join(tmpdir(), 'cmc-server-bridge-'));
 const processes = [];
 
 try {
@@ -11,7 +15,9 @@ try {
     ...process.env,
     RELAY_PORT: relayPort,
     RELAY_DEV_TOKEN: token,
-    RELAY_PUBLIC_WS_URL: 'wss://relay.example.com'
+    RELAY_PUBLIC_WS_URL: 'wss://relay.example.com',
+    RELAY_IDENTITY_STORE_PATH: join(tempDir, 'identity-store.json'),
+    RELAY_GIT_AUDIT_LOG_PATH: join(tempDir, 'git-audit.ndjson')
   });
   processes.push(relay);
   await waitForOutput(relay, '[relay] listening', 5000);
@@ -38,6 +44,7 @@ try {
     }
   }
   await delay(250);
+  rmSync(tempDir, { recursive: true, force: true });
 }
 
 function spawnProcess(label, command, args, env = process.env) {
@@ -72,4 +79,3 @@ async function waitForOutput(child, needle, timeoutMs) {
   }
   throw new Error(`Timed out waiting for output: ${needle}`);
 }
-

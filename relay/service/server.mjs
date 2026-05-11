@@ -11,6 +11,7 @@ import {
   encodeMessage,
   requirePayloadField
 } from '../../packages/protocol/index.mjs';
+import { createIdentityStore, snapshotIdentityState } from './identity-store.mjs';
 import { handleWebSocketUpgrade } from './ws-server.mjs';
 
 const port = Number.parseInt(process.env.RELAY_PORT ?? '8787', 10);
@@ -23,6 +24,7 @@ const auditLogLimit = Number.parseInt(process.env.RELAY_AUDIT_LOG_LIMIT ?? '500'
 const gitAuditLogPath = resolve(process.env.RELAY_GIT_AUDIT_LOG_PATH ?? '.relay/git-audit.ndjson');
 const publicHttpUrl = trimTrailingSlash(process.env.RELAY_PUBLIC_HTTP_URL ?? '');
 const publicWsUrl = trimTrailingSlash(process.env.RELAY_PUBLIC_WS_URL ?? '');
+const identityStore = createIdentityStore();
 
 if (host === '0.0.0.0' && !devToken) {
   console.error('[relay] refusing to listen on 0.0.0.0 without RELAY_DEV_TOKEN');
@@ -81,6 +83,7 @@ server.on('upgrade', (request, socket, head) => {
 });
 
 await loadGitAuditEvents();
+loadIdentityState();
 
 server.listen(port, host, () => {
   console.log(`[relay] listening on ws://${host}:${port}`);
@@ -195,6 +198,12 @@ function createHealthPayload(request) {
       audit_log_limit: auditLogLimit,
       persistent_git_audit_enabled: true
     },
+    identity: {
+      identity_store_path: identityStore.path,
+      persistent_identity_enabled: true,
+      stored_devices: state.deviceTokens.size,
+      stored_hosts: state.hosts.size
+    },
     checked_at: new Date().toISOString()
   };
 }
@@ -241,6 +250,7 @@ function isAuthorizedDeviceToken(token) {
   }
 
   state.deviceTokens.get(token).last_seen_at = new Date().toISOString();
+  persistIdentityState();
   return true;
 }
 
@@ -301,6 +311,7 @@ async function handlePairRequest(request, response) {
       paired_at: pairedAt,
       last_seen_at: pairedAt
     });
+    persistIdentityState();
 
     console.log(`[relay] paired device: ${deviceId}`);
     writeJson(response, 200, {
@@ -386,6 +397,42 @@ function persistGitAuditEvent(event) {
   }
 }
 
+function loadIdentityState() {
+  try {
+    const snapshot = identityStore.load();
+    for (const device of snapshot.devices) {
+      state.deviceTokens.set(device.token, {
+        device_id: device.device_id,
+        display_name: device.display_name,
+        paired_at: device.paired_at ?? new Date().toISOString(),
+        last_seen_at: device.last_seen_at ?? device.paired_at ?? new Date().toISOString()
+      });
+    }
+
+    for (const host of snapshot.hosts) {
+      state.hosts.set(host.host_id, {
+        ...host,
+        status: 'offline',
+        last_seen_at: host.last_seen_at ?? new Date().toISOString()
+      });
+    }
+
+    if (snapshot.devices.length > 0 || snapshot.hosts.length > 0) {
+      console.log(`[relay] loaded ${snapshot.devices.length} device(s) and ${snapshot.hosts.length} host(s) from ${identityStore.path}`);
+    }
+  } catch (error) {
+    console.error(`[relay] failed to load identity store: ${error.message}`);
+  }
+}
+
+function persistIdentityState() {
+  try {
+    identityStore.save(snapshotIdentityState(state));
+  } catch (error) {
+    console.error(`[relay] failed to persist identity store: ${error.message}`);
+  }
+}
+
 function isGitAuditEvent(event) {
   return event
     && typeof event.event_id === 'string'
@@ -441,6 +488,7 @@ function handleHostRegister(connection, message) {
   connection.hostId = host.host_id;
   state.hosts.set(host.host_id, host);
   state.hostConnections.set(host.host_id, connection);
+  persistIdentityState();
 
   console.log(`[relay] host registered: ${host.host_id}`);
 }
@@ -456,6 +504,7 @@ function handleHostHeartbeat(connection, message) {
 
   host.last_seen_at = new Date().toISOString();
   host.status = 'online';
+  persistIdentityState();
 }
 
 function handleSessionCreateEphemeral(connection, message) {

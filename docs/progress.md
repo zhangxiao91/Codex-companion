@@ -2126,3 +2126,68 @@ Next recommended step:
 1. Add reverse proxy deployment docs for HTTPS/WSS.
 2. Add durable device/host identity storage so server Relay restarts do not require re-pairing.
 3. Run a real server smoke test: Android -> server Relay -> local PC Host Bridge.
+
+## 2026-05-11: Relay identity storage
+
+Status: completed.
+
+Changes:
+
+- Added a lightweight JSON identity store for paired devices and registered hosts.
+- The store path is configurable with `RELAY_IDENTITY_STORE_PATH`.
+- Relay loads the identity store on startup and persists it on pair, host register, and heartbeat updates.
+- Health payload now exposes identity-store metadata.
+- Added `npm run verify:relay-identity-storage`.
+
+Verification:
+
+```powershell
+npm run verify:relay-identity-storage
+```
+
+Result:
+
+```text
+[verify] Relay identity storage verified.
+```
+
+Next recommended step:
+
+1. Add a small deployment guide for `server:relay` behind HTTPS/WSS.
+2. Run an end-to-end server smoke test using a real Android device and a local PC Host Bridge.
+
+## 2026-05-11: Server Relay reverse proxy deployment guide
+
+Status: completed.
+
+Changes:
+
+- Added HTTPS/WSS reverse proxy deployment guidance to `docs/server-relay-plan.md`.
+- Documented the recommended production-like topology: public TLS proxy -> `127.0.0.1:8787` Relay.
+- Added Caddy and Nginx examples with WebSocket upgrade forwarding.
+- Added concrete Relay and Host Bridge startup commands for the server-first path.
+- Linked the deployment guide from `README.md`.
+- Tightened `verify:server-bridge-start` so it uses temporary identity/audit paths instead of reading workspace `.relay` state.
+
+Verification:
+
+```powershell
+npm run verify:relay-dev-token
+npm run verify:relay-identity-storage
+npm run verify:server-relay-start
+npm run verify:server-bridge-start
+```
+
+Result:
+
+```text
+[verify] Relay dev-token guard verified.
+[verify] Relay identity storage verified.
+[verify] Server Relay startup helper verified.
+[verify] Server Host Bridge startup helper verified.
+```
+
+Next recommended step:
+
+1. Run a real server smoke test: Android -> server Relay -> local PC Host Bridge.
+2. Split the current shared long-lived token into short-lived pairing codes, per-host tokens, and revocable device tokens before broad public exposure.

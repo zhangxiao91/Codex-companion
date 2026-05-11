@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
   MessageType,
@@ -11,6 +14,7 @@ const processes = [];
 const relayPort = '8799';
 const relayUrl = `ws://127.0.0.1:${relayPort}`;
 const devToken = 'relay-dev-token-test';
+const tempDir = mkdtempSync(join(tmpdir(), 'cmc-relay-token-'));
 
 try {
   const rejectedLanRelay = spawnProcess('relay-no-token', 'node', ['relay/service/server.mjs'], {
@@ -27,7 +31,9 @@ try {
   const relay = spawnProcess('relay', 'node', ['relay/service/server.mjs'], {
     ...process.env,
     RELAY_PORT: relayPort,
-    RELAY_DEV_TOKEN: devToken
+    RELAY_DEV_TOKEN: devToken,
+    RELAY_IDENTITY_STORE_PATH: join(tempDir, 'identity-store.json'),
+    RELAY_GIT_AUDIT_LOG_PATH: join(tempDir, 'git-audit.ndjson')
   });
   processes.push(relay);
   await waitForOutput(relay, '[relay] listening', 5000);
@@ -131,6 +137,7 @@ try {
   }
 
   await delay(250);
+  rmSync(tempDir, { recursive: true, force: true });
 }
 
 function spawnProcess(label, command, args, env = process.env) {

@@ -92,6 +92,7 @@ Current serverization target:
 - Point Android pairing and WebSocket connection at the server URL.
 - Point local PC Host Bridge at the server Relay through an outbound connection.
 - Later, run another Host Bridge on the server itself so server-side Codex appears as a normal host beside the local PC.
+- Persist paired devices and registered host metadata with `RELAY_IDENTITY_STORE_PATH` so Relay restarts do not require re-pairing.
 
 Server Relay helper commands:
 
@@ -103,6 +104,8 @@ npm run server:relay
 ```
 
 Host Bridge from a local PC to the server Relay:
+
+For public or campus-network access, run the Node Relay behind an HTTPS/WSS reverse proxy and bind Relay itself to `127.0.0.1`. Concrete Caddy and Nginx examples are in [docs/server-relay-plan.md](docs/server-relay-plan.md).
 
 ```powershell
 $env:RELAY_URL='wss://relay.example.com'

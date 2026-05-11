@@ -110,7 +110,7 @@ Required construction steps:
 3. Add durable state for paired devices, host records, device tokens, host tokens, timeline cursor state, approval state, and audit metadata.
 4. Add host reconnect semantics: on reconnect, host re-registers, republishes session snapshots, and resumes heartbeats.
 5. Add Android reconnect semantics: device reuses device token, subscribes, and requests missed timeline events by cursor.
-6. Add deployment docs for running Relay behind HTTPS/WSS reverse proxy.
+6. Add deployment docs for running Relay behind HTTPS/WSS reverse proxy. First pass completed in `docs/server-relay-plan.md` with Caddy and Nginx examples.
 
 Acceptance criteria:
 
