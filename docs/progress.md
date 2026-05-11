@@ -2046,3 +2046,83 @@ Next recommended step:
 1. Run `npm run dev:pair`, pair the Android app, and send a prompt that asks Codex to run a harmless read-only command.
 2. Confirm the phone receives an approval card instead of seeing `blocked by policy`.
 3. If an approval request appears, approve once and verify the command result returns into the selected session timeline.
+
+## 2026-05-11: Server Relay first pass
+
+Status: completed.
+
+Changes:
+
+- Added shared pairing-code helpers in `tools/pairing-code.mjs`.
+- `npm run dev:pair` now uses the shared pairing-code helper.
+- Added `npm run server:pairing-code` for generating a `cmc1...` code against an already-running server Relay.
+- Server pairing code reads `RELAY_PUBLIC_WS_URL`, `RELAY_ANDROID_URL`, or `RELAY_URL`.
+- Server pairing token reads `RELAY_PAIRING_TOKEN`, `RELAY_DEV_TOKEN`, or `DEV_TOKEN`.
+- Relay `/health` now exposes configured `public_websocket_url` and `public_health_url`.
+- Added verification scripts:
+  - `npm run verify:server-pairing-code`
+  - `npm run verify:relay-public-url`
+- Added `docs/server-relay-plan.md` and updated architecture/implementation docs toward server-first Relay.
+
+Verification:
+
+```powershell
+npm run verify:server-pairing-code
+npm run verify:relay-public-url
+npm run verify:dev-pairing-code
+```
+
+Result:
+
+```text
+[verify] Server pairing code generation verified.
+[verify] Relay public URL health metadata verified.
+[verify] Dev pairing code generation verified.
+```
+
+Next recommended step:
+
+1. Add server deployment docs for HTTPS/WSS reverse proxy.
+2. Add a host startup helper for connecting local PC Host Bridge to the server Relay.
+3. Verify Android -> server Relay -> local PC Host Bridge with the existing protocol.
+
+## 2026-05-11: Server Relay and Host Bridge startup helpers
+
+Status: completed.
+
+Changes:
+
+- Added `npm run server:relay` for starting Relay in server mode.
+- `server:relay` requires `RELAY_PUBLIC_WS_URL`, accepts `RELAY_PUBLIC_HTTP_URL`, and prints an Android `cmc1...` pairing code.
+- Added `npm run server:bridge` for starting Host Bridge against a server Relay.
+- `server:bridge` validates `RELAY_URL` / `RELAY_PUBLIC_WS_URL` and `RELAY_HOST_TOKEN` / `RELAY_DEV_TOKEN`.
+- Added verification scripts:
+  - `npm run verify:server-relay-start`
+  - `npm run verify:server-bridge-start`
+- Updated `README.md` and `docs/server-relay-plan.md` with concrete startup commands.
+
+Verification:
+
+```powershell
+npm run verify:server-relay-start
+npm run verify:server-bridge-start
+npm run verify:server-pairing-code
+npm run verify:relay-public-url
+npm run verify:dev-pairing-code
+```
+
+Result:
+
+```text
+[verify] Server Relay startup helper verified.
+[verify] Server Host Bridge startup helper verified.
+[verify] Server pairing code generation verified.
+[verify] Relay public URL health metadata verified.
+[verify] Dev pairing code generation verified.
+```
+
+Next recommended step:
+
+1. Add reverse proxy deployment docs for HTTPS/WSS.
+2. Add durable device/host identity storage so server Relay restarts do not require re-pairing.
+3. Run a real server smoke test: Android -> server Relay -> local PC Host Bridge.

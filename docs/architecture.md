@@ -4,6 +4,15 @@
 
 ## 1. Architecture Goals
 
+Server-first update:
+
+- Android should connect to one stable server Relay endpoint, not to a laptop LAN address.
+- Local PC, remote devbox, and the server itself should all appear as Host Bridge nodes behind the same Relay.
+- The Relay is the center for auth, routing, sync, cursors, approval routing, and audit metadata.
+- Execution remains outside Relay. Codex, Git, shell, and repo access stay inside Host Bridge nodes.
+- Direct private-network access such as LAN, Tailscale, or WireGuard becomes optional development/advanced mode rather than the default product path.
+
+
 系统必须满足：
 
 - Android 端可以实时或准实时查看 Codex session 状态。
@@ -15,6 +24,27 @@
 - 后续可以扩展到 GitHub PR、CI、团队权限和自托管 relay。
 
 ## 2. High-Level Components
+
+Server-first topology:
+
+```mermaid
+flowchart LR
+    Android["Android App"]
+    ServerRelay["Server Relay\nAuth / Sync / Routing"]
+    BridgeLocal["Host Bridge\nLocal PC"]
+    BridgeServer["Host Bridge\nServer Codex Host"]
+    CodexLocal["Codex Runtime\nLocal"]
+    CodexServer["Codex Runtime\nServer"]
+
+    Android <--> ServerRelay
+    BridgeLocal <--> ServerRelay
+    BridgeServer <--> ServerRelay
+    BridgeLocal <--> CodexLocal
+    BridgeServer <--> CodexServer
+```
+
+The key design property is asymmetric connectivity: Android and Host Bridge both connect outward to the server Relay. The local PC does not need to expose an inbound port.
+
 
 ```mermaid
 flowchart LR
@@ -240,6 +270,24 @@ Git Snapshot 用于移动端 review。
 
 ## 5. Connection Modes
 
+### 5.0 Server Relay as Primary Mode
+
+Primary production flow:
+
+1. Deploy Relay on the server behind TLS/WSS.
+2. Android pairs with the server Relay and stores a device token.
+3. Local PC Host Bridge connects outbound to the server Relay with a host token.
+4. Optional server-side Host Bridge also connects to the same Relay and exposes Codex sessions running on the server.
+5. Android lists hosts and sessions from the server Relay, then sends prompt/approval/Git requests through Relay to the owning Host Bridge.
+
+Benefits:
+
+- Android uses one stable address across campus network, mobile network, and home Wi-Fi.
+- Local PC remains behind NAT/firewall.
+- Server-side Codex support is naturally added as another host.
+- Authentication, audit, and notification logic live in one place.
+
+
 ### 5.1 Local PC via Relay
 
 默认推荐模式。
@@ -409,6 +457,11 @@ Real-time channel:
 - Host Bridge to Relay: WebSocket or bidirectional gRPC stream.
 
 ## 9. MVP Architecture Decisions
+
+- Use server Relay as the main Android endpoint.
+- Keep `dev:pair` as local development tooling, not as the long-term mobile connectivity model.
+- Treat local PC and server Codex as equal Host Bridge nodes.
+- Do not run Codex directly inside Relay unless it is through a co-located Host Bridge process with the same host policy boundary.
 
 - Use Relay even for local PC mode to avoid requiring inbound ports.
 - Keep Host Bridge as the only component allowed to touch repos and Git credentials.

@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
+import { createPairingCode, createPairingPayload } from './pairing-code.mjs';
 
 const child = spawn('node', ['tools/dev-pairing-start.mjs'], {
   cwd: process.cwd(),
@@ -35,6 +36,15 @@ try {
   }
   if (!payload.pairing_token.startsWith('cmc_')) {
     throw new Error('Pairing token prefix is missing.');
+  }
+
+  const regenerated = createPairingCode(createPairingPayload({
+    relayUrl: 'ws://192.0.2.10:8814',
+    pairingToken: payload.pairing_token,
+    createdAt: payload.created_at
+  }));
+  if (regenerated !== code) {
+    throw new Error('Pairing code helper is not stable.');
   }
 
   console.log('[verify] Dev pairing code generation verified.');

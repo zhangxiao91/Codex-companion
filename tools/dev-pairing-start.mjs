@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { networkInterfaces } from 'node:os';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
+import { createPairingCode, createPairingPayload } from './pairing-code.mjs';
 
 const relayPort = await resolveRelayPort();
 const lanHost = process.env.RELAY_LAN_HOST || findLanAddress();
@@ -9,11 +10,10 @@ const token = process.env.RELAY_DEV_TOKEN || `cmc_${randomBytes(32).toString('ba
 const codexAdapter = process.env.CODEX_ADAPTER || 'app-server';
 const relayUrlForAndroid = process.env.RELAY_ANDROID_URL || `ws://${lanHost}:${relayPort}`;
 const relayUrlForBridge = `ws://127.0.0.1:${relayPort}`;
-const pairingCode = createPairingCode({
-  relay_url: relayUrlForAndroid,
-  pairing_token: token,
-  created_at: new Date().toISOString()
-});
+const pairingCode = createPairingCode(createPairingPayload({
+  relayUrl: relayUrlForAndroid,
+  pairingToken: token
+}));
 
 const children = [];
 
@@ -53,14 +53,18 @@ children.push(bridge);
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
-function createPairingCode(payload) {
-  const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
-  return `cmc1.${encoded}`;
-}
-
 async function resolveRelayPort() {
   if (process.env.RELAY_PORT) {
-    return Number.parseInt(process.env.RELAY_PORT, 10);
+    const explicitPort = Number.parseInt(process.env.RELAY_PORT, 10);
+    if (!Number.isInteger(explicitPort) || explicitPort <= 0) {
+      throw new Error(`Invalid RELAY_PORT: ${process.env.RELAY_PORT}`);
+    }
+
+    if (!await isPortAvailable(explicitPort)) {
+      throw new Error(`RELAY_PORT ${explicitPort} is already in use. Stop the old dev:pair/relay process or unset RELAY_PORT to allow automatic fallback.`);
+    }
+
+    return explicitPort;
   }
 
   const start = 8787;

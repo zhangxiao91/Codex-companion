@@ -121,6 +121,7 @@ class RelayClient(
             val requestBuilder = Request.Builder().url(healthUrlFor(url))
             val trimmedToken = token.trim()
             addAuthHeaders(requestBuilder, trimmedToken)
+            addShortHttpHeaders(requestBuilder)
             val request = requestBuilder.build()
             client.newCall(request).enqueue(
                 object : okhttp3.Callback {
@@ -150,6 +151,7 @@ class RelayClient(
         runCatching {
             val requestBuilder = Request.Builder().url(gitAuditUrlFor(url, sessionId, limit))
             addAuthHeaders(requestBuilder, token.trim())
+            addShortHttpHeaders(requestBuilder)
             val request = requestBuilder.build()
             client.newCall(request).enqueue(
                 object : okhttp3.Callback {
@@ -205,6 +207,8 @@ class RelayClient(
             val request = Request.Builder()
                 .url(pairUrlFor(url))
                 .header("X-Relay-Dev-Token", token)
+                .header("Connection", "close")
+                .header("Accept", "application/json")
                 .post(body)
                 .build()
 
@@ -313,6 +317,12 @@ class RelayClient(
         builder
             .header("Authorization", "Bearer $token")
             .header("X-Relay-Auth-Token", token)
+    }
+
+    private fun addShortHttpHeaders(builder: Request.Builder) {
+        builder
+            .header("Connection", "close")
+            .header("Accept", "application/json")
     }
 
     private fun summarizeHealth(raw: String): String {

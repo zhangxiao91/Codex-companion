@@ -4,6 +4,15 @@
 
 ## 1. Delivery Strategy
 
+Server Relay pivot:
+
+1. Move from LAN-first pairing to a server Relay as the default Android endpoint.
+2. Keep local `dev:pair` for protocol testing only.
+3. Make local PC Host Bridge connect outbound to the server Relay.
+4. Add a server-side Host Bridge so Codex running on the server becomes another host.
+5. Harden auth, audit, rate limits, and TLS before treating the server Relay as internet-facing.
+
+
 优先级排序：
 
 1. 先证明 Android 可以看到 Codex session 并发送一条指令。
@@ -91,6 +100,25 @@
 - 原始 terminal log 不上传，除非测试模式显式开启。
 
 ## 4. Milestone 2: Relay Prototype
+
+Serverization goal: turn the current in-memory local Relay into a deployable single-user server Relay.
+
+Required construction steps:
+
+1. Add server runtime configuration: public base URL, WSS URL, bind host/port, token secrets, audit path, and storage mode.
+2. Split development pairing from server pairing: keep `dev:pair`, but add a server pairing path that assumes Relay already runs on a stable server URL.
+3. Add durable state for paired devices, host records, device tokens, host tokens, timeline cursor state, approval state, and audit metadata.
+4. Add host reconnect semantics: on reconnect, host re-registers, republishes session snapshots, and resumes heartbeats.
+5. Add Android reconnect semantics: device reuses device token, subscribes, and requests missed timeline events by cursor.
+6. Add deployment docs for running Relay behind HTTPS/WSS reverse proxy.
+
+Acceptance criteria:
+
+- Android can pair with a server Relay URL.
+- Local PC Host Bridge can register through outbound WebSocket to server Relay.
+- Server Relay can route session snapshots, timeline events, prompt, approval, and Git requests between Android and the owning host.
+- Relay restart does not permanently lose device/host identity or audit metadata.
+
 
 目标：实现可支撑单用户 MVP 的 session routing 和事件同步。
 
@@ -230,6 +258,17 @@ UI 要求：
 - 多 remote 管理。
 
 ## 8. Milestone 6: Hardening
+
+Server Relay hardening checklist:
+
+- TLS/WSS is mandatory outside local development.
+- Pairing tokens are short-lived and only mint device tokens.
+- Device tokens can be revoked.
+- Host tokens are scoped to a host and rotated independently from device tokens.
+- Prompt, approval, commit, and push actions are audited as metadata.
+- Pairing, auth failures, prompt sends, and Git actions are rate-limited.
+- Relay stores redacted summaries only; source code and raw terminal logs stay host-side.
+
 
 目标：把原型变成个人可长期使用的工具。
 

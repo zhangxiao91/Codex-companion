@@ -32,6 +32,18 @@ Codex Mobile Companion 是一个 Android 优先的 Codex 移动协作入口。�
 
 ## Planned Architecture
 
+### Server Relay Direction
+
+The next architecture direction is **server-first Relay**:
+
+- Android connects to one stable server Relay URL instead of directly reaching a laptop on LAN, campus Wi-Fi, or Tailscale.
+- Local PC, remote devbox, and the server itself all run Host Bridge as execution nodes.
+- Host Bridge keeps outbound WebSocket connectivity to the server Relay and remains the only component allowed to touch repos, shell, Git credentials, and Codex runtime state.
+- The server Relay owns device pairing, host registry, routing, timeline cursor/cache, approval routing, Git audit metadata, and eventually push notification fanout.
+- The server Relay should not store source code, raw terminal logs, OpenAI tokens, GitHub tokens, SSH keys, or other long-lived execution secrets.
+
+This replaces the previous LAN-first real-device path as the main product route. `npm run dev:pair` remains useful for local development and protocol testing, but the production path should be Android -> server Relay -> Host Bridge -> Codex.
+
 项目采用四层结构：
 
 - Android App：Kotlin + Jetpack Compose，负责移动端 UI、通知、离线缓存、设备密钥和深链。
@@ -72,6 +84,33 @@ Codex Mobile Companion 是一个 Android 优先的 Codex 移动协作入口。�
 - [docs/manual-android-git-workflow-test.md](docs/manual-android-git-workflow-test.md)：Android Git status/diff/commit/push/audit disposable repo 手测流程。
 
 ## Current Status
+
+Current serverization target:
+
+- Keep the existing JSON-over-WebSocket protocol for the first server Relay milestone.
+- Move the Relay process from local development to a server with a stable URL.
+- Point Android pairing and WebSocket connection at the server URL.
+- Point local PC Host Bridge at the server Relay through an outbound connection.
+- Later, run another Host Bridge on the server itself so server-side Codex appears as a normal host beside the local PC.
+
+Server Relay helper commands:
+
+```powershell
+$env:RELAY_PUBLIC_WS_URL='wss://relay.example.com'
+$env:RELAY_PUBLIC_HTTP_URL='https://relay.example.com'
+$env:RELAY_DEV_TOKEN='choose-a-long-random-token'
+npm run server:relay
+```
+
+Host Bridge from a local PC to the server Relay:
+
+```powershell
+$env:RELAY_URL='wss://relay.example.com'
+$env:RELAY_HOST_TOKEN='choose-a-long-random-token'
+$env:HOST_ID='local-pc'
+$env:HOST_NAME='Local PC'
+npm run server:bridge
+```
 
 当前仓库已完成 Node 原型主链路验证，并已创建 Android MVP Shell 骨架。
 
@@ -139,6 +178,16 @@ npm run check:android-toolchain
 ```
 
 ## Development Security
+
+Server Relay security baseline:
+
+- Use TLS/WSS before treating the server Relay as internet-accessible.
+- Keep pairing separate from device authorization: pairing token/code should only mint a device token.
+- Store device tokens in Android Keystore and allow revocation from Relay storage.
+- Keep Host Bridge tokens scoped to host registration and host-side messages.
+- Rate-limit pairing, WebSocket auth failures, prompt sends, approval decisions, and Git actions.
+- Log metadata-only audit events for prompt, approval, commit, and push requests.
+- Keep dangerous actions gated at Host Bridge even if Relay authentication succeeds.
 
 当前安全边界仍是开发原型，但已经加入临时 dev token：
 

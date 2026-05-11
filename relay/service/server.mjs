@@ -21,6 +21,8 @@ const maxMessageBytes = Number.parseInt(process.env.RELAY_MAX_MESSAGE_BYTES ?? '
 const maxPromptLength = Number.parseInt(process.env.RELAY_MAX_PROMPT_LENGTH ?? '4000', 10);
 const auditLogLimit = Number.parseInt(process.env.RELAY_AUDIT_LOG_LIMIT ?? '500', 10);
 const gitAuditLogPath = resolve(process.env.RELAY_GIT_AUDIT_LOG_PATH ?? '.relay/git-audit.ndjson');
+const publicHttpUrl = trimTrailingSlash(process.env.RELAY_PUBLIC_HTTP_URL ?? '');
+const publicWsUrl = trimTrailingSlash(process.env.RELAY_PUBLIC_WS_URL ?? '');
 
 if (host === '0.0.0.0' && !devToken) {
   console.error('[relay] refusing to listen on 0.0.0.0 without RELAY_DEV_TOKEN');
@@ -168,6 +170,8 @@ function createHealthPayload(request) {
       port,
       websocket_url: `ws://${host}:${port}`,
       health_url: `http://${host}:${port}/health`,
+      public_websocket_url: publicWsUrl || null,
+      public_health_url: publicHttpUrl ? `${publicHttpUrl}/health` : null,
       lan_access_enabled: host === '0.0.0.0'
     },
     counts: {
@@ -260,6 +264,7 @@ function isClientMessage(type) {
 
 async function handlePairRequest(request, response) {
   try {
+    console.log(`[relay] pair request from ${request.socket.remoteAddress ?? 'unknown'}`);
     if (!devToken) {
       writeJson(response, 400, {
         ok: false,
@@ -305,6 +310,7 @@ async function handlePairRequest(request, response) {
       paired_at: pairedAt
     });
   } catch (error) {
+    console.error(`[relay] pair request failed: ${error.message}`);
     writeJson(response, 400, {
       ok: false,
       error: 'pairing_failed',
@@ -391,8 +397,17 @@ function isGitAuditEvent(event) {
 }
 
 function writeJson(response, statusCode, payload) {
-  response.writeHead(statusCode, { 'content-type': 'application/json' });
-  response.end(JSON.stringify(payload));
+  const body = JSON.stringify(payload);
+  response.writeHead(statusCode, {
+    'content-type': 'application/json',
+    'content-length': Buffer.byteLength(body),
+    connection: 'close'
+  });
+  response.end(body);
+}
+
+function trimTrailingSlash(value) {
+  return value.replace(/\/+$/, '');
 }
 
 function readRequestBody(request, limitBytes) {
