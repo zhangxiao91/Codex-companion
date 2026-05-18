@@ -3,6 +3,7 @@ import { networkInterfaces } from 'node:os';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { createPairingCode, createPairingPayload } from './pairing-code.mjs';
+import { displayPairingCode } from './pairing-display.mjs';
 
 const relayPort = await resolveRelayPort();
 const lanHost = process.env.RELAY_LAN_HOST || findLanAddress();
@@ -34,6 +35,12 @@ console.log(`[pairing] Relay URL for Android: ${relayUrlForAndroid}`);
 console.log(`[pairing] Host Bridge adapter: ${codexAdapter}`);
 console.log('[pairing] Pairing code:');
 console.log(pairingCode);
+console.log('');
+await displayPairingCode({
+  pairingCode,
+  relayUrl: relayUrlForAndroid,
+  title: 'Codex Mobile Companion Dev Pairing'
+});
 console.log('');
 console.log('[pairing] Paste this code into Android > Relay connection > Pairing code, then tap Use code.');
 console.log('[pairing] Keep this terminal running while using the app.');

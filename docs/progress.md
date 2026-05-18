@@ -2265,3 +2265,254 @@ Operational note:
 - Deploy this Relay update to the server and restart Relay.
 - Restart the local PC Host Bridge so it republishes fresh live sessions.
 - In Android, reconnect or re-apply the pairing code if the UI still has cached old sessions.
+
+## 2026-05-17: Official Codex mobile support competitive strategy
+
+Status: completed.
+
+Context:
+
+- OpenAI launched official Codex remote access in ChatGPT mobile preview during this project.
+- The project needed a refreshed third-party strategy so it does not compete only as a generic mobile Codex viewer.
+
+Changes:
+
+- Added `docs/official-codex-mobile-competitive-strategy.md`.
+- Summarized public official information from OpenAI announcement, ChatGPT release notes, Codex remote connection docs, Enterprise release notes, access-token docs, and Windows app docs.
+- Identified stronger third-party differentiation directions:
+  - Windows-first remote control.
+  - CLI/App-Server/adapter-first support.
+  - self-hosted Relay and data-boundary control.
+  - Android-native operations UX.
+  - safer mobile approvals and policy controls.
+  - Git finishing workflows.
+  - multi-host/multi-runtime control plane.
+  - local-first diagnostics and repair.
+- Added the new strategy document to the README document index.
+
+Result:
+
+- Product positioning shifts from "mobile Codex viewer" to "Android-native, self-hostable, host-agnostic operational control for Codex sessions."
+
+Next recommended step:
+
+1. Fold the strategy into the implementation roadmap: prioritize host health, mobile approval risk labels, Git finishing UX, and Windows/server Relay reliability.
+
+## 2026-05-17: Desktop pairing QR output
+
+Status: completed.
+
+Changes:
+
+- Added shared pairing display helper for terminal QR and local HTML pairing page generation.
+- Added `qrcode` dependency and locked it in `package-lock.json`.
+- `npm run dev:pair`, `npm run server:pairing-code`, and `npm run server:relay` now keep the existing `cmc1...` output and also emit:
+  - terminal QR code;
+  - local HTML pairing page at `.relay/pairing/pairing.html`.
+- Added `CMC_PAIRING_QR` output control with `both` (default), `terminal`, `html`, and `none`.
+- Added `npm run verify:pairing-qr`.
+- Updated verify scripts so they disable QR generation during automated checks and do not write pairing artifacts into the workspace.
+- Updated `README.md` and `docs/server-relay-plan.md` with QR pairing behavior.
+
+Verification:
+
+```powershell
+npm run verify:pairing-qr
+npm run verify:dev-pairing-code
+npm run verify:server-pairing-code
+npm run verify:server-relay-start
+```
+
+Result:
+
+```text
+[verify] Pairing QR generation verified.
+[verify] Dev pairing code generation verified.
+[verify] Server pairing code generation verified.
+[verify] Server Relay startup helper verified.
+```
+
+Next recommended step:
+
+1. Add Android scan entry that parses the same `cmc1...` payload already used by the paste flow.
+2. Replace the long-lived pairing token model with a short-lived one-time pairing nonce.
+
+## 2026-05-17: Android pairing screen and ChatGPT-style main UI
+
+Status: completed.
+
+Changes:
+
+- Reworked the Android app shell so unpaired devices enter a dedicated pairing screen instead of the session dashboard.
+- Added a dark, registration-style pairing screen with:
+  - Scan QR code CTA placeholder.
+  - Pairing code login using the existing `cmc1...` parser.
+  - Manual Relay URL / pairing token configuration.
+  - health/error/status feedback.
+- Added a dark ChatGPT-style paired main screen with:
+  - top menu/status/tools controls;
+  - left `ModalNavigationDrawer` session archive;
+  - current-session timeline stream;
+  - fixed bottom prompt composer.
+- Moved complex session controls into a tools bottom sheet:
+  - Relay reconnect/test diagnostics;
+  - approvals;
+  - Git status/diff/commit/push.
+- Kept Relay protocol, ViewModel business flow, pairing parser, and backend unchanged.
+
+Verification:
+
+```powershell
+.\gradlew.bat :app:assembleDebug
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL
+```
+
+Next recommended step:
+
+1. Install the debug build on a real device and verify unpaired, paired, drawer, prompt, approval, and Git flows by hand.
+2. Add the real Android QR scanner entry using the existing `cmc1...` parse flow.
+
+## 2026-05-17: Android QR scan pairing
+
+Status: completed.
+
+Changes:
+
+- Replaced the pairing-screen QR placeholder with a real Google Code Scanner flow.
+- Added Google Play services code scanner dependency to the Android app.
+- Added the ML Kit barcode UI dependency metadata entry to `AndroidManifest.xml`.
+- MainActivity now launches the QR scanner, restricts to QR codes, and routes scanned text directly into the existing `applyPairingCode` flow.
+- Cancel/failure/empty-result states now show user-visible scan notices on the pairing screen.
+- Kept manual pairing code and manual Relay configuration paths unchanged as fallback.
+
+Verification:
+
+```powershell
+.\gradlew.bat :app:assembleDebug
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL
+```
+
+Operational note:
+
+- Google Code Scanner depends on Google Play services and is expected to behave best on a real Android device.
+
+## 2026-05-17: Android launcher icon refresh
+
+Status: completed.
+
+Changes:
+
+- Replaced the default launcher foreground vector with generated PNG foreground assets.
+- Generated adaptive icon foreground densities from `Weixin Image_20260517232925_1792_45.png`.
+- Updated adaptive icon XML files to reference `@mipmap/ic_launcher_foreground`.
+- Updated launcher background color to match the new dark icon artwork.
+
+Verification:
+
+```powershell
+.\gradlew.bat :app:assembleDebug
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL
+```
+
+## 2026-05-17: Public 443 Server Relay safety baseline
+
+Status: completed.
+
+Changes:
+
+- Split server Relay auth into separate token scopes:
+  - `RELAY_PAIRING_TOKEN` for `/pair` and Android pairing codes.
+  - `RELAY_HOST_TOKEN` for Host Bridge registration, heartbeat, session snapshots, timeline events, approvals, and Git snapshots.
+  - `RELAY_DEV_TOKEN` remains as a local development compatibility fallback.
+- Changed `npm run server:relay` to bind Node Relay to `127.0.0.1` by default.
+- Made server Relay public URL default to secure `wss://`; `ws://` now requires explicit `CMC_ALLOW_INSECURE_SERVER_RELAY=1`.
+- Kept Android pairing payload unchanged: QR/code still contains `relay_url` and `pairing_token`, never the host token.
+- Updated server Host Bridge helper to require/use `RELAY_HOST_TOKEN`.
+- Updated server smoke tests and startup verification to use pairing and host tokens separately.
+- Added `npm run verify:relay-token-separation` to prove:
+  - pairing token can pair devices;
+  - host token cannot pair devices;
+  - pairing token cannot register a host;
+  - host token can register a host;
+  - unauthenticated client prompts are rejected;
+  - paired device token can route prompts.
+- Updated README and `docs/server-relay-plan.md` with the public 443 deployment shape:
+  - Caddy/Nginx exposes `443`;
+  - Node Relay stays on `127.0.0.1:8787`;
+  - server firewall should not expose `8787`;
+  - PC Host Bridge connects outbound to `wss://<domain>`.
+
+Verification:
+
+```powershell
+npm run verify:server-relay-start
+npm run verify:relay-token-separation
+npm run verify:server-bridge-start
+npm run verify:relay-dev-token
+npm run verify:server-smoke-local
+npm run verify:server-pairing-code
+.\gradlew.bat :app:assembleDebug
+```
+
+Result:
+
+```text
+[verify] Server Relay startup helper verified.
+[verify] Relay pairing/host/device token separation verified.
+[verify] Server Host Bridge startup helper verified.
+[verify] Relay dev-token guard verified.
+[smoke] Server Relay smoke test passed.
+[verify] Server pairing code generation verified.
+BUILD SUCCESSFUL
+```
+
+Next recommended step:
+
+1. Deploy behind Caddy/Nginx on the server with only `443` and SSH exposed.
+2. Run `npm run server:smoke` against the real `https://` and `wss://` domain.
+3. Pair Android over mobile data using the server QR code.
+
+## 2026-05-17: Codex App Server stdio transport
+
+Status: completed.
+
+Changes:
+
+- Updated the Host Bridge app-server adapter to launch Codex with `app-server --listen stdio://` instead of the removed WebSocket listen URL.
+- Added a line-delimited JSON stdio transport helper for app-server request/response and notification handling.
+- Updated the local `probe:codex-app-server` script to use the same stdio transport path.
+
+Verification:
+
+```powershell
+npm run probe:codex-app-server
+npm run verify:app-server-prompt
+```
+
+Result:
+
+```text
+[probe] initialize ok: Codex Desktop/0.131.0-alpha.9 ...
+[probe] thread/list ok: 5 thread(s)
+[verify] App Server ephemeral prompt produced a live assistant/completion event through Relay.
+```
+
+Next recommended step:
+
+1. Re-run `npm run server:bridge` against the real server Relay.
+2. Rotate server pairing and host tokens if you already exposed them.

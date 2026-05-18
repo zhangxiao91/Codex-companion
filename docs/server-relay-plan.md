@@ -68,15 +68,23 @@ Current helper:
 ```powershell
 $env:RELAY_PUBLIC_WS_URL='wss://relay.example.com'
 $env:RELAY_PUBLIC_HTTP_URL='https://relay.example.com'
-$env:RELAY_DEV_TOKEN='choose-a-long-random-token'
+$env:RELAY_PAIRING_TOKEN='choose-a-long-random-pairing-token'
+$env:RELAY_HOST_TOKEN='choose-a-different-long-random-host-token'
 npm run server:relay
 ```
 
-The helper starts Relay and prints a `cmc1...` pairing code for Android. It keeps the current protocol unchanged; HTTPS/WSS termination can be provided by a reverse proxy in front of the Node process.
+The helper starts Relay bound to `127.0.0.1` by default and prints a `cmc1...` pairing code for Android. It now also prints a terminal QR code and writes a local HTML pairing page in `.relay/pairing/pairing.html`. The pairing code contains only `RELAY_PAIRING_TOKEN`; Host Bridge nodes must use `RELAY_HOST_TOKEN`. It keeps the current Android pairing payload unchanged; HTTPS/WSS termination must be provided by a reverse proxy in front of the Node process. QR output can be controlled with `CMC_PAIRING_QR=both` (default), `terminal`, `html`, or `none`.
 
 ### HTTPS/WSS Reverse Proxy
 
 Production-like server access should terminate TLS before Relay. Keep the Node Relay bound to localhost, expose only the reverse proxy to the public network, and forward both HTTP `/health`/`/pair` and WebSocket upgrade traffic to the same local port.
+
+Firewall baseline:
+
+- Allow public `443/tcp` for HTTPS/WSS.
+- Allow SSH from trusted IPs.
+- Do not expose `8787/tcp` to the public internet.
+- Keep Host Bridge on PCs and devboxes outbound-only; it connects to `wss://relay.example.com`.
 
 Recommended server layout:
 
@@ -125,7 +133,8 @@ $env:RELAY_HOST='127.0.0.1'
 $env:RELAY_PORT='8787'
 $env:RELAY_PUBLIC_WS_URL='wss://relay.example.com'
 $env:RELAY_PUBLIC_HTTP_URL='https://relay.example.com'
-$env:RELAY_DEV_TOKEN='use-a-long-random-secret'
+$env:RELAY_PAIRING_TOKEN='use-a-long-random-pairing-secret'
+$env:RELAY_HOST_TOKEN='use-a-different-long-random-host-secret'
 $env:RELAY_IDENTITY_STORE_PATH='C:\cmc\identity-store.json'
 $env:RELAY_GIT_AUDIT_LOG_PATH='C:\cmc\git-audit.ndjson'
 npm run server:relay
@@ -142,7 +151,14 @@ $env:CODEX_ADAPTER='app-server'
 npm run server:bridge
 ```
 
-The current first-pass token model still uses one long server secret for pairing and host auth. Before real public exposure, split that into separate short-lived pairing codes, per-host tokens, and revocable device tokens.
+The current first-pass server token model separates pairing and host auth:
+
+- `RELAY_PAIRING_TOKEN` can call `/pair` and mint a device token.
+- `RELAY_HOST_TOKEN` can register hosts and send host-side messages.
+- Device tokens authorize Android/client WebSocket control messages after pairing.
+- `RELAY_DEV_TOKEN` remains a local development fallback, but should not be used as the recommended server deployment shape.
+
+Before broader public exposure, replace the long-lived pairing token with a short-lived one-time pairing code, add per-host token rotation, and expose device revocation.
 
 ## Milestone 2: PC Host Through Server Relay
 
@@ -184,7 +200,8 @@ For a full server Relay smoke test, use:
 ```powershell
 $env:RELAY_PUBLIC_HTTP_URL='https://relay.example.com'
 $env:RELAY_PUBLIC_WS_URL='wss://relay.example.com'
-$env:RELAY_DEV_TOKEN='use-the-current-server-secret'
+$env:RELAY_PAIRING_TOKEN='use-the-current-pairing-secret'
+$env:RELAY_HOST_TOKEN='use-the-current-host-secret'
 npm run server:smoke
 ```
 
@@ -284,6 +301,7 @@ npm run verify:relay-public-url
 npm run verify:server-relay-start
 npm run verify:server-bridge-start
 npm run verify:relay-identity-storage
+npm run verify:relay-token-separation
 npm run verify:dev-pairing-code
 ```
 
@@ -295,5 +313,6 @@ Result:
 [verify] Server Relay startup helper verified.
 [verify] Server Host Bridge startup helper verified.
 [verify] Relay identity storage verified.
+[verify] Relay pairing/host/device token separation verified.
 [verify] Dev pairing code generation verified.
 ```

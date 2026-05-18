@@ -12,12 +12,17 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -26,19 +31,28 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DividerDefaults
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.ui.window.Dialog
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,11 +62,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+import com.google.mlkit.vision.barcode.common.Barcode
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val viewModel by viewModels<RelayViewModel> {
         RelayViewModelFactory(this)
     }
+    private var scanNotice by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -78,9 +97,35 @@ class MainActivity : ComponentActivity() {
                 onGitPush = viewModel::requestGitPush,
                 onGitAuditRefresh = viewModel::requestGitAudit,
                 onApprovalDecision = viewModel::decideApproval,
-                onPromptSend = viewModel::sendPrompt
+                onPromptSend = viewModel::sendPrompt,
+                onScanQrCode = ::scanPairingCode,
+                scanNotice = scanNotice
             )
         }
+    }
+
+    private fun scanPairingCode() {
+        scanNotice = null
+        val options = GmsBarcodeScannerOptions.Builder()
+            .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+            .enableAutoZoom()
+            .build()
+        GmsBarcodeScanning.getClient(this, options)
+            .startScan()
+            .addOnSuccessListener { barcode ->
+                val raw = barcode.rawValue?.trim().orEmpty()
+                if (raw.isBlank()) {
+                    scanNotice = "QR code did not contain text."
+                    return@addOnSuccessListener
+                }
+                viewModel.applyPairingCode(raw)
+            }
+            .addOnCanceledListener {
+                scanNotice = "QR scan canceled."
+            }
+            .addOnFailureListener { error ->
+                scanNotice = "QR scan failed: ${error.message ?: "scanner unavailable"}"
+            }
     }
 }
 
@@ -100,39 +145,592 @@ private fun CompanionApp(
     onGitPush: () -> Unit,
     onGitAuditRefresh: () -> Unit,
     onApprovalDecision: (String, String) -> Unit,
-    onPromptSend: (String) -> Unit
+    onPromptSend: (String) -> Unit,
+    onScanQrCode: () -> Unit,
+    scanNotice: String?
 ) {
     MaterialTheme(
         colorScheme = MaterialTheme.colorScheme.copy(
-            primary = AppGreen,
-            surface = PanelWhite,
-            background = AppCanvas
+            primary = AccentBlue,
+            surface = SheetBlack,
+            background = AppBlack,
+            onSurface = PrimaryText,
+            onBackground = PrimaryText
         )
     ) {
         Surface(
             modifier = Modifier.fillMaxSize(),
-            color = MaterialTheme.colorScheme.background
+            color = AppBlack
         ) {
-            SessionDashboard(
+            if (uiState.deviceToken.isBlank()) {
+                PairingScreen(
+                    uiState = uiState,
+                    onRelaySettingsSave = onRelaySettingsSave,
+                    onPairingCodeApply = onPairingCodeApply,
+                    onPairDevice = onPairDevice,
+                    onHealthCheck = onHealthCheck,
+                    onScanQrCode = onScanQrCode,
+                    scanNotice = scanNotice
+                )
+            } else {
+                MainSessionScreen(
+                    uiState = uiState,
+                    onReconnect = onReconnect,
+                    onSessionSelected = onSessionSelected,
+                    onGitStatus = onGitStatus,
+                    onGitDiff = onGitDiff,
+                    onGitFileDiff = onGitFileDiff,
+                    onGitCommit = onGitCommit,
+                    onGitPush = onGitPush,
+                    onGitAuditRefresh = onGitAuditRefresh,
+                    onApprovalDecision = onApprovalDecision,
+                    onPromptSend = onPromptSend,
+                    onHealthCheck = onHealthCheck
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PairingScreen(
+    uiState: RelayUiState,
+    onRelaySettingsSave: (String, String) -> Unit,
+    onPairingCodeApply: (String) -> Unit,
+    onPairDevice: () -> Unit,
+    onHealthCheck: () -> Unit,
+    onScanQrCode: () -> Unit,
+    scanNotice: String?
+) {
+    var pairingCodeDraft by remember { mutableStateOf("") }
+    var relayUrlDraft by remember(uiState.relayUrl) { mutableStateOf(uiState.relayUrl) }
+    var pairingTokenDraft by remember(uiState.pairingToken) { mutableStateOf(uiState.pairingToken) }
+    var mode by remember { mutableStateOf(PairingMode.Code) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp, vertical = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(26.dp)
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = "Codex Companion",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = PrimaryText
+            )
+            Text(
+                text = "Pair this phone with a trusted Codex host.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = SecondaryText
+            )
+        }
+
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(28.dp),
+            color = CardBlack,
+            border = BorderStroke(1.dp, StrokeDark)
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Text("Scan desktop QR", color = PrimaryText, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+                Text(
+                    text = "Run dev:pair or server:pairing-code, then scan the QR shown on your computer.",
+                    color = SecondaryText,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Button(
+                    modifier = Modifier.fillMaxWidth().height(54.dp),
+                    shape = RoundedCornerShape(99.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentBlue),
+                    onClick = onScanQrCode
+                ) {
+                    Text("Scan QR code", fontWeight = FontWeight.SemiBold)
+                }
+                if (!scanNotice.isNullOrBlank()) {
+                    InlineNotice(
+                        text = scanNotice,
+                        tone = if (scanNotice.contains("failed", ignoreCase = true) || scanNotice.contains("did not", ignoreCase = true)) NoticeTone.Critical else NoticeTone.Warning
+                    )
+                }
+            }
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            DarkToggleChip("Pairing code", mode == PairingMode.Code) { mode = PairingMode.Code }
+            DarkToggleChip("Manual config", mode == PairingMode.Manual) { mode = PairingMode.Manual }
+        }
+
+        if (mode == PairingMode.Code) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                DarkTextField(
+                    value = pairingCodeDraft,
+                    onValueChange = { pairingCodeDraft = it },
+                    label = "Pairing code",
+                    singleLine = false,
+                    minHeight = 112.dp
+                )
+                Button(
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    enabled = pairingCodeDraft.isNotBlank(),
+                    shape = RoundedCornerShape(99.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryText, contentColor = AppBlack),
+                    onClick = { onPairingCodeApply(pairingCodeDraft) }
+                ) {
+                    Text("Use pairing code", fontWeight = FontWeight.SemiBold)
+                }
+            }
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                DarkTextField(relayUrlDraft, { relayUrlDraft = it }, "Relay URL")
+                DarkTextField(pairingTokenDraft, { pairingTokenDraft = it }, "Pairing token", password = true)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(
+                        modifier = Modifier.weight(1f).height(50.dp),
+                        shape = RoundedCornerShape(99.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryText, contentColor = AppBlack),
+                        onClick = { onRelaySettingsSave(relayUrlDraft, pairingTokenDraft) }
+                    ) {
+                        Text("Save")
+                    }
+                    OutlinedButton(
+                        modifier = Modifier.weight(1f).height(50.dp),
+                        shape = RoundedCornerShape(99.dp),
+                        border = BorderStroke(1.dp, StrokeDark),
+                        onClick = onPairDevice
+                    ) {
+                        Text("Pair", color = PrimaryText)
+                    }
+                }
+                TextButton(onClick = onHealthCheck) {
+                    Text("Test connection", color = SecondaryText)
+                }
+            }
+        }
+
+        PairingStatusBlock(uiState = uiState)
+    }
+}
+
+@Composable
+private fun PairingStatusBlock(uiState: RelayUiState) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(uiState.connectionStatus, color = SecondaryText, style = MaterialTheme.typography.bodySmall)
+            Text(if (uiState.deviceId.isBlank()) "Not paired" else "Device ${uiState.deviceId.take(8)}", color = TertiaryText, style = MaterialTheme.typography.bodySmall)
+        }
+        if (!uiState.lastHealthCheck.isNullOrBlank()) {
+            InlineNotice(text = uiState.lastHealthCheck, tone = NoticeTone.Positive)
+        }
+        if (!uiState.lastError.isNullOrBlank()) {
+            InlineNotice(text = uiState.lastError, tone = NoticeTone.Critical)
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MainSessionScreen(
+    uiState: RelayUiState,
+    onReconnect: () -> Unit,
+    onSessionSelected: (String) -> Unit,
+    onGitStatus: () -> Unit,
+    onGitDiff: () -> Unit,
+    onGitFileDiff: (String) -> Unit,
+    onGitCommit: (String, String) -> Unit,
+    onGitPush: () -> Unit,
+    onGitAuditRefresh: () -> Unit,
+    onApprovalDecision: (String, String) -> Unit,
+    onPromptSend: (String) -> Unit,
+    onHealthCheck: () -> Unit
+) {
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+    var toolsOpen by remember { mutableStateOf(false) }
+
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            SessionDrawer(
                 uiState = uiState,
-                onReconnect = onReconnect,
-                onRelaySettingsSave = onRelaySettingsSave,
-                onPairingCodeApply = onPairingCodeApply,
-                onPairDevice = onPairDevice,
-                onHealthCheck = onHealthCheck,
-                onSessionSelected = onSessionSelected,
-                onGitStatus = onGitStatus,
-                onGitDiff = onGitDiff,
-                onGitFileDiff = onGitFileDiff,
-                onGitCommit = onGitCommit,
-                onGitPush = onGitPush,
-                onGitAuditRefresh = onGitAuditRefresh,
-                onApprovalDecision = onApprovalDecision,
+                onSessionSelected = { sessionId ->
+                    onSessionSelected(sessionId)
+                    scope.launch { drawerState.close() }
+                },
+                onReconnect = onReconnect
+            )
+        }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(horizontal = 18.dp, vertical = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            MainTopBar(
+                uiState = uiState,
+                onMenu = { scope.launch { drawerState.open() } },
+                onTools = { toolsOpen = true },
+                onReconnect = onReconnect
+            )
+            TimelineStream(uiState = uiState, modifier = Modifier.weight(1f))
+            ChatComposer(
+                selectedSession = uiState.selectedSession,
+                online = uiState.connectionStatus == "Online",
                 onPromptSend = onPromptSend
             )
         }
     }
+
+    if (toolsOpen) {
+        ModalBottomSheet(
+            onDismissRequest = { toolsOpen = false },
+            containerColor = SheetBlack,
+            contentColor = PrimaryText,
+            dragHandle = null
+        ) {
+            Column(
+                modifier = Modifier
+                    .navigationBarsPadding()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 18.dp, vertical = 20.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Text("Session tools", color = PrimaryText, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                ConnectionToolCard(uiState = uiState, onReconnect = onReconnect, onHealthCheck = onHealthCheck)
+                ApprovalInbox(uiState.pendingApprovals, uiState.selectedSessionId, onApprovalDecision)
+                GitPanel(
+                    selectedSession = uiState.selectedSession,
+                    snapshot = uiState.selectedGitSnapshot,
+                    auditEvents = uiState.selectedGitAudit,
+                    connectionStatus = uiState.connectionStatus,
+                    onStatus = onGitStatus,
+                    onDiff = onGitDiff,
+                    onFileDiff = onGitFileDiff,
+                    onCommit = onGitCommit,
+                    onPush = onGitPush,
+                    onAuditRefresh = onGitAuditRefresh
+                )
+            }
+        }
+    }
 }
+
+@Composable
+private fun MainTopBar(uiState: RelayUiState, onMenu: () -> Unit, onTools: () -> Unit, onReconnect: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            CircleTextButton(text = "≡", onClick = onMenu)
+            Column(modifier = Modifier.width(188.dp)) {
+                Text(
+                    text = uiState.selectedSession?.projectName ?: "Codex",
+                    color = PrimaryText,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = uiState.selectedSession?.let { "${it.branch} · ${it.status}" } ?: "${uiState.sessions.size} live sessions",
+                    color = SecondaryText,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            StatusOrb(uiState.connectionStatus, onReconnect)
+            CircleTextButton(text = "Tools", onClick = onTools, wide = true)
+        }
+    }
+}
+
+@Composable
+private fun SessionDrawer(uiState: RelayUiState, onSessionSelected: (String) -> Unit, onReconnect: () -> Unit) {
+    ModalDrawerSheet(
+        modifier = Modifier.fillMaxHeight().width(328.dp),
+        drawerContainerColor = AppBlack,
+        drawerContentColor = PrimaryText
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .padding(horizontal = 22.dp, vertical = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp)
+        ) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Codex", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+                StatusPill(uiState.connectionStatus, statusTone(uiState.connectionStatus))
+            }
+            DrawerShortcut("Projects", "${uiState.sessions.map { it.hostId }.distinct().size} hosts")
+            DrawerShortcut("Approvals", "${uiState.pendingApprovals.size} pending")
+            DrawerShortcut("Git", uiState.selectedGitSnapshot?.branch ?: "No snapshot")
+            Text("Recents", color = PrimaryText, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
+            if (uiState.sessions.isEmpty()) {
+                Text("No live sessions. Keep Host Bridge online, then refresh.", color = SecondaryText)
+                OutlinedButton(onClick = onReconnect, border = BorderStroke(1.dp, StrokeDark)) {
+                    Text("Reconnect", color = PrimaryText)
+                }
+            } else {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(uiState.sessions, key = { it.sessionId }) { session ->
+                        DrawerSessionRow(session, session.sessionId == uiState.selectedSessionId) {
+                            onSessionSelected(session.sessionId)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DrawerShortcut(text: String, detail: String) {
+    Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("•", color = PrimaryText, style = MaterialTheme.typography.headlineSmall)
+        Column {
+            Text(text, color = PrimaryText, style = MaterialTheme.typography.titleMedium)
+            Text(detail, color = SecondaryText, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable
+private fun DrawerSessionRow(session: CodexSession, selected: Boolean, onClick: () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick),
+        color = if (selected) CardBlack else Color.Transparent,
+        shape = RoundedCornerShape(14.dp),
+        border = if (selected) BorderStroke(1.dp, StrokeDark) else null
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(session.projectName, color = PrimaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("${session.branch} · ${session.status}", color = SecondaryText, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(session.hostId, color = TertiaryText, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable
+private fun TimelineStream(uiState: RelayUiState, modifier: Modifier = Modifier) {
+    val selectedSession = uiState.selectedSession
+    val events = uiState.timeline.filter { it.sessionId == uiState.selectedSessionId }
+
+    Box(modifier = modifier.fillMaxWidth()) {
+        if (selectedSession == null) {
+            EmptyMainState(
+                title = if (uiState.sessions.isEmpty()) "Waiting for Codex" else "Choose a session",
+                body = if (uiState.sessions.isEmpty()) "Live sessions from your connected host will appear here." else "Open the drawer and pick a recent session."
+            )
+        } else if (events.isEmpty()) {
+            EmptyMainState(selectedSession.projectName, selectedSession.summary.ifBlank { "No timeline events yet." })
+        } else {
+            LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp), reverseLayout = true) {
+                items(events, key = { it.eventId }) { event ->
+                    TimelineBubble(event)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyMainState(title: String, body: String) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(title, color = PrimaryText, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+        Spacer(modifier = Modifier.height(10.dp))
+        Text(body, color = SecondaryText, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+private fun TimelineBubble(event: TimelineItem) {
+    val isUser = event.title.contains("prompt", ignoreCase = true) || event.type.contains("user", ignoreCase = true)
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(if (isUser) 0.82f else 0.9f),
+            shape = RoundedCornerShape(22.dp),
+            color = if (isUser) AccentBlue else CardBlack,
+            border = if (isUser) null else BorderStroke(1.dp, StrokeDark)
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(event.title, color = PrimaryText, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(event.summary, color = if (isUser) PrimaryText.copy(alpha = 0.92f) else SecondaryText, style = MaterialTheme.typography.bodyMedium)
+                Text(event.type, color = if (isUser) PrimaryText.copy(alpha = 0.65f) else TertiaryText, style = MaterialTheme.typography.labelSmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatComposer(selectedSession: CodexSession?, online: Boolean, onPromptSend: (String) -> Unit) {
+    var prompt by remember(selectedSession?.sessionId) { mutableStateOf("") }
+    val enabled = selectedSession != null && online
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(99.dp),
+        color = ComposerBlack,
+        border = BorderStroke(1.dp, StrokeDark)
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 8.dp, end = 8.dp, top = 7.dp, bottom = 7.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("+", color = PrimaryText, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(horizontal = 10.dp))
+            TextField(
+                modifier = Modifier.weight(1f),
+                value = prompt,
+                onValueChange = { prompt = it },
+                enabled = enabled,
+                singleLine = true,
+                placeholder = { Text(if (selectedSession == null) "Select a session" else "Message Codex", color = TertiaryText) },
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                    disabledContainerColor = Color.Transparent,
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                    disabledIndicatorColor = Color.Transparent,
+                    focusedTextColor = PrimaryText,
+                    unfocusedTextColor = PrimaryText,
+                    disabledTextColor = TertiaryText
+                )
+            )
+            Button(
+                enabled = enabled && prompt.isNotBlank(),
+                shape = RoundedCornerShape(99.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = AccentBlue, disabledContainerColor = StrokeDark),
+                onClick = {
+                    onPromptSend(prompt)
+                    prompt = ""
+                }
+            ) {
+                Text("Send")
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConnectionToolCard(uiState: RelayUiState, onReconnect: () -> Unit, onHealthCheck: () -> Unit) {
+    Panel {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            SectionTitle("Relay")
+            Text(diagnosticsSummary(uiState), color = MutedText, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                CompactActionButton(modifier = Modifier.weight(1f), text = "Reconnect", onClick = onReconnect)
+                CompactActionButton(modifier = Modifier.weight(1f), text = "Test", onClick = onHealthCheck)
+            }
+        }
+    }
+}
+
+@Composable
+private fun CircleTextButton(text: String, onClick: () -> Unit, wide: Boolean = false) {
+    Surface(
+        modifier = Modifier
+            .height(54.dp)
+            .width(if (wide) 82.dp else 54.dp)
+            .clip(RoundedCornerShape(99.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(99.dp),
+        color = CardBlack,
+        border = BorderStroke(1.dp, StrokeDark)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(text, color = PrimaryText, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        }
+    }
+}
+
+@Composable
+private fun StatusOrb(status: String, onClick: () -> Unit) {
+    val tone = statusTone(status)
+    Surface(
+        modifier = Modifier.size(44.dp).clip(RoundedCornerShape(99.dp)).clickable(onClick = onClick),
+        shape = RoundedCornerShape(99.dp),
+        color = tone.background,
+        border = BorderStroke(1.dp, StrokeDark)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Box(modifier = Modifier.size(10.dp).clip(RoundedCornerShape(10.dp)).background(tone.foreground))
+        }
+    }
+}
+
+@Composable
+private fun DarkToggleChip(text: String, selected: Boolean, onClick: () -> Unit) {
+    Surface(
+        modifier = Modifier.clip(RoundedCornerShape(99.dp)).clickable(onClick = onClick),
+        shape = RoundedCornerShape(99.dp),
+        color = if (selected) PrimaryText else CardBlack,
+        border = BorderStroke(1.dp, if (selected) PrimaryText else StrokeDark)
+    ) {
+        Text(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+            text = text,
+            color = if (selected) AppBlack else PrimaryText,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+        )
+    }
+}
+
+@Composable
+private fun DarkTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    singleLine: Boolean = true,
+    password: Boolean = false,
+    minHeight: androidx.compose.ui.unit.Dp = 56.dp
+) {
+    TextField(
+        modifier = Modifier.fillMaxWidth().heightIn(min = minHeight),
+        value = value,
+        onValueChange = onValueChange,
+        singleLine = singleLine,
+        label = { Text(label) },
+        visualTransformation = if (password) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
+        colors = TextFieldDefaults.colors(
+            focusedContainerColor = ComposerBlack,
+            unfocusedContainerColor = ComposerBlack,
+            disabledContainerColor = ComposerBlack,
+            focusedIndicatorColor = AccentBlue,
+            unfocusedIndicatorColor = StrokeDark,
+            focusedLabelColor = SecondaryText,
+            unfocusedLabelColor = SecondaryText,
+            focusedTextColor = PrimaryText,
+            unfocusedTextColor = PrimaryText,
+            cursorColor = AccentBlue
+        ),
+        shape = RoundedCornerShape(18.dp)
+    )
+}
+
+private enum class PairingMode { Code, Manual }
 
 @Composable
 private fun SessionDashboard(
@@ -1277,6 +1875,15 @@ private val SubtleText = Color(0xFF8A94A6)
 private val AppGreen = Color(0xFF176B52)
 private val SoftGreen = Color(0xFFE6F4EF)
 private val Danger = Color(0xFFB42318)
+private val AppBlack = Color(0xFF050505)
+private val SheetBlack = Color(0xFF0B0B0C)
+private val CardBlack = Color(0xFF1C1C1E)
+private val ComposerBlack = Color(0xFF202124)
+private val StrokeDark = Color(0xFF343437)
+private val PrimaryText = Color(0xFFF5F5F6)
+private val SecondaryText = Color(0xFFB8B8BE)
+private val TertiaryText = Color(0xFF77777F)
+private val AccentBlue = Color(0xFF2F70D0)
 
 private fun diagnosticsSummary(uiState: RelayUiState): String {
     val connectedAt = uiState.lastConnectedAt ?: "never"

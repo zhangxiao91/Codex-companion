@@ -6,7 +6,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 const relayPort = '8817';
 const relayUrl = `ws://127.0.0.1:${relayPort}`;
-const token = 'server-bridge-start-token';
+const pairingToken = 'server-bridge-start-pairing-token';
+const hostToken = 'server-bridge-start-host-token';
 const tempDir = mkdtempSync(join(tmpdir(), 'cmc-server-bridge-'));
 const processes = [];
 
@@ -14,7 +15,8 @@ try {
   const relay = spawnProcess('relay', 'node', ['relay/service/server.mjs'], {
     ...process.env,
     RELAY_PORT: relayPort,
-    RELAY_DEV_TOKEN: token,
+    RELAY_PAIRING_TOKEN: pairingToken,
+    RELAY_HOST_TOKEN: hostToken,
     RELAY_PUBLIC_WS_URL: 'wss://relay.example.com',
     RELAY_IDENTITY_STORE_PATH: join(tempDir, 'identity-store.json'),
     RELAY_GIT_AUDIT_LOG_PATH: join(tempDir, 'git-audit.ndjson')
@@ -25,7 +27,7 @@ try {
   const bridge = spawnProcess('bridge', 'node', ['tools/server-host-bridge-start.mjs'], {
     ...process.env,
     RELAY_URL: relayUrl,
-    RELAY_HOST_TOKEN: token,
+    RELAY_HOST_TOKEN: hostToken,
     HOST_ID: 'server-bridge-verify-host',
     HOST_NAME: 'Server Bridge Verify Host',
     CODEX_ADAPTER: 'mock'

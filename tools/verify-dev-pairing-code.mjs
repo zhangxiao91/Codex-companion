@@ -7,7 +7,8 @@ const child = spawn('node', ['tools/dev-pairing-start.mjs'], {
   env: {
     ...process.env,
     RELAY_PORT: '8814',
-    RELAY_LAN_HOST: '192.0.2.10'
+    RELAY_LAN_HOST: '192.0.2.10',
+    CMC_PAIRING_QR: 'none'
   },
   stdio: ['ignore', 'pipe', 'pipe']
 });

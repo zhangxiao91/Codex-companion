@@ -1,50 +1,40 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
+import { StdioJsonTransport } from '../bridge/host-bridge/app-server-stdio-transport.mjs';
 
-const port = Number.parseInt(process.env.CODEX_APP_SERVER_PORT ?? '8791', 10);
-const listenUrl = `ws://127.0.0.1:${port}`;
+const listenUrl = process.env.CODEX_APP_SERVER_LISTEN ?? 'stdio://';
 const codexCli = resolveCodexCli();
 let nextId = 1;
 const child = spawn(codexCli, ['app-server', '--listen', listenUrl], {
   cwd: process.cwd(),
   env: process.env,
-  stdio: ['ignore', 'pipe', 'pipe']
+  stdio: ['pipe', 'pipe', 'pipe']
 });
+const transport = new StdioJsonTransport(child);
+const pending = new Map();
 
-let childOutput = '';
-child.stdout.on('data', (chunk) => {
-  const text = chunk.toString();
-  childOutput += text;
-  process.stdout.write(`[app-server] ${text}`);
+transport.addEventListener('message', (event) => {
+  const message = JSON.parse(event.data);
+
+  if (message.id !== undefined && pending.has(message.id)) {
+    pending.get(message.id)(message);
+    pending.delete(message.id);
+    return;
+  }
+
+  if (message.method) {
+    console.log(`[probe] notification: ${message.method}`);
+  }
 });
-child.stderr.on('data', (chunk) => {
-  const text = chunk.toString();
-  childOutput += text;
-  process.stderr.write(`[app-server:err] ${text}`);
+transport.addEventListener('stderr', (chunk) => {
+  process.stderr.write(`[app-server:err] ${chunk}`);
 });
 
 try {
-  const socket = await connectWithRetry(listenUrl, 10000);
-  const pending = new Map();
-
-  socket.addEventListener('message', (event) => {
-    const message = JSON.parse(event.data);
-
-    if (message.id !== undefined && pending.has(message.id)) {
-      pending.get(message.id)(message);
-      pending.delete(message.id);
-      return;
-    }
-
-    if (message.method) {
-      console.log(`[probe] notification: ${message.method}`);
-    }
-  });
-
   console.log(`[probe] connected to ${listenUrl}`);
 
-  const initialize = await request(socket, pending, 'initialize', {
+  const initialize = await request('initialize', {
     clientInfo: {
       name: 'codex-mobile-companion-probe',
       title: 'Codex Mobile Companion Probe',
@@ -62,7 +52,7 @@ try {
   console.log(`[probe] initialize ok: ${initialize.result.userAgent}`);
   console.log(`[probe] codex home: ${initialize.result.codexHome}`);
 
-  const threadList = await request(socket, pending, 'thread/list', {
+  const threadList = await request('thread/list', {
     limit: 5,
     archived: false,
     useStateDbOnly: true
@@ -78,77 +68,17 @@ try {
     console.log(`[probe] thread: ${thread.id} status=${thread.status?.type ?? 'unknown'} preview=${thread.preview ?? ''}`);
   }
 
-  socket.close();
   process.exitCode = 0;
 } catch (error) {
   console.error(`[probe] failed: ${error.message}`);
-  if (childOutput) {
-    console.error('[probe] app-server output captured above.');
-  }
   process.exitCode = 1;
 } finally {
+  transport.close();
   child.kill();
   await delay(250);
 }
 
-function resolveCodexCli() {
-  if (process.env.CODEX_CLI_PATH) {
-    return process.env.CODEX_CLI_PATH;
-  }
-
-  const userProfile = process.env.USERPROFILE;
-  const candidates = [
-    userProfile
-      ? `${userProfile}\\.vscode\\extensions\\openai.chatgpt-26.506.21252-win32-x64\\bin\\windows-x86_64\\codex.exe`
-      : null,
-    'codex'
-  ].filter(Boolean);
-
-  for (const candidate of candidates) {
-    if (candidate === 'codex' || existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  throw new Error('Unable to find Codex CLI. Set CODEX_CLI_PATH.');
-}
-
-async function connectWithRetry(url, timeoutMs) {
-  const startedAt = Date.now();
-  let lastError;
-
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      return await connect(url);
-    } catch (error) {
-      lastError = error;
-      await delay(250);
-    }
-  }
-
-  throw lastError ?? new Error(`Timed out connecting to ${url}`);
-}
-
-function connect(url) {
-  return new Promise((resolve, reject) => {
-    const socket = new WebSocket(url);
-    const timer = setTimeout(() => {
-      socket.close();
-      reject(new Error(`Timed out opening WebSocket ${url}`));
-    }, 2000);
-
-    socket.addEventListener('open', () => {
-      clearTimeout(timer);
-      resolve(socket);
-    });
-    socket.addEventListener('error', () => {
-      clearTimeout(timer);
-      reject(new Error(`WebSocket connection failed for ${url}`));
-    });
-  });
-}
-
-function request(socket, pending, method, params) {
+function request(method, params) {
   const id = nextId;
   nextId += 1;
 
@@ -169,6 +99,47 @@ function request(socket, pending, method, params) {
       resolve(response);
     });
 
-    socket.send(JSON.stringify(payload));
+    transport.send(JSON.stringify(payload));
   });
+}
+
+function resolveCodexCli() {
+  if (process.env.CODEX_CLI_PATH) {
+    return process.env.CODEX_CLI_PATH;
+  }
+
+  const userProfile = process.env.USERPROFILE;
+  const extensionCodexCli = findLatestVsCodeCodexCli(userProfile);
+  const candidates = [
+    extensionCodexCli,
+    'codex'
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (candidate === 'codex' || existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  throw new Error('Unable to find Codex CLI. Set CODEX_CLI_PATH.');
+}
+
+function findLatestVsCodeCodexCli(userProfile) {
+  if (!userProfile) {
+    return undefined;
+  }
+
+  const extensionsDir = `${userProfile}\\.vscode\\extensions`;
+  if (!existsSync(extensionsDir)) {
+    return undefined;
+  }
+
+  const candidates = readdirSync(extensionsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith('openai.chatgpt-'))
+    .map((entry) => `${extensionsDir}\\${entry.name}\\bin\\windows-x86_64\\codex.exe`)
+    .filter((candidate) => existsSync(candidate))
+    .sort()
+    .reverse();
+
+  return candidates[0];
 }

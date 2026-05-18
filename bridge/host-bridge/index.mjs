@@ -9,7 +9,10 @@ import { createCodexAdapter } from './codex-adapter.mjs';
 import { handleGitRequest } from './git-adapter.mjs';
 
 const relayUrl = process.env.RELAY_URL ?? DEFAULT_RELAY_URL;
-const devToken = process.env.RELAY_DEV_TOKEN ?? process.env.DEV_TOKEN ?? '';
+const hostToken = process.env.RELAY_HOST_TOKEN
+  ?? process.env.RELAY_DEV_TOKEN
+  ?? process.env.DEV_TOKEN
+  ?? '';
 const hostId = process.env.HOST_ID ?? 'local-dev-host';
 const displayName = process.env.HOST_NAME ?? 'Local Development Host';
 const bridgeVersion = '0.0.1';
@@ -134,15 +137,18 @@ socket.addEventListener('message', async (event) => {
   }
 });
 
-socket.addEventListener('close', () => {
-  console.log('[bridge] disconnected from relay');
+socket.addEventListener('close', (event) => {
+  const reason = event.reason ? ` reason=${event.reason}` : '';
+  console.log(`[bridge] disconnected from relay code=${event.code} was_clean=${event.wasClean}${reason}`);
   if (typeof adapter.stop === 'function') {
     adapter.stop();
   }
 });
 
-socket.addEventListener('error', () => {
-  console.error('[bridge] websocket error');
+socket.addEventListener('error', (event) => {
+  const message = event.message ? `: ${event.message}` : '';
+  const errorCause = event.error?.message ? ` (${event.error.message})` : '';
+  console.error(`[bridge] websocket error${message}${errorCause}`);
 });
 
 function send(type, payload) {
@@ -154,7 +160,7 @@ function createRelayMessage(type, payload) {
 }
 
 function withAuth(message) {
-  if (!devToken) {
+  if (!hostToken) {
     return message;
   }
 
@@ -162,11 +168,11 @@ function withAuth(message) {
     ...message,
     auth: {
       ...(message.auth ?? {}),
-      dev_token: devToken
+      host_token: hostToken
     }
   };
 }
 
 function authOptions() {
-  return devToken ? { auth: { dev_token: devToken } } : {};
+  return hostToken ? { auth: { host_token: hostToken } } : {};
 }

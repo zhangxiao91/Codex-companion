@@ -5,7 +5,6 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 const processes = [];
 const relayPort = process.env.MANUAL_RELAY_PORT ?? '8810';
-const appServerPort = process.env.MANUAL_APP_SERVER_PORT ?? '8811';
 const relayUrl = `ws://127.0.0.1:${relayPort}`;
 const pairingToken = process.env.RELAY_DEV_TOKEN ?? `manual-${randomBytes(12).toString('base64url')}`;
 const prompt = process.argv.slice(2).join(' ') || [
@@ -30,7 +29,7 @@ try {
     RELAY_DEV_TOKEN: pairingToken,
     CODEX_ADAPTER: 'app-server',
     CODEX_APPROVAL_POLICY: process.env.CODEX_APPROVAL_POLICY ?? 'on-request',
-    CODEX_APP_SERVER_PORT: appServerPort
+    CODEX_APP_SERVER_LISTEN: 'stdio://'
   });
   processes.push(bridge);
   await waitForOutput(bridge, '[bridge] app-server initialized', 20000);

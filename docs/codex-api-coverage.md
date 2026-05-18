@@ -34,7 +34,7 @@
 
 - CLI 自带 `app-server generate-ts` 和 `generate-json-schema`，可以生成协议绑定。
 - App Server 协议覆盖 thread list/read/start、turn start/steer、plan/diff/status notifications、approval requests 等核心能力。
-- CLI 支持 `--listen ws://IP:PORT`，理论上可由 Host Bridge 启动并通过 WebSocket 连接。
+- CLI 支持 `--listen stdio://`，可由 Host Bridge 启动并通过 stdio JSON 连接。
 
 风险：
 
@@ -175,8 +175,8 @@ npm run probe:codex-app-server
 
 Verified:
 
-- Host Bridge can launch VS Code extension Codex CLI with `app-server --listen ws://127.0.0.1:<port>`.
-- Node WebSocket client can connect to the app-server.
+- Host Bridge can launch VS Code extension Codex CLI with `app-server --listen stdio://`.
+- Node stdio JSON transport can connect to the app-server.
 - `initialize` returns user agent, Codex home and platform details.
 - Server emits `remoteControl/status/changed`.
 - `thread/list` returns existing Codex threads.

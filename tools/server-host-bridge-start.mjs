@@ -4,7 +4,6 @@ const relayUrl = process.env.RELAY_PUBLIC_WS_URL
   ?? process.env.RELAY_URL;
 const token = process.env.RELAY_HOST_TOKEN
   ?? process.env.RELAY_DEV_TOKEN
-  ?? process.env.RELAY_PAIRING_TOKEN
   ?? process.env.DEV_TOKEN;
 const hostId = process.env.HOST_ID ?? 'local-dev-host';
 const hostName = process.env.HOST_NAME ?? 'Local Development Host';
@@ -19,7 +18,7 @@ if (!relayUrl.startsWith('ws://') && !relayUrl.startsWith('wss://')) {
 }
 
 if (!token) {
-  throw new Error('Set RELAY_HOST_TOKEN or RELAY_DEV_TOKEN before starting Host Bridge.');
+  throw new Error('Set RELAY_HOST_TOKEN before starting Host Bridge.');
 }
 
 console.log('[server-bridge] Starting Host Bridge against server Relay.');
@@ -34,7 +33,7 @@ const child = spawn('node', ['bridge/host-bridge/index.mjs'], {
   env: {
     ...process.env,
     RELAY_URL: relayUrl,
-    RELAY_DEV_TOKEN: token,
+    RELAY_HOST_TOKEN: token,
     HOST_ID: hostId,
     HOST_NAME: hostName,
     CODEX_ADAPTER: adapter
@@ -50,4 +49,3 @@ child.on('exit', (code, signal) => {
 
   process.exit(code ?? 0);
 });
-

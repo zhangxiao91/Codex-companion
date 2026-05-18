@@ -20,7 +20,7 @@ try {
     RELAY_URL: relayUrl,
     RELAY_DEV_TOKEN: devToken,
     CODEX_ADAPTER: 'app-server',
-    CODEX_APP_SERVER_PORT: '8792'
+    CODEX_APP_SERVER_LISTEN: 'stdio://'
   });
   processes.push(bridge);
 

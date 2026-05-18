@@ -1,4 +1,5 @@
 import { createPairingCode, createPairingPayload } from './pairing-code.mjs';
+import { displayPairingCode } from './pairing-display.mjs';
 
 const relayUrl = process.env.RELAY_PUBLIC_WS_URL
   ?? process.env.RELAY_ANDROID_URL
@@ -26,5 +27,10 @@ console.log('');
 console.log('[pairing] Pairing code:');
 console.log(pairingCode);
 console.log('');
+await displayPairingCode({
+  pairingCode,
+  relayUrl,
+  title: 'Codex Mobile Companion Server Pairing'
+});
+console.log('');
 console.log('[pairing] Paste this code into Android > Relay connection > Pairing code, then tap Use code.');
-

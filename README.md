@@ -82,6 +82,7 @@ This replaces the previous LAN-first real-device path as the main product route.
 - [docs/android-toolchain.md](docs/android-toolchain.md)：Android 构建工具链安装和验证说明。
 - [docs/manual-app-server-approval-test.md](docs/manual-app-server-approval-test.md)：真实 App Server approval 手测流程。
 - [docs/manual-android-git-workflow-test.md](docs/manual-android-git-workflow-test.md)：Android Git status/diff/commit/push/audit disposable repo 手测流程。
+- [docs/official-codex-mobile-competitive-strategy.md](docs/official-codex-mobile-competitive-strategy.md): official Codex mobile support research and third-party differentiation strategy.
 
 ## Current Status
 
@@ -99,7 +100,8 @@ Server Relay helper commands:
 ```powershell
 $env:RELAY_PUBLIC_WS_URL='wss://relay.example.com'
 $env:RELAY_PUBLIC_HTTP_URL='https://relay.example.com'
-$env:RELAY_DEV_TOKEN='choose-a-long-random-token'
+$env:RELAY_PAIRING_TOKEN='choose-a-long-random-pairing-token'
+$env:RELAY_HOST_TOKEN='choose-a-different-long-random-host-token'
 npm run server:relay
 ```
 
@@ -113,14 +115,15 @@ $env:HOST_NAME='Local PC'
 npm run server:bridge
 ```
 
-For public or campus-network access, run the Node Relay behind an HTTPS/WSS reverse proxy and bind Relay itself to `127.0.0.1`. Concrete Caddy and Nginx examples are in [docs/server-relay-plan.md](docs/server-relay-plan.md).
+For public or campus-network access, run the Node Relay behind an HTTPS/WSS reverse proxy and bind Relay itself to `127.0.0.1`. Only expose public `443` and SSH on the server firewall; do not expose `8787` directly. Concrete Caddy and Nginx examples are in [docs/server-relay-plan.md](docs/server-relay-plan.md).
 
 Server Relay smoke test:
 
 ```powershell
 $env:RELAY_PUBLIC_HTTP_URL='https://relay.example.com'
 $env:RELAY_PUBLIC_WS_URL='wss://relay.example.com'
-$env:RELAY_DEV_TOKEN='choose-a-long-random-token'
+$env:RELAY_PAIRING_TOKEN='choose-a-long-random-pairing-token'
+$env:RELAY_HOST_TOKEN='choose-a-different-long-random-host-token'
 npm run server:smoke
 ```
 
@@ -145,6 +148,8 @@ App 会本地保存最近 session、timeline events、selected session 和每个
 ```powershell
 npm run dev:pair
 ```
+
+Pairing output now includes the existing copyable `cmc1...` code, a terminal QR code, and a local HTML pairing page at `.relay/pairing/pairing.html`. Until Android scanning is implemented, paste the printed code into the Android Pairing code field as before. QR output can be controlled with `CMC_PAIRING_QR=both` (default), `terminal`, `html`, or `none`.
 
 脚本会生成高强度随机 token，启动 Relay 和 Host Bridge，并打印一条 `cmc1...` pairing code。把这条 code 粘贴到 Android 的 Pairing code 输入框，点击 Use code 即可自动保存 Relay URL、保存 pairing token，并换取 device token。
 
@@ -194,6 +199,8 @@ npm run check:android-toolchain
 Server Relay security baseline:
 
 - Use TLS/WSS before treating the server Relay as internet-accessible.
+- Bind Node Relay to `127.0.0.1` in server mode and expose only the reverse proxy on public `443`.
+- Use separate `RELAY_PAIRING_TOKEN` and `RELAY_HOST_TOKEN`; keep `RELAY_DEV_TOKEN` as local development compatibility only.
 - Keep pairing separate from device authorization: pairing token/code should only mint a device token.
 - Store device tokens in Android Keystore and allow revocation from Relay storage.
 - Keep Host Bridge tokens scoped to host registration and host-side messages.

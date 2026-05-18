@@ -8,6 +8,7 @@ import {
   createMockSession,
   createTimelineEvent
 } from '../../packages/protocol/index.mjs';
+import { StdioJsonTransport } from './app-server-stdio-transport.mjs';
 import {
   mapAppServerNotificationToTimelineEvents,
   mapThreadToTimelineEvents
@@ -117,11 +118,10 @@ export class MockCodexAdapter {
 export class AppServerCodexAdapter {
   constructor(hostId, options = {}) {
     this.hostId = hostId;
-    this.port = options.port ?? Number.parseInt(process.env.CODEX_APP_SERVER_PORT ?? '8791', 10);
-    this.listenUrl = `ws://127.0.0.1:${this.port}`;
+    this.listenUrl = process.env.CODEX_APP_SERVER_LISTEN ?? 'stdio://';
     this.codexCli = options.codexCli ?? resolveCodexCli();
     this.child = undefined;
-    this.socket = undefined;
+    this.transport = undefined;
     this.pending = new Map();
     this.pendingApprovals = new Map();
     this.nextId = 1;
@@ -134,25 +134,27 @@ export class AppServerCodexAdapter {
   }
 
   async start() {
-    if (this.socket) {
+    if (this.transport) {
       return;
     }
 
     this.child = spawn(this.codexCli, ['app-server', '--listen', this.listenUrl], {
       cwd: process.cwd(),
       env: process.env,
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe']
     });
 
-    this.child.stdout.on('data', (chunk) => {
-      process.stdout.write(`[codex-app-server] ${chunk.toString()}`);
+    this.transport = new StdioJsonTransport(this.child);
+    this.transport.addEventListener('message', (event) => this.handleMessage(event.data));
+    this.transport.addEventListener('stderr', (chunk) => {
+      process.stderr.write(`[codex-app-server:err] ${chunk}`);
     });
-    this.child.stderr.on('data', (chunk) => {
-      process.stderr.write(`[codex-app-server:err] ${chunk.toString()}`);
+    this.transport.addEventListener('close', () => {
+      this.transport = undefined;
     });
-
-    this.socket = await connectWithRetry(this.listenUrl, 10000);
-    this.socket.addEventListener('message', (event) => this.handleMessage(event.data));
+    this.transport.addEventListener('error', (event) => {
+      console.error(`[codex-app-server:err] ${event.message}`);
+    });
 
     const initialize = await this.request('initialize', {
       clientInfo: {
@@ -170,9 +172,9 @@ export class AppServerCodexAdapter {
   }
 
   async stop() {
-    if (this.socket) {
-      this.socket.close();
-      this.socket = undefined;
+    if (this.transport) {
+      this.transport.close();
+      this.transport = undefined;
     }
 
     if (this.child && !this.child.killed) {
@@ -359,7 +361,7 @@ export class AppServerCodexAdapter {
     }
 
     const response = createAppServerApprovalResponse(pending.method, pending.params, decision);
-    this.socket.send(JSON.stringify({
+    this.transport.send(JSON.stringify({
       id: pending.requestId,
       result: response
     }));
@@ -397,7 +399,7 @@ export class AppServerCodexAdapter {
   }
 
   request(method, params) {
-    if (!this.socket) {
+    if (!this.transport) {
       throw new Error('App Server socket is not connected.');
     }
 
@@ -421,7 +423,7 @@ export class AppServerCodexAdapter {
         resolve(response.result);
       });
 
-      this.socket.send(JSON.stringify({ id, method, params }));
+      this.transport.send(JSON.stringify({ id, method, params }));
     });
   }
 
@@ -809,39 +811,4 @@ function findLatestVsCodeCodexCli(userProfile) {
     .reverse();
 
   return candidates[0];
-}
-
-async function connectWithRetry(url, timeoutMs) {
-  const startedAt = Date.now();
-  let lastError;
-
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      return await connect(url);
-    } catch (error) {
-      lastError = error;
-      await delay(250);
-    }
-  }
-
-  throw lastError ?? new Error(`Timed out connecting to ${url}`);
-}
-
-function connect(url) {
-  return new Promise((resolve, reject) => {
-    const socket = new WebSocket(url);
-    const timer = setTimeout(() => {
-      socket.close();
-      reject(new Error(`Timed out opening WebSocket ${url}`));
-    }, 2000);
-
-    socket.addEventListener('open', () => {
-      clearTimeout(timer);
-      resolve(socket);
-    });
-    socket.addEventListener('error', () => {
-      clearTimeout(timer);
-      reject(new Error(`WebSocket connection failed for ${url}`));
-    });
-  });
 }

@@ -18,6 +18,8 @@ const port = Number.parseInt(process.env.RELAY_PORT ?? '8787', 10);
 const host = process.env.RELAY_HOST ?? '127.0.0.1';
 const timelineCacheLimit = Number.parseInt(process.env.RELAY_TIMELINE_CACHE_LIMIT ?? '200', 10);
 const devToken = process.env.RELAY_DEV_TOKEN ?? '';
+const pairingToken = process.env.RELAY_PAIRING_TOKEN ?? devToken;
+const hostToken = process.env.RELAY_HOST_TOKEN ?? devToken;
 const maxMessageBytes = Number.parseInt(process.env.RELAY_MAX_MESSAGE_BYTES ?? '65536', 10);
 const maxPromptLength = Number.parseInt(process.env.RELAY_MAX_PROMPT_LENGTH ?? '4000', 10);
 const auditLogLimit = Number.parseInt(process.env.RELAY_AUDIT_LOG_LIMIT ?? '500', 10);
@@ -26,8 +28,8 @@ const publicHttpUrl = trimTrailingSlash(process.env.RELAY_PUBLIC_HTTP_URL ?? '')
 const publicWsUrl = trimTrailingSlash(process.env.RELAY_PUBLIC_WS_URL ?? '');
 const identityStore = createIdentityStore();
 
-if (host === '0.0.0.0' && !devToken) {
-  console.error('[relay] refusing to listen on 0.0.0.0 without RELAY_DEV_TOKEN');
+if (host === '0.0.0.0' && !hasAnyRelaySecret()) {
+  console.error('[relay] refusing to listen on 0.0.0.0 without RELAY_DEV_TOKEN, RELAY_PAIRING_TOKEN, or RELAY_HOST_TOKEN');
   process.exit(1);
 }
 
@@ -148,7 +150,7 @@ function handleMessage(connection, raw) {
 }
 
 function createHealthPayload(request) {
-  const authRequired = Boolean(devToken);
+  const authRequired = hasAnyRelaySecret();
   const authorized = isHealthRequestAuthorized(request);
 
   if (authRequired && !authorized) {
@@ -209,13 +211,14 @@ function createHealthPayload(request) {
 }
 
 function isAuthorized(message) {
-  if (!devToken) {
+  if (!hasAnyRelaySecret()) {
     return true;
   }
 
   if (isHostMessage(message.type)) {
-    return isAuthorizedToken(message.auth?.dev_token)
-      || isAuthorizedToken(message.auth?.token);
+    return isAuthorizedHostToken(message.auth?.host_token)
+      || isAuthorizedHostToken(message.auth?.dev_token)
+      || isAuthorizedHostToken(message.auth?.token);
   }
 
   if (isClientMessage(message.type)) {
@@ -227,21 +230,35 @@ function isAuthorized(message) {
 }
 
 function isHealthRequestAuthorized(request) {
-  if (!devToken) {
+  if (!hasAnyRelaySecret()) {
     return true;
   }
 
   const authorization = request.headers.authorization ?? '';
   const bearerToken = authorization.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : '';
-  return isAuthorizedToken(request.headers['x-relay-dev-token'])
-    || isAuthorizedToken(request.headers['x-relay-auth-token'])
+  return isAuthorizedRelaySecret(request.headers['x-relay-dev-token'])
+    || isAuthorizedRelaySecret(request.headers['x-relay-pairing-token'])
+    || isAuthorizedRelaySecret(request.headers['x-relay-host-token'])
+    || isAuthorizedRelaySecret(request.headers['x-relay-auth-token'])
     || isAuthorizedDeviceToken(request.headers['x-relay-device-token'])
     || isAuthorizedDeviceToken(request.headers['x-relay-auth-token'])
     || isAuthorizedDeviceToken(bearerToken);
 }
 
-function isAuthorizedToken(token) {
-  return Boolean(devToken && token === devToken);
+function hasAnyRelaySecret() {
+  return Boolean(devToken || pairingToken || hostToken);
+}
+
+function isAuthorizedRelaySecret(token) {
+  return isAuthorizedPairingToken(token) || isAuthorizedHostToken(token);
+}
+
+function isAuthorizedPairingToken(token) {
+  return Boolean(token && pairingToken && token === pairingToken);
+}
+
+function isAuthorizedHostToken(token) {
+  return Boolean(token && hostToken && token === hostToken);
 }
 
 function isAuthorizedDeviceToken(token) {
@@ -275,17 +292,18 @@ function isClientMessage(type) {
 async function handlePairRequest(request, response) {
   try {
     console.log(`[relay] pair request from ${request.socket.remoteAddress ?? 'unknown'}`);
-    if (!devToken) {
+    if (!pairingToken) {
       writeJson(response, 400, {
         ok: false,
         error: 'pairing_disabled',
-        detail: 'Set RELAY_DEV_TOKEN before pairing devices.'
+        detail: 'Set RELAY_PAIRING_TOKEN before pairing devices.'
       });
       return;
     }
 
-    if (!isAuthorizedToken(request.headers['x-relay-dev-token'])
-      && !isAuthorizedToken(request.headers['x-relay-auth-token'])) {
+    if (!isAuthorizedPairingToken(request.headers['x-relay-pairing-token'])
+      && !isAuthorizedPairingToken(request.headers['x-relay-dev-token'])
+      && !isAuthorizedPairingToken(request.headers['x-relay-auth-token'])) {
       writeJson(response, 401, {
         ok: false,
         error: 'unauthorized',

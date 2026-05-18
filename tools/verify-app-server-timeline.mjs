@@ -21,7 +21,7 @@ try {
     RELAY_URL: relayUrl,
     RELAY_DEV_TOKEN: devToken,
     CODEX_ADAPTER: 'app-server',
-    CODEX_APP_SERVER_PORT: '8793'
+    CODEX_APP_SERVER_LISTEN: 'stdio://'
   });
   processes.push(bridge);
   await waitForOutput(bridge, '[bridge] app-server initialized', 15000);

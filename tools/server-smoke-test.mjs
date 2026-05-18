@@ -17,6 +17,10 @@ const pairingToken = process.env.RELAY_PAIRING_TOKEN
   ?? process.env.RELAY_DEV_TOKEN
   ?? process.env.DEV_TOKEN
   ?? (startLocalRelay ? 'server-smoke-token' : '');
+const hostToken = process.env.RELAY_HOST_TOKEN
+  ?? process.env.RELAY_DEV_TOKEN
+  ?? process.env.DEV_TOKEN
+  ?? (startLocalRelay ? 'server-smoke-host-token' : '');
 const httpUrl = trimTrailingSlash(process.env.RELAY_PUBLIC_HTTP_URL
   ?? process.env.RELAY_HTTP_URL
   ?? (startLocalRelay ? `http://127.0.0.1:${relayPort}` : ''));
@@ -42,13 +46,18 @@ if (!pairingToken) {
   throw new Error('Set RELAY_PAIRING_TOKEN or RELAY_DEV_TOKEN before running server smoke test.');
 }
 
+if (!hostToken) {
+  throw new Error('Set RELAY_HOST_TOKEN or RELAY_DEV_TOKEN before running server smoke test.');
+}
+
 try {
   if (startLocalRelay) {
     const relay = spawnProcess('relay', 'node', ['relay/service/server.mjs'], {
       ...process.env,
       RELAY_HOST: '127.0.0.1',
       RELAY_PORT: relayPort,
-      RELAY_DEV_TOKEN: pairingToken,
+      RELAY_PAIRING_TOKEN: pairingToken,
+      RELAY_HOST_TOKEN: hostToken,
       RELAY_PUBLIC_HTTP_URL: httpUrl,
       RELAY_PUBLIC_WS_URL: wsUrl,
       RELAY_IDENTITY_STORE_PATH: join(tempDir, 'identity-store.json'),
@@ -84,7 +93,7 @@ try {
     kind: 'smoke_test',
     bridge_version: 'smoke',
     capabilities: ['session.list', 'session.prompt', 'timeline.event']
-  }, pairingToken);
+  }, hostToken);
 
   send(host, MessageType.SessionSnapshot, {
     session: {
@@ -97,7 +106,7 @@ try {
       summary: 'Synthetic session for server Relay smoke testing.',
       updated_at: new Date().toISOString()
     }
-  }, pairingToken);
+  }, hostToken);
 
   send(client, MessageType.SessionSubscribe, { session_id: '*' }, pair.device_token);
   const snapshot = await waitForMessage(client, timeoutMs, (message) => (
@@ -128,7 +137,7 @@ try {
       'Relay routed a paired device prompt to a connected host and returned a timeline event.',
       { source: 'server-smoke-test' }
     )
-  }, pairingToken);
+  }, hostToken);
 
   await waitForMessage(client, timeoutMs, (message) => (
     message.type === MessageType.TimelineEvent
@@ -155,7 +164,7 @@ async function pairDevice() {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'X-Relay-Dev-Token': pairingToken
+      'X-Relay-Pairing-Token': pairingToken
     },
     body: JSON.stringify({
       device_id: `${smokeId}-device`,

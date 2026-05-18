@@ -12,4 +12,5 @@ android/local.properties
 
 *.iml
 *.log
+node_modules/
 .relay/
