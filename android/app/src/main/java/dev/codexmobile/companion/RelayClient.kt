@@ -22,6 +22,7 @@ class RelayClient(
         fun onGitSnapshot(snapshot: GitSnapshot)
         fun onGitAudit(sessionId: String, events: List<GitAuditItem>)
         fun onTimelineEvent(event: TimelineItem)
+        fun onTimelinePage(sessionId: String, events: List<TimelineItem>, hasMoreBefore: Boolean)
         fun onHealthCheck(summary: String)
         fun onPairingComplete(deviceId: String, deviceToken: String)
         fun onError(message: String)
@@ -71,7 +72,8 @@ class RelayClient(
         afterCursor: String? = null,
         beforeCursor: String? = null,
         limit: Int = 300,
-        cacheOnly: Boolean = false
+        cacheOnly: Boolean = false,
+        page: Boolean = false
     ) {
         val payload = JSONObject()
             .put("session_id", sessionId)
@@ -84,6 +86,9 @@ class RelayClient(
         }
         if (cacheOnly) {
             payload.put("cache_only", true)
+        }
+        if (page) {
+            payload.put("page", true)
         }
         send("session.timeline.request", payload)
     }
@@ -285,6 +290,21 @@ class RelayClient(
                 "timeline.event" -> listener.onTimelineEvent(
                     parseTimelineEvent(message.getJSONObject("payload").getJSONObject("event"))
                 )
+
+                "timeline.page" -> {
+                    val payload = message.getJSONObject("payload")
+                    val eventsArray = payload.optJSONArray("events")
+                    val events = if (eventsArray == null) {
+                        emptyList()
+                    } else {
+                        List(eventsArray.length()) { index -> parseTimelineEvent(eventsArray.getJSONObject(index)) }
+                    }
+                    listener.onTimelinePage(
+                        sessionId = payload.optString("session_id", ""),
+                        events = events,
+                        hasMoreBefore = payload.optBoolean("has_more_before", false)
+                    )
+                }
 
                 "error" -> listener.onError(
                     message.getJSONObject("payload").optString("detail", "Relay error")

@@ -2645,3 +2645,54 @@ BUILD SUCCESSFUL
 Operational note:
 
 - Restart server Relay after deploying this change; older-page loading depends on the new `before_cursor` Relay behavior.
+
+## 2026-05-18: Prompt-to-prompt turn folding
+
+Status: completed.
+
+Changes:
+
+- Changed Android timeline folding from operation-detail grouping to whole-turn grouping.
+- A completed or historical prompt turn now keeps the user prompt visible and collapses all Codex events before the next prompt into one `Codex response` card.
+- Tapping the collapsed response expands the underlying assistant, plan, command, file, tool, diff, reasoning, and turn status events.
+- The latest in-progress turn remains expanded so running work is still visible live.
+
+Verification:
+
+```powershell
+.\gradlew.bat :app:assembleDebug --no-daemon
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL
+```
+
+## 2026-05-18: Timeline cursor pagination
+
+Status: completed.
+
+Changes:
+
+- Added Relay `timeline.page` responses for cursor-based cached timeline pagination.
+- Android now requests older history with `before_cursor`, receives page metadata, and tracks `has_more_before`.
+- Added automatic load-earlier behavior when scrolling near the oldest visible timeline items, while keeping the manual `Load earlier` fallback.
+- Added loading and beginning-of-cache states to the timeline history control.
+- Raised Relay and Android timeline cache limits from 500 to 2000 events for longer mobile history.
+- Extended the Relay timeline cache verification to cover paged `before_cursor` reads and `has_more_before`.
+
+Verification:
+
+```powershell
+node --check relay/service/server.mjs
+node --check packages/protocol/index.mjs
+npm run verify:relay-timeline-cache
+.\gradlew.bat :app:assembleDebug --no-daemon
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL
+```

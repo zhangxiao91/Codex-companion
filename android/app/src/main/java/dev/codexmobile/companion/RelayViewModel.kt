@@ -179,18 +179,28 @@ class RelayViewModel(
     }
 
     fun loadEarlierTimeline() {
-        val sessionId = _uiState.value.selectedSessionId ?: return
+        val state = _uiState.value
+        val sessionId = state.selectedSessionId ?: return
+        if (state.timelineLoadingEarlier) {
+            return
+        }
+        if (state.timelineHasMoreEarlier[sessionId] == false) {
+            return
+        }
+
         val beforeCursor = earliestCursorFor(sessionId)
         if (beforeCursor == null) {
             _uiState.update { it.copy(lastError = "No cached timeline cursor yet.") }
             return
         }
 
+        _uiState.update { it.copy(timelineLoadingEarlier = true, lastError = null) }
         relayClient.requestTimeline(
             sessionId = sessionId,
             beforeCursor = beforeCursor,
             limit = TIMELINE_PAGE_SIZE,
-            cacheOnly = true
+            cacheOnly = true,
+            page = true
         )
     }
 
@@ -297,11 +307,22 @@ class RelayViewModel(
 
     override fun onTimelineEvent(event: TimelineItem) {
         _uiState.update { state ->
-            val timeline = (listOf(event) + state.timeline.filter { it.eventId != event.eventId })
-                .sortedWith(compareByDescending<TimelineItem> { it.cursor?.toLongOrNull() ?: Long.MIN_VALUE }
-                    .thenByDescending { it.createdAt })
-                .take(MAX_TIMELINE_ITEMS)
+            val timeline = mergeTimelineEvents(state.timeline, listOf(event))
             state.copy(timeline = timeline)
+        }
+        settings.saveTimeline(_uiState.value.timeline)
+    }
+
+    override fun onTimelinePage(sessionId: String, events: List<TimelineItem>, hasMoreBefore: Boolean) {
+        _uiState.update { state ->
+            val timeline = mergeTimelineEvents(state.timeline, events)
+            state.copy(
+                timeline = timeline,
+                timelineLoadingEarlier = false,
+                timelineHasMoreEarlier = state.timelineHasMoreEarlier + (sessionId to hasMoreBefore),
+                lastHealthCheck = if (events.isEmpty()) "No earlier timeline events cached" else "Loaded ${events.size} earlier timeline event(s)",
+                lastError = null
+            )
         }
         settings.saveTimeline(_uiState.value.timeline)
     }
@@ -333,7 +354,7 @@ class RelayViewModel(
     }
 
     private companion object {
-        const val MAX_TIMELINE_ITEMS = 500
+        const val MAX_TIMELINE_ITEMS = 2000
         const val MAX_APPROVAL_ITEMS = 50
         const val TIMELINE_PAGE_SIZE = 80
 
@@ -371,6 +392,18 @@ class RelayViewModel(
         .mapNotNull { it.cursor?.toLongOrNull() }
         .minOrNull()
         ?.toString()
+
+    private fun mergeTimelineEvents(current: List<TimelineItem>, incoming: List<TimelineItem>): List<TimelineItem> {
+        if (incoming.isEmpty()) {
+            return current
+        }
+
+        val incomingIds = incoming.map { it.eventId }.toSet()
+        return (incoming + current.filter { it.eventId !in incomingIds })
+            .sortedWith(compareByDescending<TimelineItem> { it.cursor?.toLongOrNull() ?: Long.MIN_VALUE }
+                .thenByDescending { it.createdAt })
+            .take(MAX_TIMELINE_ITEMS)
+    }
 
     private fun requestGit(
         action: String,

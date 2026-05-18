@@ -133,6 +133,6 @@ class RelaySettings(context: Context) {
         const val KEY_SESSIONS = "sessions"
         const val KEY_TIMELINE = "timeline"
         const val MAX_SESSIONS = 20
-        const val MAX_TIMELINE_ITEMS = 500
+        const val MAX_TIMELINE_ITEMS = 2000
     }
 }

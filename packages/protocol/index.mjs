@@ -15,7 +15,8 @@ export const MessageType = Object.freeze({
   SessionSubscribe: 'session.subscribe',
   SessionPrompt: 'session.prompt',
   SessionTimelineRequest: 'session.timeline.request',
-  TimelineEvent: 'timeline.event'
+  TimelineEvent: 'timeline.event',
+  TimelinePage: 'timeline.page'
 });
 
 export const SenderRole = Object.freeze({

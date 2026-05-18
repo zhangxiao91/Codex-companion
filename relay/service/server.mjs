@@ -16,7 +16,7 @@ import { handleWebSocketUpgrade } from './ws-server.mjs';
 
 const port = Number.parseInt(process.env.RELAY_PORT ?? '8787', 10);
 const host = process.env.RELAY_HOST ?? '127.0.0.1';
-const timelineCacheLimit = Number.parseInt(process.env.RELAY_TIMELINE_CACHE_LIMIT ?? '500', 10);
+const timelineCacheLimit = Number.parseInt(process.env.RELAY_TIMELINE_CACHE_LIMIT ?? '2000', 10);
 const devToken = process.env.RELAY_DEV_TOKEN ?? '';
 const pairingToken = process.env.RELAY_PAIRING_TOKEN ?? devToken;
 const hostToken = process.env.RELAY_HOST_TOKEN ?? devToken;
@@ -714,7 +714,8 @@ function handleSessionSubscribe(connection, message) {
     sendCachedTimeline(connection, sessionId, {
       afterCursor: message.payload.after_cursor,
       beforeCursor: message.payload.before_cursor,
-      limit: message.payload.limit
+      limit: message.payload.limit,
+      page: message.payload.page === true
     });
   }
 }
@@ -765,7 +766,8 @@ function handleSessionTimelineRequest(connection, message) {
   sendCachedTimeline(connection, message.payload.session_id, {
     afterCursor: message.payload.after_cursor,
     beforeCursor: message.payload.before_cursor,
-    limit: message.payload.limit
+    limit: message.payload.limit,
+    page: message.payload.page === true
   });
 
   if (message.payload.cache_only === true) {
@@ -921,7 +923,7 @@ function summarizeAuditMessage(message) {
 
 function sendCachedTimeline(connection, sessionId, options = {}) {
   const cachedEvents = state.timelineEvents.get(sessionId) ?? [];
-  if (cachedEvents.length === 0) {
+  if (cachedEvents.length === 0 && options.page !== true) {
     return;
   }
 
@@ -935,13 +937,39 @@ function sendCachedTimeline(connection, sessionId, options = {}) {
     : cachedEvents
       .filter((event) => parseCursor(event.cursor) > afterCursor)
       .slice(0, limit);
+  const replayedEvents = selectedEvents.map((event) => ({
+    ...event,
+    replayed_from_cache: true
+  }));
+  const selectedCursors = selectedEvents
+    .map((event) => parseCursor(event.cursor))
+    .filter((cursor) => cursor > 0);
+  const oldestSelectedCursor = selectedCursors.length > 0 ? Math.min(...selectedCursors) : 0;
+  const newestSelectedCursor = selectedCursors.length > 0 ? Math.max(...selectedCursors) : 0;
+  const hasMoreBefore = oldestSelectedCursor > 0
+    ? cachedEvents.some((event) => parseCursor(event.cursor) < oldestSelectedCursor)
+    : false;
+  const hasMoreAfter = newestSelectedCursor > 0
+    ? cachedEvents.some((event) => parseCursor(event.cursor) > newestSelectedCursor)
+    : false;
 
-  for (const event of selectedEvents) {
+  if (options.page === true) {
+    send(connection, createMessage(MessageType.TimelinePage, {
+      session_id: sessionId,
+      events: replayedEvents,
+      before_cursor: options.beforeCursor ?? null,
+      after_cursor: options.afterCursor ?? null,
+      oldest_cursor: oldestSelectedCursor > 0 ? String(oldestSelectedCursor) : null,
+      newest_cursor: newestSelectedCursor > 0 ? String(newestSelectedCursor) : null,
+      has_more_before: hasMoreBefore,
+      has_more_after: hasMoreAfter
+    }));
+    return;
+  }
+
+  for (const event of replayedEvents) {
     send(connection, createMessage(MessageType.TimelineEvent, {
-      event: {
-        ...event,
-        replayed_from_cache: true
-      }
+      event
     }));
   }
 }

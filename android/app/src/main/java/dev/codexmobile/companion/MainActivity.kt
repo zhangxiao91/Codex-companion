@@ -56,6 +56,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -70,6 +71,7 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -565,6 +567,25 @@ private fun TimelineStream(uiState: RelayUiState, modifier: Modifier = Modifier,
     val scope = rememberCoroutineScope()
     val expandedOperationGroups = remember(selectedSession?.sessionId) { mutableStateMapOf<String, Boolean>() }
     val displayItems = remember(events) { buildTimelineDisplayItems(events) }
+    val hasMoreEarlier = uiState.selectedSessionId?.let { uiState.timelineHasMoreEarlier[it] } != false
+
+    LaunchedEffect(selectedSession?.sessionId, displayItems.size, hasMoreEarlier, uiState.timelineLoadingEarlier) {
+        if (selectedSession == null || displayItems.isEmpty() || !hasMoreEarlier || uiState.timelineLoadingEarlier) {
+            return@LaunchedEffect
+        }
+
+        snapshotFlow {
+            val layoutInfo = listState.layoutInfo
+            val oldestVisibleIndex = layoutInfo.visibleItemsInfo.maxOfOrNull { it.index } ?: 0
+            oldestVisibleIndex >= displayItems.size - 3
+        }
+            .distinctUntilChanged()
+            .collect { nearOldest ->
+                if (nearOldest) {
+                    onLoadEarlier()
+                }
+            }
+    }
 
     Box(modifier = modifier.fillMaxWidth()) {
         if (selectedSession == null) {
@@ -584,7 +605,7 @@ private fun TimelineStream(uiState: RelayUiState, modifier: Modifier = Modifier,
                 items(displayItems, key = { it.stableKey }) { item ->
                     when (item) {
                         is TimelineDisplayItem.Event -> TimelineBubble(item.event)
-                        is TimelineDisplayItem.OperationGroup -> TimelineOperationGroup(
+                        is TimelineDisplayItem.TurnGroup -> TimelineTurnGroup(
                             group = item,
                             expanded = expandedOperationGroups[item.groupId] == true,
                             onToggle = {
@@ -594,14 +615,11 @@ private fun TimelineStream(uiState: RelayUiState, modifier: Modifier = Modifier,
                     }
                 }
                 item(key = "load-earlier") {
-                    OutlinedButton(
-                        modifier = Modifier.fillMaxWidth(),
-                        onClick = onLoadEarlier,
-                        border = BorderStroke(1.dp, StrokeDark),
-                        shape = RoundedCornerShape(99.dp)
-                    ) {
-                        Text("Load earlier", color = PrimaryText)
-                    }
+                    TimelineHistoryControl(
+                        loading = uiState.timelineLoadingEarlier,
+                        hasMore = hasMoreEarlier,
+                        onLoadEarlier = onLoadEarlier
+                    )
                 }
             }
             if (events.size > 4 && listState.firstVisibleItemIndex > 0) {
@@ -639,6 +657,29 @@ private fun EmptyMainState(title: String, body: String) {
 }
 
 @Composable
+private fun TimelineHistoryControl(loading: Boolean, hasMore: Boolean, onLoadEarlier: () -> Unit) {
+    if (!hasMore) {
+        Text(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+            text = "Beginning of cached history",
+            color = TertiaryText,
+            style = MaterialTheme.typography.labelMedium
+        )
+        return
+    }
+
+    OutlinedButton(
+        modifier = Modifier.fillMaxWidth(),
+        enabled = !loading,
+        onClick = onLoadEarlier,
+        border = BorderStroke(1.dp, StrokeDark),
+        shape = RoundedCornerShape(99.dp)
+    ) {
+        Text(if (loading) "Loading earlier..." else "Load earlier", color = PrimaryText)
+    }
+}
+
+@Composable
 private fun TimelineBubble(event: TimelineItem) {
     val isUser = event.title.contains("prompt", ignoreCase = true) || event.type.contains("user", ignoreCase = true)
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start) {
@@ -662,8 +703,8 @@ private fun TimelineBubble(event: TimelineItem) {
 }
 
 @Composable
-private fun TimelineOperationGroup(
-    group: TimelineDisplayItem.OperationGroup,
+private fun TimelineTurnGroup(
+    group: TimelineDisplayItem.TurnGroup,
     expanded: Boolean,
     onToggle: () -> Unit
 ) {
@@ -679,9 +720,9 @@ private fun TimelineOperationGroup(
         Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Codex operations", color = PrimaryText, fontWeight = FontWeight.SemiBold)
+                    Text("Codex response", color = PrimaryText, fontWeight = FontWeight.SemiBold)
                     Text(
-                        text = "${group.events.size} action(s) · ${formatMetaTime(group.latestCreatedAt)}",
+                        text = "${group.events.size} event(s) - ${formatMetaTime(group.latestCreatedAt)}",
                         color = TertiaryText,
                         style = MaterialTheme.typography.labelSmall,
                         maxLines = 1,
@@ -692,7 +733,7 @@ private fun TimelineOperationGroup(
             }
             if (!expanded) {
                 Text(
-                    text = group.events.take(3).joinToString(" · ") { compactOperationTitle(it) },
+                    text = compactTurnSummary(group.events),
                     color = SecondaryText,
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 2,
@@ -2005,31 +2046,38 @@ private sealed class TimelineDisplayItem {
         override val stableKey: String = event.eventId
     }
 
-    data class OperationGroup(
+    data class TurnGroup(
         val groupId: String,
         val events: List<TimelineItem>
     ) : TimelineDisplayItem() {
-        override val stableKey: String = "operations:$groupId"
+        override val stableKey: String = "turn:$groupId"
         val latestCreatedAt: String = events.firstOrNull()?.createdAt.orEmpty()
     }
 }
 
 private fun buildTimelineDisplayItems(events: List<TimelineItem>): List<TimelineDisplayItem> {
-    val completedWorkKeys = events
+    val completedTurnKeys = events
         .filter { it.type == "turn_completed" }
         .map { timelineWorkKey(it) }
         .toSet()
-    val completedOperationGroups = events
-        .filter { shouldFoldOperation(it, completedWorkKeys) }
+    val turnKeysClosedByNewerPrompt = events
+        .filter { isUserPrompt(it) }
+        .map { timelineWorkKey(it) }
+        .distinct()
+        .drop(1)
+        .toSet()
+    val foldableTurnKeys = completedTurnKeys + turnKeysClosedByNewerPrompt
+    val completedTurnGroups = events
+        .filter { shouldFoldIntoCompletedTurn(it, foldableTurnKeys) }
         .groupBy { timelineWorkKey(it) }
     val emittedGroups = mutableSetOf<String>()
     val items = mutableListOf<TimelineDisplayItem>()
 
     for (event in events) {
         val groupId = timelineWorkKey(event)
-        if (shouldFoldOperation(event, completedWorkKeys)) {
+        if (shouldFoldIntoCompletedTurn(event, foldableTurnKeys)) {
             if (emittedGroups.add(groupId)) {
-                items.add(TimelineDisplayItem.OperationGroup(groupId, completedOperationGroups[groupId].orEmpty()))
+                items.add(TimelineDisplayItem.TurnGroup(groupId, completedTurnGroups[groupId].orEmpty()))
             }
         } else {
             items.add(TimelineDisplayItem.Event(event))
@@ -2039,8 +2087,8 @@ private fun buildTimelineDisplayItems(events: List<TimelineItem>): List<Timeline
     return items
 }
 
-private fun shouldFoldOperation(event: TimelineItem, completedWorkKeys: Set<String>): Boolean {
-    if (!isCodexOperationDetail(event)) {
+private fun shouldFoldIntoCompletedTurn(event: TimelineItem, completedTurnKeys: Set<String>): Boolean {
+    if (isUserPrompt(event)) {
         return false
     }
 
@@ -2048,7 +2096,13 @@ private fun shouldFoldOperation(event: TimelineItem, completedWorkKeys: Set<Stri
         return false
     }
 
-    return timelineWorkKey(event) in completedWorkKeys || looksCompletedOperation(event)
+    return timelineWorkKey(event) in completedTurnKeys
+}
+
+private fun isUserPrompt(event: TimelineItem): Boolean {
+    return event.type == "user_prompt"
+        || event.title.contains("prompt", ignoreCase = true)
+        || event.type.contains("user", ignoreCase = true)
 }
 
 private fun isCodexOperationDetail(event: TimelineItem): Boolean {
@@ -2103,6 +2157,25 @@ private fun compactOperationTitle(event: TimelineItem): String {
         "reasoning_summary" -> "Reasoning"
         "request_resolved" -> "Request"
         else -> event.title.ifBlank { event.type }
+    }
+}
+
+private fun compactTurnSummary(events: List<TimelineItem>): String {
+    val assistantMessage = events.firstOrNull { it.type == "assistant_message" && it.summary.isNotBlank() }
+    if (assistantMessage != null) {
+        return assistantMessage.summary
+    }
+
+    val meaningfulEvents = events
+        .filterNot { it.type == "turn_started" || it.type == "turn_completed" }
+        .take(4)
+        .map { compactOperationTitle(it) }
+        .distinct()
+
+    return if (meaningfulEvents.isEmpty()) {
+        "Completed Codex work. Tap to inspect details."
+    } else {
+        meaningfulEvents.joinToString(" - ")
     }
 }
 

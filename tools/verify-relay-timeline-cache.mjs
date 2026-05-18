@@ -51,8 +51,11 @@ try {
   await send(host, MessageType.TimelineEvent, {
     event: createEvent('cache-session-001', 'second_cached_event', 'Second cached event')
   });
+  await send(host, MessageType.TimelineEvent, {
+    event: createEvent('cache-session-001', 'third_cached_event', 'Third cached event')
+  });
 
-  await waitForOutput(relay, 'timeline event: Second cached event', 5000);
+  await waitForOutput(relay, 'timeline event: Third cached event', 5000);
 
   const client = await connect(relayUrl);
   await send(client, MessageType.SessionTimelineRequest, {
@@ -72,6 +75,40 @@ try {
 
   if (replayed.replayed_from_cache !== true) {
     throw new Error('Expected replayed_from_cache marker.');
+  }
+
+  await send(client, MessageType.SessionTimelineRequest, {
+    session_id: 'cache-session-001',
+    before_cursor: '3',
+    limit: 1,
+    cache_only: true,
+    page: true
+  }, deviceToken);
+
+  const page = await waitForTimelinePage(client, 5000);
+  if (page.events.length !== 1 || page.events[0].type !== 'second_cached_event') {
+    throw new Error(`Expected paged second_cached_event, received ${JSON.stringify(page.events)}`);
+  }
+
+  if (page.has_more_before !== true) {
+    throw new Error('Expected has_more_before=true for the middle page.');
+  }
+
+  await send(client, MessageType.SessionTimelineRequest, {
+    session_id: 'cache-session-001',
+    before_cursor: '2',
+    limit: 1,
+    cache_only: true,
+    page: true
+  }, deviceToken);
+
+  const firstPage = await waitForTimelinePage(client, 5000);
+  if (firstPage.events.length !== 1 || firstPage.events[0].type !== 'first_cached_event') {
+    throw new Error(`Expected paged first_cached_event, received ${JSON.stringify(firstPage.events)}`);
+  }
+
+  if (firstPage.has_more_before !== false) {
+    throw new Error('Expected has_more_before=false at the beginning of cached history.');
   }
 
   host.close();
@@ -174,6 +211,28 @@ function waitForTimelineEvent(socket, timeoutMs) {
       if (message.type === MessageType.TimelineEvent) {
         clearTimeout(timer);
         resolve(message.payload.event);
+      }
+    });
+  });
+}
+
+function waitForTimelinePage(socket, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Timed out waiting for cached timeline page after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    socket.addEventListener('message', (event) => {
+      const message = decodeMessage(event.data);
+      if (message.type === MessageType.Error) {
+        clearTimeout(timer);
+        reject(new Error(message.payload.detail));
+        return;
+      }
+
+      if (message.type === MessageType.TimelinePage) {
+        clearTimeout(timer);
+        resolve(message.payload);
       }
     });
   });

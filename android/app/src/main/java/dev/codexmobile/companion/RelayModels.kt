@@ -89,6 +89,8 @@ data class RelayUiState(
     val approvals: List<ApprovalItem> = emptyList(),
     val gitSnapshots: Map<String, GitSnapshot> = emptyMap(),
     val gitAudit: Map<String, List<GitAuditItem>> = emptyMap(),
+    val timelineLoadingEarlier: Boolean = false,
+    val timelineHasMoreEarlier: Map<String, Boolean> = emptyMap(),
     val lastConnectedAt: String? = null,
     val lastHealthCheck: String? = null,
     val lastError: String? = null
