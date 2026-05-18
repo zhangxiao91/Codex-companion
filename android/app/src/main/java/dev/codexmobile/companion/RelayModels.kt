@@ -17,6 +17,7 @@ data class TimelineItem(
     val type: String,
     val title: String,
     val summary: String,
+    val createdAt: String,
     val cursor: String?
 )
 

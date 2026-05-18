@@ -16,7 +16,7 @@ import { handleWebSocketUpgrade } from './ws-server.mjs';
 
 const port = Number.parseInt(process.env.RELAY_PORT ?? '8787', 10);
 const host = process.env.RELAY_HOST ?? '127.0.0.1';
-const timelineCacheLimit = Number.parseInt(process.env.RELAY_TIMELINE_CACHE_LIMIT ?? '200', 10);
+const timelineCacheLimit = Number.parseInt(process.env.RELAY_TIMELINE_CACHE_LIMIT ?? '500', 10);
 const devToken = process.env.RELAY_DEV_TOKEN ?? '';
 const pairingToken = process.env.RELAY_PAIRING_TOKEN ?? devToken;
 const hostToken = process.env.RELAY_HOST_TOKEN ?? devToken;
@@ -713,6 +713,7 @@ function handleSessionSubscribe(connection, message) {
     }
     sendCachedTimeline(connection, sessionId, {
       afterCursor: message.payload.after_cursor,
+      beforeCursor: message.payload.before_cursor,
       limit: message.payload.limit
     });
   }
@@ -763,6 +764,7 @@ function handleSessionTimelineRequest(connection, message) {
 
   sendCachedTimeline(connection, message.payload.session_id, {
     afterCursor: message.payload.after_cursor,
+    beforeCursor: message.payload.before_cursor,
     limit: message.payload.limit
   });
 
@@ -924,10 +926,15 @@ function sendCachedTimeline(connection, sessionId, options = {}) {
   }
 
   const afterCursor = parseCursor(options.afterCursor);
+  const beforeCursor = parseCursor(options.beforeCursor);
   const limit = Number.isInteger(options.limit) && options.limit > 0 ? options.limit : cachedEvents.length;
-  const selectedEvents = cachedEvents
-    .filter((event) => parseCursor(event.cursor) > afterCursor)
-    .slice(0, limit);
+  const selectedEvents = beforeCursor > 0
+    ? cachedEvents
+      .filter((event) => parseCursor(event.cursor) < beforeCursor)
+      .slice(-limit)
+    : cachedEvents
+      .filter((event) => parseCursor(event.cursor) > afterCursor)
+      .slice(0, limit);
 
   for (const event of selectedEvents) {
     send(connection, createMessage(MessageType.TimelineEvent, {

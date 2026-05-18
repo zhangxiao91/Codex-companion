@@ -24,6 +24,7 @@ class RelayViewModel(
         )
     )
     val uiState: StateFlow<RelayUiState> = _uiState
+    private var pendingNewChatHostId: String? = null
 
     fun connect() {
         _uiState.update { it.copy(connectionStatus = "Connecting", lastError = null) }
@@ -158,6 +159,41 @@ class RelayViewModel(
         relayClient.sendPrompt(sessionId, text.trim())
     }
 
+    fun createNewChat() {
+        val state = _uiState.value
+        if (state.connectionStatus != "Online") {
+            _uiState.update { it.copy(lastError = "Connect to Relay before starting a new chat") }
+            return
+        }
+
+        val hostId = state.selectedSession?.hostId
+            ?: state.sessions.firstOrNull()?.hostId
+        if (hostId.isNullOrBlank()) {
+            _uiState.update { it.copy(lastError = "No online host is available for New Chat") }
+            return
+        }
+
+        pendingNewChatHostId = hostId
+        _uiState.update { it.copy(lastError = null, lastHealthCheck = "Creating new chat on $hostId") }
+        relayClient.createNewChat(hostId)
+    }
+
+    fun loadEarlierTimeline() {
+        val sessionId = _uiState.value.selectedSessionId ?: return
+        val beforeCursor = earliestCursorFor(sessionId)
+        if (beforeCursor == null) {
+            _uiState.update { it.copy(lastError = "No cached timeline cursor yet.") }
+            return
+        }
+
+        relayClient.requestTimeline(
+            sessionId = sessionId,
+            beforeCursor = beforeCursor,
+            limit = TIMELINE_PAGE_SIZE,
+            cacheOnly = true
+        )
+    }
+
     fun requestGitStatus() {
         requestGit("status")
     }
@@ -215,10 +251,18 @@ class RelayViewModel(
     }
 
     override fun onSessionSnapshot(session: CodexSession) {
+        val shouldSelectNewChat = pendingNewChatHostId == session.hostId
         _uiState.update { state ->
             val sessions = listOf(session) + state.sessions.filter { it.sessionId != session.sessionId }
-            val selectedSessionId = state.selectedSessionId ?: session.sessionId
+            val selectedSessionId = if (shouldSelectNewChat) {
+                session.sessionId
+            } else {
+                state.selectedSessionId ?: session.sessionId
+            }
             state.copy(sessions = sessions, selectedSessionId = selectedSessionId)
+        }
+        if (shouldSelectNewChat) {
+            pendingNewChatHostId = null
         }
         val state = _uiState.value
         settings.saveSessions(state.sessions)
@@ -254,6 +298,8 @@ class RelayViewModel(
     override fun onTimelineEvent(event: TimelineItem) {
         _uiState.update { state ->
             val timeline = (listOf(event) + state.timeline.filter { it.eventId != event.eventId })
+                .sortedWith(compareByDescending<TimelineItem> { it.cursor?.toLongOrNull() ?: Long.MIN_VALUE }
+                    .thenByDescending { it.createdAt })
                 .take(MAX_TIMELINE_ITEMS)
             state.copy(timeline = timeline)
         }
@@ -287,8 +333,9 @@ class RelayViewModel(
     }
 
     private companion object {
-        const val MAX_TIMELINE_ITEMS = 200
+        const val MAX_TIMELINE_ITEMS = 500
         const val MAX_APPROVAL_ITEMS = 50
+        const val TIMELINE_PAGE_SIZE = 80
 
         fun isValidRelayUrl(url: String): Boolean =
             url.startsWith("ws://") || url.startsWith("wss://")
@@ -304,7 +351,7 @@ class RelayViewModel(
                 val json = JSONObject(String(Base64.getUrlDecoder().decode(encoded), Charsets.UTF_8))
                 val relayUrl = json.optString("relay_url", "").trim()
                 val pairingToken = json.optString("pairing_token", "").trim()
-                if (relayUrl.isBlank() || pairingToken.length < 32) {
+                if (relayUrl.isBlank() || pairingToken.isBlank()) {
                     null
                 } else {
                     relayUrl to pairingToken
@@ -317,6 +364,12 @@ class RelayViewModel(
         .filter { it.sessionId == sessionId }
         .mapNotNull { it.cursor?.toLongOrNull() }
         .maxOrNull()
+        ?.toString()
+
+    private fun earliestCursorFor(sessionId: String): String? = _uiState.value.timeline
+        .filter { it.sessionId == sessionId }
+        .mapNotNull { it.cursor?.toLongOrNull() }
+        .minOrNull()
         ?.toString()
 
     private fun requestGit(

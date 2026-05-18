@@ -84,6 +84,7 @@ class RelaySettings(context: Context) {
                 type = item.optString("type", "event"),
                 title = item.optString("title", "Timeline event"),
                 summary = item.optString("summary", ""),
+                createdAt = item.optString("created_at", ""),
                 cursor = item.optString("cursor").takeIf { it.isNotBlank() }
             )
         }.getOrNull()
@@ -99,6 +100,7 @@ class RelaySettings(context: Context) {
                     .put("type", event.type)
                     .put("title", event.title)
                     .put("summary", event.summary)
+                    .put("created_at", event.createdAt)
                     .put("cursor", event.cursor ?: "")
             )
         }
@@ -131,6 +133,6 @@ class RelaySettings(context: Context) {
         const val KEY_SESSIONS = "sessions"
         const val KEY_TIMELINE = "timeline"
         const val MAX_SESSIONS = 20
-        const val MAX_TIMELINE_ITEMS = 100
+        const val MAX_TIMELINE_ITEMS = 500
     }
 }

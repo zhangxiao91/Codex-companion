@@ -66,12 +66,24 @@ class RelayClient(
         send("session.subscribe", JSONObject().put("session_id", "*"))
     }
 
-    fun requestTimeline(sessionId: String, afterCursor: String? = null) {
+    fun requestTimeline(
+        sessionId: String,
+        afterCursor: String? = null,
+        beforeCursor: String? = null,
+        limit: Int = 300,
+        cacheOnly: Boolean = false
+    ) {
         val payload = JSONObject()
             .put("session_id", sessionId)
-            .put("limit", 100)
+            .put("limit", limit.coerceIn(1, 300))
         if (!afterCursor.isNullOrBlank()) {
             payload.put("after_cursor", afterCursor)
+        }
+        if (!beforeCursor.isNullOrBlank()) {
+            payload.put("before_cursor", beforeCursor)
+        }
+        if (cacheOnly) {
+            payload.put("cache_only", true)
         }
         send("session.timeline.request", payload)
     }
@@ -82,6 +94,14 @@ class RelayClient(
             JSONObject()
                 .put("session_id", sessionId)
                 .put("text", text)
+        )
+    }
+
+    fun createNewChat(hostId: String) {
+        send(
+            "session.create_ephemeral",
+            JSONObject()
+                .put("host_id", hostId)
         )
     }
 
@@ -206,6 +226,7 @@ class RelayClient(
                 .toRequestBody(JSON_MEDIA_TYPE)
             val request = Request.Builder()
                 .url(pairUrlFor(url))
+                .header("X-Relay-Pairing-Token", token)
                 .header("X-Relay-Dev-Token", token)
                 .header("Connection", "close")
                 .header("Accept", "application/json")
@@ -222,7 +243,7 @@ class RelayClient(
                         response.use {
                             val raw = it.body.string()
                             if (!it.isSuccessful) {
-                                listener.onError("Pairing failed: HTTP ${it.code}")
+                                listener.onError("Pairing failed: HTTP ${it.code}${errorDetail(raw)}")
                                 return
                             }
 
@@ -309,6 +330,18 @@ class RelayClient(
         return "$base$path"
     }
 
+    private fun errorDetail(raw: String): String {
+        if (raw.isBlank()) {
+            return ""
+        }
+
+        return runCatching {
+            val json = JSONObject(raw)
+            val detail = json.optString("detail", json.optString("error", ""))
+            if (detail.isBlank()) "" else ": $detail"
+        }.getOrDefault("")
+    }
+
     private fun addAuthHeaders(builder: Request.Builder, token: String) {
         if (token.isBlank()) {
             return
@@ -373,6 +406,7 @@ class RelayClient(
         type = json.optString("type", "event"),
         title = json.optString("title", "Timeline event"),
         summary = json.optString("summary", ""),
+        createdAt = json.optString("created_at", ""),
         cursor = json.optString("cursor").takeIf { it.isNotBlank() }
     )
 

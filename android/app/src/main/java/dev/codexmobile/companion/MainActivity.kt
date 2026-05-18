@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -50,6 +51,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -65,6 +67,9 @@ import androidx.compose.ui.unit.dp
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -98,6 +103,8 @@ class MainActivity : ComponentActivity() {
                 onGitAuditRefresh = viewModel::requestGitAudit,
                 onApprovalDecision = viewModel::decideApproval,
                 onPromptSend = viewModel::sendPrompt,
+                onNewChat = viewModel::createNewChat,
+                onLoadEarlierTimeline = viewModel::loadEarlierTimeline,
                 onScanQrCode = ::scanPairingCode,
                 scanNotice = scanNotice
             )
@@ -146,6 +153,8 @@ private fun CompanionApp(
     onGitAuditRefresh: () -> Unit,
     onApprovalDecision: (String, String) -> Unit,
     onPromptSend: (String) -> Unit,
+    onNewChat: () -> Unit,
+    onLoadEarlierTimeline: () -> Unit,
     onScanQrCode: () -> Unit,
     scanNotice: String?
 ) {
@@ -185,6 +194,8 @@ private fun CompanionApp(
                     onGitAuditRefresh = onGitAuditRefresh,
                     onApprovalDecision = onApprovalDecision,
                     onPromptSend = onPromptSend,
+                    onNewChat = onNewChat,
+                    onLoadEarlierTimeline = onLoadEarlierTimeline,
                     onHealthCheck = onHealthCheck
                 )
             }
@@ -349,6 +360,8 @@ private fun MainSessionScreen(
     onGitAuditRefresh: () -> Unit,
     onApprovalDecision: (String, String) -> Unit,
     onPromptSend: (String) -> Unit,
+    onNewChat: () -> Unit,
+    onLoadEarlierTimeline: () -> Unit,
     onHealthCheck: () -> Unit
 ) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -362,6 +375,10 @@ private fun MainSessionScreen(
                 uiState = uiState,
                 onSessionSelected = { sessionId ->
                     onSessionSelected(sessionId)
+                    scope.launch { drawerState.close() }
+                },
+                onNewChat = {
+                    onNewChat()
                     scope.launch { drawerState.close() }
                 },
                 onReconnect = onReconnect
@@ -381,9 +398,10 @@ private fun MainSessionScreen(
                 uiState = uiState,
                 onMenu = { scope.launch { drawerState.open() } },
                 onTools = { toolsOpen = true },
+                onNewChat = onNewChat,
                 onReconnect = onReconnect
             )
-            TimelineStream(uiState = uiState, modifier = Modifier.weight(1f))
+            TimelineStream(uiState = uiState, modifier = Modifier.weight(1f), onLoadEarlier = onLoadEarlierTimeline)
             ChatComposer(
                 selectedSession = uiState.selectedSession,
                 online = uiState.connectionStatus == "Online",
@@ -427,15 +445,15 @@ private fun MainSessionScreen(
 }
 
 @Composable
-private fun MainTopBar(uiState: RelayUiState, onMenu: () -> Unit, onTools: () -> Unit, onReconnect: () -> Unit) {
+private fun MainTopBar(uiState: RelayUiState, onMenu: () -> Unit, onTools: () -> Unit, onNewChat: () -> Unit, onReconnect: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
             CircleTextButton(text = "≡", onClick = onMenu)
-            Column(modifier = Modifier.width(188.dp)) {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = uiState.selectedSession?.projectName ?: "Codex",
                     color = PrimaryText,
@@ -454,14 +472,15 @@ private fun MainTopBar(uiState: RelayUiState, onMenu: () -> Unit, onTools: () ->
             }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            CircleTextButton(text = "+", onClick = onNewChat)
             StatusOrb(uiState.connectionStatus, onReconnect)
-            CircleTextButton(text = "Tools", onClick = onTools, wide = true)
+            CircleTextButton(text = "...", onClick = onTools)
         }
     }
 }
 
 @Composable
-private fun SessionDrawer(uiState: RelayUiState, onSessionSelected: (String) -> Unit, onReconnect: () -> Unit) {
+private fun SessionDrawer(uiState: RelayUiState, onSessionSelected: (String) -> Unit, onNewChat: () -> Unit, onReconnect: () -> Unit) {
     ModalDrawerSheet(
         modifier = Modifier.fillMaxHeight().width(328.dp),
         drawerContainerColor = AppBlack,
@@ -482,6 +501,15 @@ private fun SessionDrawer(uiState: RelayUiState, onSessionSelected: (String) -> 
             DrawerShortcut("Projects", "${uiState.sessions.map { it.hostId }.distinct().size} hosts")
             DrawerShortcut("Approvals", "${uiState.pendingApprovals.size} pending")
             DrawerShortcut("Git", uiState.selectedGitSnapshot?.branch ?: "No snapshot")
+            Button(
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                enabled = uiState.connectionStatus == "Online" && uiState.sessions.isNotEmpty(),
+                shape = RoundedCornerShape(99.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = PrimaryText, contentColor = AppBlack),
+                onClick = onNewChat
+            ) {
+                Text("New Chat", fontWeight = FontWeight.SemiBold)
+            }
             Text("Recents", color = PrimaryText, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
             if (uiState.sessions.isEmpty()) {
                 Text("No live sessions. Keep Host Bridge online, then refresh.", color = SecondaryText)
@@ -523,15 +551,20 @@ private fun DrawerSessionRow(session: CodexSession, selected: Boolean, onClick: 
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(session.projectName, color = PrimaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text("${session.branch} · ${session.status}", color = SecondaryText, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("Updated ${formatMetaTime(session.updatedAt)}", color = TertiaryText, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(session.hostId, color = TertiaryText, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
 
 @Composable
-private fun TimelineStream(uiState: RelayUiState, modifier: Modifier = Modifier) {
+private fun TimelineStream(uiState: RelayUiState, modifier: Modifier = Modifier, onLoadEarlier: () -> Unit) {
     val selectedSession = uiState.selectedSession
     val events = uiState.timeline.filter { it.sessionId == uiState.selectedSessionId }
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val expandedOperationGroups = remember(selectedSession?.sessionId) { mutableStateMapOf<String, Boolean>() }
+    val displayItems = remember(events) { buildTimelineDisplayItems(events) }
 
     Box(modifier = modifier.fillMaxWidth()) {
         if (selectedSession == null) {
@@ -542,9 +575,50 @@ private fun TimelineStream(uiState: RelayUiState, modifier: Modifier = Modifier)
         } else if (events.isEmpty()) {
             EmptyMainState(selectedSession.projectName, selectedSession.summary.ifBlank { "No timeline events yet." })
         } else {
-            LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp), reverseLayout = true) {
-                items(events, key = { it.eventId }) { event ->
-                    TimelineBubble(event)
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                state = listState,
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                reverseLayout = true
+            ) {
+                items(displayItems, key = { it.stableKey }) { item ->
+                    when (item) {
+                        is TimelineDisplayItem.Event -> TimelineBubble(item.event)
+                        is TimelineDisplayItem.OperationGroup -> TimelineOperationGroup(
+                            group = item,
+                            expanded = expandedOperationGroups[item.groupId] == true,
+                            onToggle = {
+                                expandedOperationGroups[item.groupId] = expandedOperationGroups[item.groupId] != true
+                            }
+                        )
+                    }
+                }
+                item(key = "load-earlier") {
+                    OutlinedButton(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = onLoadEarlier,
+                        border = BorderStroke(1.dp, StrokeDark),
+                        shape = RoundedCornerShape(99.dp)
+                    ) {
+                        Text("Load earlier", color = PrimaryText)
+                    }
+                }
+            }
+            if (events.size > 4 && listState.firstVisibleItemIndex > 0) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 8.dp, bottom = 10.dp)
+                        .size(46.dp)
+                        .clip(RoundedCornerShape(99.dp))
+                        .clickable { scope.launch { listState.animateScrollToItem(0) } },
+                    shape = RoundedCornerShape(99.dp),
+                    color = PrimaryText,
+                    shadowElevation = 6.dp
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text("↓", color = AppBlack, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                    }
                 }
             }
         }
@@ -577,9 +651,78 @@ private fun TimelineBubble(event: TimelineItem) {
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(event.title, color = PrimaryText, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(event.summary, color = if (isUser) PrimaryText.copy(alpha = 0.92f) else SecondaryText, style = MaterialTheme.typography.bodyMedium)
-                Text(event.type, color = if (isUser) PrimaryText.copy(alpha = 0.65f) else TertiaryText, style = MaterialTheme.typography.labelSmall)
+                Text(
+                    text = "${event.type} · ${formatMetaTime(event.createdAt)}",
+                    color = if (isUser) PrimaryText.copy(alpha = 0.65f) else TertiaryText,
+                    style = MaterialTheme.typography.labelSmall
+                )
             }
         }
+    }
+}
+
+@Composable
+private fun TimelineOperationGroup(
+    group: TimelineDisplayItem.OperationGroup,
+    expanded: Boolean,
+    onToggle: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth(0.92f)
+            .clip(RoundedCornerShape(18.dp))
+            .clickable(onClick = onToggle),
+        shape = RoundedCornerShape(18.dp),
+        color = CardBlack.copy(alpha = 0.72f),
+        border = BorderStroke(1.dp, StrokeDark)
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Codex operations", color = PrimaryText, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        text = "${group.events.size} action(s) · ${formatMetaTime(group.latestCreatedAt)}",
+                        color = TertiaryText,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Text(if (expanded) "Hide" else "Show", color = SecondaryText, style = MaterialTheme.typography.labelMedium)
+            }
+            if (!expanded) {
+                Text(
+                    text = group.events.take(3).joinToString(" · ") { compactOperationTitle(it) },
+                    color = SecondaryText,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    group.events.forEach { event ->
+                        TimelineOperationRow(event)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TimelineOperationRow(event: TimelineItem) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(SheetBlack, RoundedCornerShape(10.dp))
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text(compactOperationTitle(event), color = PrimaryText, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+        if (event.summary.isNotBlank()) {
+            Text(event.summary, color = SecondaryText, style = MaterialTheme.typography.bodySmall, maxLines = 4, overflow = TextOverflow.Ellipsis)
+        }
+        Text("${event.type} · ${formatMetaTime(event.createdAt)}", color = TertiaryText, style = MaterialTheme.typography.labelSmall)
     }
 }
 
@@ -1855,6 +1998,114 @@ private enum class NoticeTone(val background: Color, val foreground: Color) {
     Neutral(Color(0xFFEFF3F7), MutedText)
 }
 
+private sealed class TimelineDisplayItem {
+    abstract val stableKey: String
+
+    data class Event(val event: TimelineItem) : TimelineDisplayItem() {
+        override val stableKey: String = event.eventId
+    }
+
+    data class OperationGroup(
+        val groupId: String,
+        val events: List<TimelineItem>
+    ) : TimelineDisplayItem() {
+        override val stableKey: String = "operations:$groupId"
+        val latestCreatedAt: String = events.firstOrNull()?.createdAt.orEmpty()
+    }
+}
+
+private fun buildTimelineDisplayItems(events: List<TimelineItem>): List<TimelineDisplayItem> {
+    val completedWorkKeys = events
+        .filter { it.type == "turn_completed" }
+        .map { timelineWorkKey(it) }
+        .toSet()
+    val completedOperationGroups = events
+        .filter { shouldFoldOperation(it, completedWorkKeys) }
+        .groupBy { timelineWorkKey(it) }
+    val emittedGroups = mutableSetOf<String>()
+    val items = mutableListOf<TimelineDisplayItem>()
+
+    for (event in events) {
+        val groupId = timelineWorkKey(event)
+        if (shouldFoldOperation(event, completedWorkKeys)) {
+            if (emittedGroups.add(groupId)) {
+                items.add(TimelineDisplayItem.OperationGroup(groupId, completedOperationGroups[groupId].orEmpty()))
+            }
+        } else {
+            items.add(TimelineDisplayItem.Event(event))
+        }
+    }
+
+    return items
+}
+
+private fun shouldFoldOperation(event: TimelineItem, completedWorkKeys: Set<String>): Boolean {
+    if (!isCodexOperationDetail(event)) {
+        return false
+    }
+
+    if (isActiveOperation(event)) {
+        return false
+    }
+
+    return timelineWorkKey(event) in completedWorkKeys || looksCompletedOperation(event)
+}
+
+private fun isCodexOperationDetail(event: TimelineItem): Boolean {
+    return event.type in setOf(
+        "command_execution",
+        "command_output_delta",
+        "file_changed",
+        "tool_call",
+        "diff_update",
+        "plan_update",
+        "reasoning_summary",
+        "request_resolved"
+    )
+}
+
+private fun isActiveOperation(event: TimelineItem): Boolean {
+    val text = "${event.type} ${event.title} ${event.summary}".lowercase()
+    return text.contains("running")
+        || text.contains("started")
+        || text.contains("pending")
+        || text.contains("in_progress")
+        || text.contains("in-progress")
+}
+
+private fun looksCompletedOperation(event: TimelineItem): Boolean {
+    val text = "${event.title} ${event.summary}".lowercase()
+    return text.contains("completed")
+        || text.contains("succeeded")
+        || text.contains("success")
+        || text.contains("failed")
+        || text.contains("exit")
+        || text.contains("resolved")
+}
+
+private fun timelineWorkKey(event: TimelineItem): String {
+    val parts = event.eventId.split(":")
+    return if (parts.size >= 4) {
+        "${parts[0]}:${parts[1]}"
+    } else {
+        "${event.sessionId}:${event.createdAt.take(16)}"
+    }
+}
+
+private fun compactOperationTitle(event: TimelineItem): String {
+    return when (event.type) {
+        "command_execution" -> "Command"
+        "command_output_delta" -> "Command output"
+        "file_changed" -> "Files"
+        "tool_call" -> event.title.ifBlank { "Tool" }
+        "diff_update" -> "Diff"
+        "plan_update" -> "Plan"
+        "reasoning_summary" -> "Reasoning"
+        "request_resolved" -> "Request"
+        else -> event.title.ifBlank { event.type }
+    }
+}
+
 private fun statusTone(status: String): NoticeTone {
     val normalized = status.lowercase()
     return when {
@@ -1889,6 +2140,18 @@ private fun diagnosticsSummary(uiState: RelayUiState): String {
     val connectedAt = uiState.lastConnectedAt ?: "never"
     val selected = uiState.selectedSession?.projectName ?: "none"
     return "sessions=${uiState.sessions.size}, approvals=${uiState.pendingApprovals.size}, events=${uiState.timeline.size}, selected=$selected, last connected=$connectedAt"
+}
+
+private fun formatMetaTime(raw: String): String {
+    if (raw.isBlank()) {
+        return "unknown"
+    }
+
+    return runCatching {
+        val instant = Instant.parse(raw)
+        val formatter = DateTimeFormatter.ofPattern("MM-dd HH:mm").withZone(ZoneId.systemDefault())
+        formatter.format(instant)
+    }.getOrDefault(raw.take(16))
 }
 
 private fun gitSummary(selectedSession: CodexSession?, snapshot: GitSnapshot?): String {

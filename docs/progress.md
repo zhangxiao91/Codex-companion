@@ -2516,3 +2516,132 @@ Next recommended step:
 
 1. Re-run `npm run server:bridge` against the real server Relay.
 2. Rotate server pairing and host tokens if you already exposed them.
+
+## 2026-05-18: Android server pairing compatibility
+
+Status: completed.
+
+Changes:
+
+- Relaxed Android `cmc1...` pairing code parsing so it accepts any non-empty `pairing_token` instead of requiring at least 32 characters.
+- Updated Android `/pair` requests to send `X-Relay-Pairing-Token` explicitly while keeping `X-Relay-Dev-Token` for local compatibility.
+- Added Relay response detail to Android pairing errors so token/server mismatches are visible in the UI.
+
+Verification:
+
+```powershell
+.\gradlew.bat :app:assembleDebug
+```
+
+Result:
+
+```text
+Debug APK rebuilt at android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+Operational note:
+
+- Reinstall the debug APK before retesting QR or pairing-code login.
+
+## 2026-05-18: Android timeline QoL controls
+
+Status: completed.
+
+Changes:
+
+- Added a floating jump-to-latest button in the main timeline when the user scrolls away from the newest events.
+- Added update-time metadata to session rows in the drawer.
+- Added event-time metadata to timeline bubbles.
+- Increased Android timeline retention:
+  - in-memory timeline cache from 200 to 500 events;
+  - persisted timeline cache from 100 to 500 events;
+  - per-session timeline request limit from 100 to 300 events.
+
+Verification:
+
+```powershell
+.\gradlew.bat :app:assembleDebug
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL
+```
+
+## 2026-05-18: Android New Chat
+
+Status: completed.
+
+Changes:
+
+- Added Android support for sending `session.create_ephemeral` to Relay.
+- Added ViewModel state handling so a newly created chat is automatically selected when its session snapshot returns.
+- Added a `+` action in the main top bar for fast New Chat.
+- Added a `New Chat` button in the session drawer.
+- New Chat uses the currently selected session host, falling back to the first visible online host.
+
+Verification:
+
+```powershell
+.\gradlew.bat :app:assembleDebug
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL
+```
+
+## 2026-05-18: Android completed-operation folding
+
+Status: completed.
+
+Changes:
+
+- Added timeline display grouping for completed Codex operation details.
+- Completed command/file/tool/diff/plan/reasoning details from the same turn now collapse into a `Codex operations` block by default.
+- Added tap-to-expand behavior to show the underlying Codex operations.
+- Kept active/running/started/pending operations visible as normal timeline items.
+- Preserved assistant/user/error/turn status messages outside the collapsed operation group.
+
+Verification:
+
+```powershell
+.\gradlew.bat :app:assembleDebug
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL
+```
+
+## 2026-05-18: Timeline pagination
+
+Status: completed.
+
+Changes:
+
+- Added Relay `before_cursor` support for cached timeline pagination.
+- Raised default Relay timeline cache from 200 to 500 events per session.
+- Added Android `Load earlier` action at the older end of the timeline.
+- Added Android timeline pagination requests using the earliest loaded cursor, page size 80, cache-only mode.
+- Sorted merged Android timeline events by cursor so older pages land in the right visual order.
+
+Verification:
+
+```powershell
+node --check relay/service/server.mjs
+.\gradlew.bat :app:assembleDebug
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL
+```
+
+Operational note:
+
+- Restart server Relay after deploying this change; older-page loading depends on the new `before_cursor` Relay behavior.
