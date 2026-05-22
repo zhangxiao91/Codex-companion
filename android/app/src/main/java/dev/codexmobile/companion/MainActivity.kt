@@ -1,9 +1,13 @@
 package dev.codexmobile.companion
 
 import android.os.Bundle
+import android.Manifest
+import android.os.Build
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -46,6 +50,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.ui.window.Dialog
 import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -65,6 +70,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.activity.compose.BackHandler
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
@@ -78,6 +84,7 @@ class MainActivity : ComponentActivity() {
     private val viewModel by viewModels<RelayViewModel> {
         RelayViewModelFactory(this)
     }
+    private val localNotifier by lazy { LocalNotifier(this) }
     private var scanNotice by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -106,8 +113,12 @@ class MainActivity : ComponentActivity() {
                 onApprovalDecision = viewModel::decideApproval,
                 onPromptSend = viewModel::sendPrompt,
                 onNewChat = viewModel::createNewChat,
+                onPinnedSessionToggle = viewModel::togglePinnedSession,
                 onLoadEarlierTimeline = viewModel::loadEarlierTimeline,
                 onScanQrCode = ::scanPairingCode,
+                onNotificationsEnabled = { localNotifier.notificationsAllowed() },
+                onSessionNotify = localNotifier::notifySessionStage,
+                onApprovalNotify = localNotifier::notifyApproval,
                 scanNotice = scanNotice
             )
         }
@@ -156,10 +167,22 @@ private fun CompanionApp(
     onApprovalDecision: (String, String) -> Unit,
     onPromptSend: (String) -> Unit,
     onNewChat: () -> Unit,
+    onPinnedSessionToggle: (String) -> Unit,
     onLoadEarlierTimeline: () -> Unit,
     onScanQrCode: () -> Unit,
+    onNotificationsEnabled: () -> Boolean,
+    onSessionNotify: (CodexSession) -> Unit,
+    onApprovalNotify: (ApprovalItem) -> Unit,
     scanNotice: String?
 ) {
+    var detailOpen by remember { mutableStateOf(false) }
+
+    LaunchedEffect(uiState.deviceToken) {
+        if (uiState.deviceToken.isBlank()) {
+            detailOpen = false
+        }
+    }
+
     MaterialTheme(
         colorScheme = MaterialTheme.colorScheme.copy(
             primary = AccentBlue,
@@ -183,11 +206,16 @@ private fun CompanionApp(
                     onScanQrCode = onScanQrCode,
                     scanNotice = scanNotice
                 )
-            } else {
+            } else if (detailOpen && uiState.selectedSession != null) {
+                BackHandler { detailOpen = false }
                 MainSessionScreen(
                     uiState = uiState,
                     onReconnect = onReconnect,
-                    onSessionSelected = onSessionSelected,
+                    onBackToInbox = { detailOpen = false },
+                    onSessionSelected = { sessionId ->
+                        onSessionSelected(sessionId)
+                        detailOpen = true
+                    },
                     onGitStatus = onGitStatus,
                     onGitDiff = onGitDiff,
                     onGitFileDiff = onGitFileDiff,
@@ -197,7 +225,24 @@ private fun CompanionApp(
                     onApprovalDecision = onApprovalDecision,
                     onPromptSend = onPromptSend,
                     onNewChat = onNewChat,
+                    onPinnedSessionToggle = onPinnedSessionToggle,
                     onLoadEarlierTimeline = onLoadEarlierTimeline,
+                    onHealthCheck = onHealthCheck
+                )
+            } else {
+                InboxScreen(
+                    uiState = uiState,
+                    onReconnect = onReconnect,
+                    onSessionSelected = { sessionId ->
+                        onSessionSelected(sessionId)
+                        detailOpen = true
+                    },
+                    onNewChat = onNewChat,
+                    onPromptSend = onPromptSend,
+                    onPinnedSessionToggle = onPinnedSessionToggle,
+                    onNotificationsEnabled = onNotificationsEnabled,
+                    onSessionNotify = onSessionNotify,
+                    onApprovalNotify = onApprovalNotify,
                     onHealthCheck = onHealthCheck
                 )
             }
@@ -350,9 +395,382 @@ private fun PairingStatusBlock(uiState: RelayUiState) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+private fun InboxScreen(
+    uiState: RelayUiState,
+    onReconnect: () -> Unit,
+    onSessionSelected: (String) -> Unit,
+    onNewChat: () -> Unit,
+    onPromptSend: (String) -> Unit,
+    onPinnedSessionToggle: (String) -> Unit,
+    onNotificationsEnabled: () -> Boolean,
+    onSessionNotify: (CodexSession) -> Unit,
+    onApprovalNotify: (ApprovalItem) -> Unit,
+    onHealthCheck: () -> Unit
+) {
+    var hostsOpen by remember { mutableStateOf(false) }
+    var notificationBaselineReady by remember { mutableStateOf(false) }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { }
+
+    val inboxSessions = remember(uiState.sessions, uiState.pinnedSessionIds) {
+        sortInboxSessions(uiState.sessions, uiState.pinnedSessionIds)
+    }
+
+    LaunchedEffect(uiState.sessions, uiState.approvals) {
+        if (!notificationBaselineReady) {
+            notificationBaselineReady = true
+            return@LaunchedEffect
+        }
+        uiState.sessions.forEach(onSessionNotify)
+        uiState.pendingApprovals.forEach(onApprovalNotify)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(horizontal = 18.dp, vertical = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        InboxTopBar(
+            uiState = uiState,
+            onReconnect = onReconnect,
+            onNewChat = onNewChat,
+            onHosts = { hostsOpen = true },
+            onHealthCheck = onHealthCheck
+        )
+        InboxMetricRow(uiState)
+        if (!onNotificationsEnabled() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            NotificationPermissionStrip {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+        if (uiState.pendingApprovals.isNotEmpty()) {
+            InboxAttentionStrip(
+                title = "${uiState.pendingApprovals.size} approval${if (uiState.pendingApprovals.size == 1) "" else "s"} waiting",
+                body = uiState.pendingApprovals.first().summary.ifBlank { uiState.pendingApprovals.first().title }
+            )
+        }
+        if (inboxSessions.isEmpty()) {
+            EmptyMainState(
+                title = "Waiting for Codex",
+                body = "Sessions from your trusted hosts will land here as a single inbox."
+            )
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(inboxSessions, key = { it.sessionId }) { session ->
+                    InboxSessionCard(
+                        session = session,
+                        latestEvent = latestTimelineForSession(uiState.timeline, session.sessionId),
+                        pinned = session.sessionId in uiState.pinnedSessionIds,
+                        onPinToggle = { onPinnedSessionToggle(session.sessionId) },
+                        onQuickPrompt = { prompt ->
+                            onSessionSelected(session.sessionId)
+                            onPromptSend(prompt)
+                        },
+                        onClick = { onSessionSelected(session.sessionId) }
+                    )
+                }
+            }
+        }
+    }
+
+    if (hostsOpen) {
+        ModalBottomSheet(
+            onDismissRequest = { hostsOpen = false },
+            containerColor = SheetBlack,
+            contentColor = PrimaryText,
+            dragHandle = null
+        ) {
+            HostWorkbenchSheet(uiState = uiState)
+        }
+    }
+}
+
+@Composable
+private fun NotificationPermissionStrip(onEnable: () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = CardBlack.copy(alpha = 0.78f),
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.dp, StrokeDark)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Enable notifications", color = PrimaryText, fontWeight = FontWeight.SemiBold)
+                Text("Get notified only for completion, failures, approvals, and blockers.", color = SecondaryText, style = MaterialTheme.typography.bodySmall)
+            }
+            TextButton(onClick = onEnable, colors = ButtonDefaults.textButtonColors(contentColor = PrimaryText)) {
+                Text("Enable")
+            }
+        }
+    }
+}
+
+@Composable
+private fun InboxTopBar(
+    uiState: RelayUiState,
+    onReconnect: () -> Unit,
+    onNewChat: () -> Unit,
+    onHosts: () -> Unit,
+    onHealthCheck: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Command Center", color = PrimaryText, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+            Text(
+                text = "${uiState.sessions.size} sessions across ${uiState.sessions.map { it.hostId }.distinct().size} hosts",
+                color = SecondaryText,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            CircleTextButton(text = "+", onClick = onNewChat)
+            CircleTextButton(text = "Hosts", onClick = onHosts, wide = true)
+            StatusOrb(uiState.connectionStatus, onReconnect)
+            CircleTextButton(text = "?", onClick = onHealthCheck)
+        }
+    }
+}
+
+@Composable
+private fun InboxMetricRow(uiState: RelayUiState) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        InboxMetric("Attention", uiState.sessions.count { needsAttention(it) }.toString(), Modifier.weight(1f))
+        InboxMetric("Active", uiState.sessions.count { it.stage.severity == "active" }.toString(), Modifier.weight(1f))
+        InboxMetric("Approvals", uiState.pendingApprovals.size.toString(), Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun InboxMetric(label: String, value: String, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier.height(72.dp),
+        color = ElevatedBlack,
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, HairlineDark)
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 13.dp, vertical = 11.dp), verticalArrangement = Arrangement.SpaceBetween) {
+            Text(value, color = PrimaryText, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            Text(label.uppercase(), color = TertiaryText, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable
+private fun InboxAttentionStrip(title: String, body: String) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = AmberPanel,
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.dp, AmberStroke)
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 15.dp, vertical = 13.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(title, color = PrimaryText, fontWeight = FontWeight.SemiBold)
+            Text(body, color = SecondaryText, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable
+private fun InboxSessionCard(
+    session: CodexSession,
+    latestEvent: TimelineItem?,
+    pinned: Boolean,
+    onPinToggle: () -> Unit,
+    onQuickPrompt: (String) -> Unit,
+    onClick: () -> Unit
+) {
+    val tone = stageTone(session.stage)
+    val accent = stageAccent(session.stage)
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .clickable(onClick = onClick),
+        color = if (needsAttention(session)) ElevatedBlack else CardBlack.copy(alpha = 0.88f),
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.dp, if (needsAttention(session)) accent.copy(alpha = 0.68f) else HairlineDark)
+    ) {
+        Row {
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .fillMaxHeight()
+                    .background(accent)
+            )
+            Column(modifier = Modifier.padding(horizontal = 15.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(session.projectName, color = PrimaryText, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("${session.hostId} / ${session.branch}", color = TertiaryText, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    TextButton(
+                        modifier = Modifier.height(32.dp),
+                        onClick = onPinToggle,
+                        colors = ButtonDefaults.textButtonColors(contentColor = if (pinned) PrimaryText else TertiaryText)
+                    ) {
+                        Text(if (pinned) "Pinned" else "Pin", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    StatusPill(session.stage.label, tone)
+                    Text("Updated ${formatMetaTime(session.updatedAt)}", color = TertiaryText, style = MaterialTheme.typography.labelSmall)
+                }
+                Text(
+                    text = session.stage.summary.ifBlank { session.summary.ifBlank { "No current summary." } },
+                    color = SecondaryText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (latestEvent != null) {
+                    Text(
+                        text = "Latest: ${latestEvent.title} / ${cleanTimelineText(latestEvent.summary)}",
+                        color = TertiaryText,
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (needsAttention(session)) {
+                    QuickActionBar(
+                        enabled = true,
+                        onQuickPrompt = onQuickPrompt
+                    )
+                }
+                InboxSessionCta(session)
+            }
+        }
+    }
+}
+
+@Composable
+private fun InboxSessionCta(session: CodexSession) {
+    val text = when (session.stage.type) {
+        "waiting_approval" -> "Open approval in session tools"
+        "tests_failed" -> "Retry with a focused prompt or review Git"
+        "needs_user" -> "Send a short instruction to unblock Codex"
+        else -> ""
+    }
+    if (text.isNotBlank()) {
+        Text(text, color = TertiaryText, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun QuickActionBar(enabled: Boolean, onQuickPrompt: (String) -> Unit) {
+    val actions = quickActionPrompts()
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            actions.take(2).forEach { (label, prompt) ->
+                QuickActionChip(label = label, enabled = enabled, modifier = Modifier.weight(1f)) {
+                    onQuickPrompt(prompt)
+                }
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            actions.drop(2).forEach { (label, prompt) ->
+                QuickActionChip(label = label, enabled = enabled, modifier = Modifier.weight(1f)) {
+                    onQuickPrompt(prompt)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuickActionChip(label: String, enabled: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Surface(
+        modifier = modifier
+            .height(40.dp)
+            .clip(RoundedCornerShape(99.dp))
+            .clickable(enabled = enabled, onClick = onClick),
+        color = if (enabled) ControlBlack else CardBlack.copy(alpha = 0.5f),
+        shape = RoundedCornerShape(99.dp),
+        border = BorderStroke(1.dp, if (enabled) HairlineDark else StrokeDark.copy(alpha = 0.55f))
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(label, color = if (enabled) PrimaryText else TertiaryText, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+private fun quickActionPrompts(): List<Pair<String, String>> = listOf(
+    "\u7ee7\u7eed" to "\u7ee7\u7eed",
+    "\u6362\u4e2a\u65b9\u6848" to "\u6362\u4e2a\u65b9\u6848\uff0c\u5148\u7b80\u8981\u8bf4\u660e\u65b0\u65b9\u6848\u518d\u6267\u884c\u3002",
+    "\u53ea\u4fee\u6d4b\u8bd5" to "\u53ea\u4fee\u590d\u5f53\u524d\u5931\u8d25\u7684\u6d4b\u8bd5\uff0c\u4e0d\u505a\u65e0\u5173\u6539\u52a8\u3002",
+    "\u603b\u7ed3\u4e00\u4e0b" to "\u603b\u7ed3\u4e00\u4e0b\u5f53\u524d\u8fdb\u5ea6\u3001\u963b\u585e\u70b9\u548c\u4e0b\u4e00\u6b65\u3002"
+)
+
+@Composable
+private fun HostWorkbenchSheet(uiState: RelayUiState) {
+    Column(
+        modifier = Modifier
+            .navigationBarsPadding()
+            .padding(horizontal = 18.dp, vertical = 22.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Text("Execution Nodes", color = PrimaryText, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+        Text("Read-only host health and capacity for this Relay.", color = SecondaryText, style = MaterialTheme.typography.bodySmall)
+        if (uiState.hosts.isEmpty()) {
+            Text("No host snapshots yet. Keep Host Bridge online, then reconnect.", color = SecondaryText)
+        } else {
+            uiState.hosts.forEach { host ->
+                HostNodeRow(host)
+            }
+        }
+    }
+}
+
+@Composable
+private fun HostNodeRow(host: HostNode) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = ElevatedBlack,
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.dp, HairlineDark)
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(host.displayName, color = PrimaryText, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(host.hostId, color = TertiaryText, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                StatusPill(host.status, statusTone(host.status))
+            }
+            Text("${host.sessionCount} session${if (host.sessionCount == 1) "" else "s"} - last seen ${formatMetaTime(host.lastSeenAt)}", color = SecondaryText, style = MaterialTheme.typography.bodySmall)
+            val capabilities = host.capabilities.take(4).joinToString(" - ").ifBlank { "No capabilities reported" }
+            Text(capabilities, color = TertiaryText, style = MaterialTheme.typography.labelMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (host.bridgeVersion.isNotBlank() || host.kind.isNotBlank()) {
+                Text(listOf(host.kind, host.bridgeVersion).filter { it.isNotBlank() }.joinToString(" - "), color = TertiaryText, style = MaterialTheme.typography.labelSmall)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 private fun MainSessionScreen(
     uiState: RelayUiState,
     onReconnect: () -> Unit,
+    onBackToInbox: () -> Unit,
     onSessionSelected: (String) -> Unit,
     onGitStatus: () -> Unit,
     onGitDiff: () -> Unit,
@@ -363,6 +781,7 @@ private fun MainSessionScreen(
     onApprovalDecision: (String, String) -> Unit,
     onPromptSend: (String) -> Unit,
     onNewChat: () -> Unit,
+    onPinnedSessionToggle: (String) -> Unit,
     onLoadEarlierTimeline: () -> Unit,
     onHealthCheck: () -> Unit
 ) {
@@ -383,6 +802,7 @@ private fun MainSessionScreen(
                     onNewChat()
                     scope.launch { drawerState.close() }
                 },
+                onPinnedSessionToggle = onPinnedSessionToggle,
                 onReconnect = onReconnect
             )
         }
@@ -398,12 +818,16 @@ private fun MainSessionScreen(
         ) {
             MainTopBar(
                 uiState = uiState,
-                onMenu = { scope.launch { drawerState.open() } },
+                onMenu = onBackToInbox,
                 onTools = { toolsOpen = true },
                 onNewChat = onNewChat,
                 onReconnect = onReconnect
             )
             TimelineStream(uiState = uiState, modifier = Modifier.weight(1f), onLoadEarlier = onLoadEarlierTimeline)
+            QuickActionBar(
+                enabled = uiState.selectedSession != null && uiState.connectionStatus == "Online",
+                onQuickPrompt = onPromptSend
+            )
             ChatComposer(
                 selectedSession = uiState.selectedSession,
                 online = uiState.connectionStatus == "Online",
@@ -454,7 +878,7 @@ private fun MainTopBar(uiState: RelayUiState, onMenu: () -> Unit, onTools: () ->
         verticalAlignment = Alignment.CenterVertically
     ) {
         Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            CircleTextButton(text = "≡", onClick = onMenu)
+            CircleTextButton(text = "<", onClick = onMenu)
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = uiState.selectedSession?.projectName ?: "Codex",
@@ -465,7 +889,7 @@ private fun MainTopBar(uiState: RelayUiState, onMenu: () -> Unit, onTools: () ->
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = uiState.selectedSession?.let { "${it.branch} · ${it.status}" } ?: "${uiState.sessions.size} live sessions",
+                    text = uiState.selectedSession?.let { "${it.branch} - ${it.stage.label}" } ?: "${uiState.sessions.size} live sessions",
                     color = SecondaryText,
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
@@ -482,7 +906,22 @@ private fun MainTopBar(uiState: RelayUiState, onMenu: () -> Unit, onTools: () ->
 }
 
 @Composable
-private fun SessionDrawer(uiState: RelayUiState, onSessionSelected: (String) -> Unit, onNewChat: () -> Unit, onReconnect: () -> Unit) {
+private fun SessionDrawer(
+    uiState: RelayUiState,
+    onSessionSelected: (String) -> Unit,
+    onNewChat: () -> Unit,
+    onPinnedSessionToggle: (String) -> Unit,
+    onReconnect: () -> Unit
+) {
+    var query by remember { mutableStateOf("") }
+    var grouping by remember { mutableStateOf(SessionGrouping.Project) }
+    val filteredSessions = remember(uiState.sessions, uiState.pinnedSessionIds, query) {
+        filterAndSortDrawerSessions(uiState.sessions, uiState.pinnedSessionIds, query)
+    }
+    val pinnedSessions = filteredSessions.filter { it.sessionId in uiState.pinnedSessionIds }
+    val regularSessions = filteredSessions.filterNot { it.sessionId in uiState.pinnedSessionIds }
+    val groupedSessions = remember(regularSessions, grouping) { groupDrawerSessions(regularSessions, grouping) }
+
     ModalDrawerSheet(
         modifier = Modifier.fillMaxHeight().width(328.dp),
         drawerContainerColor = AppBlack,
@@ -503,6 +942,8 @@ private fun SessionDrawer(uiState: RelayUiState, onSessionSelected: (String) -> 
             DrawerShortcut("Projects", "${uiState.sessions.map { it.hostId }.distinct().size} hosts")
             DrawerShortcut("Approvals", "${uiState.pendingApprovals.size} pending")
             DrawerShortcut("Git", uiState.selectedGitSnapshot?.branch ?: "No snapshot")
+            DrawerSearchField(query = query, onQueryChange = { query = it })
+            DrawerGroupingToggle(grouping = grouping, onGroupingChange = { grouping = it })
             Button(
                 modifier = Modifier.fillMaxWidth().height(48.dp),
                 enabled = uiState.connectionStatus == "Online" && uiState.sessions.isNotEmpty(),
@@ -512,21 +953,100 @@ private fun SessionDrawer(uiState: RelayUiState, onSessionSelected: (String) -> 
             ) {
                 Text("New Chat", fontWeight = FontWeight.SemiBold)
             }
-            Text("Recents", color = PrimaryText, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
+            Text("Sessions", color = PrimaryText, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
             if (uiState.sessions.isEmpty()) {
                 Text("No live sessions. Keep Host Bridge online, then refresh.", color = SecondaryText)
                 OutlinedButton(onClick = onReconnect, border = BorderStroke(1.dp, StrokeDark)) {
                     Text("Reconnect", color = PrimaryText)
                 }
+            } else if (filteredSessions.isEmpty()) {
+                Text("No sessions match this search.", color = SecondaryText)
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(uiState.sessions, key = { it.sessionId }) { session ->
-                        DrawerSessionRow(session, session.sessionId == uiState.selectedSessionId) {
-                            onSessionSelected(session.sessionId)
+                    if (pinnedSessions.isNotEmpty()) {
+                        item(key = "pinned-header") {
+                            DrawerSectionHeader("Pinned")
+                        }
+                        items(pinnedSessions, key = { "pinned:${it.sessionId}" }) { session ->
+                            DrawerSessionRow(
+                                session = session,
+                                selected = session.sessionId == uiState.selectedSessionId,
+                                pinned = true,
+                                onPinToggle = { onPinnedSessionToggle(session.sessionId) },
+                                onClick = { onSessionSelected(session.sessionId) }
+                            )
+                        }
+                    }
+                    groupedSessions.forEach { group ->
+                        item(key = "group:${group.title}") {
+                            DrawerSectionHeader(group.title, group.detail)
+                        }
+                        items(group.sessions, key = { it.sessionId }) { session ->
+                            DrawerSessionRow(
+                                session = session,
+                                selected = session.sessionId == uiState.selectedSessionId,
+                                pinned = false,
+                                onPinToggle = { onPinnedSessionToggle(session.sessionId) },
+                                onClick = { onSessionSelected(session.sessionId) }
+                            )
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun DrawerSearchField(query: String, onQueryChange: (String) -> Unit) {
+    OutlinedTextField(
+        modifier = Modifier.fillMaxWidth(),
+        value = query,
+        onValueChange = onQueryChange,
+        singleLine = true,
+        placeholder = { Text("Search sessions", color = TertiaryText) },
+        shape = RoundedCornerShape(16.dp),
+        colors = TextFieldDefaults.colors(
+            focusedContainerColor = CardBlack,
+            unfocusedContainerColor = CardBlack.copy(alpha = 0.74f),
+            disabledContainerColor = CardBlack,
+            focusedTextColor = PrimaryText,
+            unfocusedTextColor = PrimaryText,
+            focusedIndicatorColor = StrokeDark,
+            unfocusedIndicatorColor = StrokeDark,
+            cursorColor = PrimaryText
+        )
+    )
+}
+
+@Composable
+private fun DrawerGroupingToggle(grouping: SessionGrouping, onGroupingChange: (SessionGrouping) -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth().background(CardBlack.copy(alpha = 0.62f), RoundedCornerShape(99.dp)).padding(4.dp)) {
+        SessionGrouping.values().forEach { option ->
+            val selected = grouping == option
+            Surface(
+                modifier = Modifier.weight(1f).clip(RoundedCornerShape(99.dp)).clickable { onGroupingChange(option) },
+                color = if (selected) PrimaryText else Color.Transparent,
+                shape = RoundedCornerShape(99.dp)
+            ) {
+                Text(
+                    modifier = Modifier.padding(vertical = 8.dp),
+                    text = option.label,
+                    color = if (selected) AppBlack else SecondaryText,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DrawerSectionHeader(title: String, detail: String = "") {
+    Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 2.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Text(title, color = TertiaryText, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (detail.isNotBlank()) {
+            Text(detail, color = TertiaryText, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -538,6 +1058,42 @@ private fun DrawerShortcut(text: String, detail: String) {
         Column {
             Text(text, color = PrimaryText, style = MaterialTheme.typography.titleMedium)
             Text(detail, color = SecondaryText, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable
+private fun DrawerSessionRow(
+    session: CodexSession,
+    selected: Boolean,
+    pinned: Boolean,
+    onPinToggle: () -> Unit,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick),
+        color = if (selected) CardBlack else Color.Transparent,
+        shape = RoundedCornerShape(14.dp),
+        border = if (selected) BorderStroke(1.dp, StrokeDark) else null
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 12.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(session.projectName, color = PrimaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("${session.branch} · ${session.status}", color = SecondaryText, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("Updated ${formatMetaTime(session.updatedAt)}", color = TertiaryText, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(session.hostId, color = TertiaryText, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            TextButton(
+                modifier = Modifier.height(34.dp),
+                onClick = onPinToggle,
+                colors = ButtonDefaults.textButtonColors(contentColor = if (pinned) PrimaryText else TertiaryText)
+            ) {
+                Text(if (pinned) "Pinned" else "Pin", style = MaterialTheme.typography.labelSmall)
+            }
         }
     }
 }
@@ -685,9 +1241,9 @@ private fun TimelineBubble(event: TimelineItem) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start) {
         Surface(
             modifier = Modifier.fillMaxWidth(if (isUser) 0.82f else 0.9f),
-            shape = RoundedCornerShape(22.dp),
-            color = if (isUser) AccentBlue else CardBlack,
-            border = if (isUser) null else BorderStroke(1.dp, StrokeDark)
+            shape = RoundedCornerShape(18.dp),
+            color = if (isUser) AccentBlue else ElevatedBlack,
+            border = if (isUser) null else BorderStroke(1.dp, HairlineDark)
         ) {
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(event.title, color = PrimaryText, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -714,15 +1270,15 @@ private fun TimelineTurnGroup(
             .clip(RoundedCornerShape(18.dp))
             .clickable(onClick = onToggle),
         shape = RoundedCornerShape(18.dp),
-        color = CardBlack.copy(alpha = 0.72f),
-        border = BorderStroke(1.dp, StrokeDark)
+        color = ElevatedBlack,
+        border = BorderStroke(1.dp, HairlineDark)
     ) {
         Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Codex response", color = PrimaryText, fontWeight = FontWeight.SemiBold)
                     Text(
-                        text = "${group.events.size} event(s) - ${formatMetaTime(group.latestCreatedAt)}",
+                        text = "${compactTurnMeta(group.events)} - ${formatMetaTime(group.latestCreatedAt)}",
                         color = TertiaryText,
                         style = MaterialTheme.typography.labelSmall,
                         maxLines = 1,
@@ -755,7 +1311,7 @@ private fun TimelineOperationRow(event: TimelineItem) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(SheetBlack, RoundedCornerShape(10.dp))
+            .background(AppBlack.copy(alpha = 0.72f), RoundedCornerShape(12.dp))
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
@@ -775,8 +1331,8 @@ private fun ChatComposer(selectedSession: CodexSession?, online: Boolean, onProm
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(99.dp),
-        color = ComposerBlack,
-        border = BorderStroke(1.dp, StrokeDark)
+        color = ControlBlack,
+        border = BorderStroke(1.dp, HairlineDark)
     ) {
         Row(
             modifier = Modifier.padding(start = 8.dp, end = 8.dp, top = 7.dp, bottom = 7.dp),
@@ -836,16 +1392,16 @@ private fun ConnectionToolCard(uiState: RelayUiState, onReconnect: () -> Unit, o
 private fun CircleTextButton(text: String, onClick: () -> Unit, wide: Boolean = false) {
     Surface(
         modifier = Modifier
-            .height(54.dp)
-            .width(if (wide) 82.dp else 54.dp)
+            .height(44.dp)
+            .width(if (wide) 76.dp else 44.dp)
             .clip(RoundedCornerShape(99.dp))
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(99.dp),
-        color = CardBlack,
-        border = BorderStroke(1.dp, StrokeDark)
+        color = ControlBlack,
+        border = BorderStroke(1.dp, HairlineDark)
     ) {
         Box(contentAlignment = Alignment.Center) {
-            Text(text, color = PrimaryText, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Text(text, color = PrimaryText, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, maxLines = 1)
         }
     }
 }
@@ -856,8 +1412,8 @@ private fun StatusOrb(status: String, onClick: () -> Unit) {
     Surface(
         modifier = Modifier.size(44.dp).clip(RoundedCornerShape(99.dp)).clickable(onClick = onClick),
         shape = RoundedCornerShape(99.dp),
-        color = tone.background,
-        border = BorderStroke(1.dp, StrokeDark)
+        color = ControlBlack,
+        border = BorderStroke(1.dp, tone.foreground.copy(alpha = 0.55f))
     ) {
         Box(contentAlignment = Alignment.Center) {
             Box(modifier = Modifier.size(10.dp).clip(RoundedCornerShape(10.dp)).background(tone.foreground))
@@ -2020,7 +2576,8 @@ private fun InlineNotice(text: String, tone: NoticeTone) {
 private fun StatusPill(text: String, tone: NoticeTone = NoticeTone.Positive) {
     Surface(
         shape = RoundedCornerShape(99.dp),
-        color = tone.background
+        color = tone.background,
+        border = BorderStroke(1.dp, tone.foreground.copy(alpha = 0.24f))
     ) {
         Text(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
@@ -2033,10 +2590,10 @@ private fun StatusPill(text: String, tone: NoticeTone = NoticeTone.Positive) {
 }
 
 private enum class NoticeTone(val background: Color, val foreground: Color) {
-    Positive(SoftGreen, AppGreen),
-    Warning(Color(0xFFFFF4D6), Color(0xFF9A5B00)),
-    Critical(Color(0xFFFFE7E3), Danger),
-    Neutral(Color(0xFFEFF3F7), MutedText)
+    Positive(Color(0xFF0E2A22), Color(0xFF6EE7B7)),
+    Warning(Color(0xFF302511), Color(0xFFF2C166)),
+    Critical(Color(0xFF351718), Color(0xFFFF8B82)),
+    Neutral(Color(0xFF1B222B), Color(0xFF9AA7B7))
 }
 
 private sealed class TimelineDisplayItem {
@@ -2053,6 +2610,86 @@ private sealed class TimelineDisplayItem {
         override val stableKey: String = "turn:$groupId"
         val latestCreatedAt: String = events.firstOrNull()?.createdAt.orEmpty()
     }
+}
+
+private enum class SessionGrouping(val label: String) {
+    Project("Project"),
+    Host("Host")
+}
+
+private data class DrawerSessionGroup(
+    val title: String,
+    val detail: String,
+    val sessions: List<CodexSession>
+)
+
+private fun filterAndSortDrawerSessions(
+    sessions: List<CodexSession>,
+    pinnedSessionIds: Set<String>,
+    query: String
+): List<CodexSession> {
+    val normalizedQuery = query.trim().lowercase()
+    return sessions
+        .filter { session ->
+            normalizedQuery.isBlank() || listOf(
+                session.projectName,
+                session.hostId,
+                session.branch,
+                session.repoPath,
+                session.status,
+                session.stage.label,
+                session.stage.summary,
+                session.summary
+            ).any { it.lowercase().contains(normalizedQuery) }
+        }
+        .sortedWith(
+            compareByDescending<CodexSession> { it.sessionId in pinnedSessionIds }
+                .thenByDescending { parseIsoMillis(it.updatedAt) }
+                .thenBy { it.projectName.lowercase() }
+        )
+}
+
+private fun sortInboxSessions(sessions: List<CodexSession>, pinnedSessionIds: Set<String>): List<CodexSession> {
+    return sessions.sortedWith(
+        compareByDescending<CodexSession> { it.sessionId in pinnedSessionIds }
+            .thenByDescending { needsAttention(it) }
+            .thenByDescending { it.stage.severity == "active" }
+            .thenByDescending { parseIsoMillis(it.updatedAt) }
+            .thenBy { it.projectName.lowercase() }
+    )
+}
+
+private fun needsAttention(session: CodexSession): Boolean {
+    return session.stage.type in setOf("waiting_approval", "tests_failed", "needs_user")
+        || session.stage.severity in setOf("warning", "danger")
+}
+
+private fun latestTimelineForSession(timeline: List<TimelineItem>, sessionId: String): TimelineItem? {
+    return timeline
+        .filter { it.sessionId == sessionId }
+        .maxByOrNull { it.cursor?.toLongOrNull() ?: parseIsoMillis(it.createdAt) }
+}
+
+private fun groupDrawerSessions(sessions: List<CodexSession>, grouping: SessionGrouping): List<DrawerSessionGroup> {
+    return sessions
+        .groupBy { session ->
+            when (grouping) {
+                SessionGrouping.Project -> session.projectName.ifBlank { "Untitled project" }
+                SessionGrouping.Host -> session.hostId.ifBlank { "Unknown host" }
+            }
+        }
+        .map { (title, groupSessions) ->
+            val sorted = groupSessions.sortedWith(compareByDescending<CodexSession> { parseIsoMillis(it.updatedAt) }
+                .thenBy { it.projectName.lowercase() })
+            DrawerSessionGroup(
+                title = title,
+                detail = "${sorted.size} session${if (sorted.size == 1) "" else "s"}",
+                sessions = sorted
+            )
+        }
+        .sortedWith(compareByDescending<DrawerSessionGroup> { group ->
+            group.sessions.maxOfOrNull { parseIsoMillis(it.updatedAt) } ?: 0L
+        }.thenBy { it.title.lowercase() })
 }
 
 private fun buildTimelineDisplayItems(events: List<TimelineItem>): List<TimelineDisplayItem> {
@@ -2161,22 +2798,132 @@ private fun compactOperationTitle(event: TimelineItem): String {
 }
 
 private fun compactTurnSummary(events: List<TimelineItem>): String {
-    val assistantMessage = events.firstOrNull { it.type == "assistant_message" && it.summary.isNotBlank() }
-    if (assistantMessage != null) {
-        return assistantMessage.summary
+    val error = events.firstOrNull { it.type == "error" || it.type == "codex_retrying" }
+    if (error != null && error.summary.isNotBlank()) {
+        return "Needs attention: ${cleanTimelineText(error.summary)}"
     }
 
-    val meaningfulEvents = events
-        .filterNot { it.type == "turn_started" || it.type == "turn_completed" }
-        .take(4)
-        .map { compactOperationTitle(it) }
-        .distinct()
+    val assistantMessage = events.firstOrNull { it.type == "assistant_message" && it.summary.isNotBlank() }
+    val assistantText = assistantMessage?.summary?.let { cleanTimelineText(it) }.orEmpty()
+    val details = compactTurnDetailParts(events)
 
-    return if (meaningfulEvents.isEmpty()) {
+    if (assistantText.isNotBlank() && details.isNotEmpty()) {
+        return "${assistantText.trimEnd('.', '。')} - ${details.joinToString(" - ")}"
+    }
+
+    if (assistantText.isNotBlank()) {
+        return assistantText
+    }
+
+    if (details.isNotEmpty()) {
+        return details.joinToString(" - ")
+    }
+
+    val fallbackEvents = events
+        .filterNot { it.type == "turn_started" || it.type == "turn_completed" || it.type == "reasoning_summary" }
+        .map { event ->
+            val summary = cleanTimelineText(event.summary)
+            if (summary.isNotBlank() && summary != event.title) summary else compactOperationTitle(event)
+        }
+        .distinct()
+        .take(3)
+
+    return if (fallbackEvents.isEmpty()) {
         "Completed Codex work. Tap to inspect details."
     } else {
-        meaningfulEvents.joinToString(" - ")
+        fallbackEvents.joinToString(" - ")
     }
+}
+
+private fun compactTurnMeta(events: List<TimelineItem>): String {
+    if (events.any { it.type == "error" || it.type == "codex_retrying" }) {
+        return "Needs attention"
+    }
+
+    val commandCount = events.count { it.type == "command_execution" }
+    val changedFiles = changedFileCount(events)
+    val toolCount = events.count { it.type == "tool_call" }
+    val meta = mutableListOf<String>()
+
+    if (changedFiles > 0) {
+        meta.add("$changedFiles file${if (changedFiles == 1) "" else "s"}")
+    }
+    if (commandCount > 0) {
+        meta.add("$commandCount command${if (commandCount == 1) "" else "s"}")
+    }
+    if (toolCount > 0) {
+        meta.add("$toolCount tool${if (toolCount == 1) "" else "s"}")
+    }
+    if (events.any { it.type == "assistant_message" }) {
+        meta.add("answered")
+    }
+
+    return if (meta.isEmpty()) {
+        "${events.size} event${if (events.size == 1) "" else "s"}"
+    } else {
+        meta.take(3).joinToString(" - ")
+    }
+}
+
+private fun compactTurnDetailParts(events: List<TimelineItem>): List<String> {
+    val details = mutableListOf<String>()
+    val changedFiles = changedFileCount(events)
+    val commandCount = events.count { it.type == "command_execution" }
+    val failedCommandCount = events.count {
+        it.type == "command_execution" && "${it.title} ${it.summary}".contains("failed", ignoreCase = true)
+    }
+    val toolCount = events.count { it.type == "tool_call" }
+
+    if (changedFiles > 0) {
+        details.add("changed $changedFiles file${if (changedFiles == 1) "" else "s"}")
+    }
+    if (commandCount > 0) {
+        details.add(
+            if (failedCommandCount > 0) {
+                "ran $commandCount command${if (commandCount == 1) "" else "s"}, $failedCommandCount failed"
+            } else {
+                "ran $commandCount command${if (commandCount == 1) "" else "s"}"
+            }
+        )
+    }
+    if (toolCount > 0) {
+        details.add("used $toolCount tool${if (toolCount == 1) "" else "s"}")
+    }
+    if (events.any { it.type == "diff_update" }) {
+        details.add("diff updated")
+    }
+    if (events.any { it.type == "plan_update" }) {
+        details.add("plan updated")
+    }
+
+    return details.take(4)
+}
+
+private fun changedFileCount(events: List<TimelineItem>): Int {
+    val explicitCounts = events
+        .filter { it.type == "file_changed" }
+        .mapNotNull { fileChangeCountFromSummary(it.summary) }
+
+    if (explicitCounts.isNotEmpty()) {
+        return explicitCounts.sum()
+    }
+
+    return events.count { it.type == "file_changed" }
+}
+
+private fun fileChangeCountFromSummary(summary: String): Int? {
+    return Regex("""(\d+)\s+file change""", RegexOption.IGNORE_CASE)
+        .find(summary)
+        ?.groupValues
+        ?.getOrNull(1)
+        ?.toIntOrNull()
+}
+
+private fun cleanTimelineText(text: String): String {
+    return text
+        .replace(Regex("""\s+"""), " ")
+        .trim()
+        .let { if (it.length > 180) "${it.take(177).trimEnd()}..." else it }
 }
 
 private fun statusTone(status: String): NoticeTone {
@@ -2185,6 +2932,16 @@ private fun statusTone(status: String): NoticeTone {
         normalized == "online" || normalized == "running" || normalized == "completed" -> NoticeTone.Positive
         normalized == "connecting" || normalized == "waiting_for_input" || normalized == "idle" -> NoticeTone.Warning
         normalized == "disconnected" || normalized == "failed" || normalized == "error" -> NoticeTone.Critical
+        else -> NoticeTone.Neutral
+    }
+}
+
+private fun stageTone(stage: SessionStage): NoticeTone {
+    return when (stage.severity.lowercase()) {
+        "success" -> NoticeTone.Positive
+        "warning" -> NoticeTone.Warning
+        "danger" -> NoticeTone.Critical
+        "active" -> NoticeTone.Positive
         else -> NoticeTone.Neutral
     }
 }
@@ -2199,15 +2956,30 @@ private val SubtleText = Color(0xFF8A94A6)
 private val AppGreen = Color(0xFF176B52)
 private val SoftGreen = Color(0xFFE6F4EF)
 private val Danger = Color(0xFFB42318)
-private val AppBlack = Color(0xFF050505)
-private val SheetBlack = Color(0xFF0B0B0C)
-private val CardBlack = Color(0xFF1C1C1E)
-private val ComposerBlack = Color(0xFF202124)
-private val StrokeDark = Color(0xFF343437)
-private val PrimaryText = Color(0xFFF5F5F6)
-private val SecondaryText = Color(0xFFB8B8BE)
-private val TertiaryText = Color(0xFF77777F)
-private val AccentBlue = Color(0xFF2F70D0)
+private val AppBlack = Color(0xFF070809)
+private val SheetBlack = Color(0xFF0D0F12)
+private val CardBlack = Color(0xFF15181D)
+private val ElevatedBlack = Color(0xFF1A1E24)
+private val ControlBlack = Color(0xFF101318)
+private val ComposerBlack = Color(0xFF171A20)
+private val StrokeDark = Color(0xFF2B313A)
+private val HairlineDark = Color(0xFF343B46)
+private val PrimaryText = Color(0xFFF4F7FA)
+private val SecondaryText = Color(0xFFB3BDC9)
+private val TertiaryText = Color(0xFF7D8897)
+private val AccentBlue = Color(0xFF4D8DFF)
+private val AmberPanel = Color(0xFF261D0D)
+private val AmberStroke = Color(0xFF5E4316)
+
+private fun stageAccent(stage: SessionStage): Color {
+    return when (stage.severity.lowercase()) {
+        "danger" -> Color(0xFFFF7368)
+        "warning" -> Color(0xFFF2C166)
+        "active" -> AccentBlue
+        "success" -> Color(0xFF6EE7B7)
+        else -> Color(0xFF596575)
+    }
+}
 
 private fun diagnosticsSummary(uiState: RelayUiState): String {
     val connectedAt = uiState.lastConnectedAt ?: "never"
@@ -2225,6 +2997,14 @@ private fun formatMetaTime(raw: String): String {
         val formatter = DateTimeFormatter.ofPattern("MM-dd HH:mm").withZone(ZoneId.systemDefault())
         formatter.format(instant)
     }.getOrDefault(raw.take(16))
+}
+
+private fun parseIsoMillis(raw: String): Long {
+    if (raw.isBlank()) {
+        return 0L
+    }
+
+    return runCatching { Instant.parse(raw).toEpochMilli() }.getOrDefault(0L)
 }
 
 private fun gitSummary(selectedSession: CodexSession?, snapshot: GitSnapshot?): String {

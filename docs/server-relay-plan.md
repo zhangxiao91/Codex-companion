@@ -128,6 +128,27 @@ server {
 
 Relay command behind the proxy:
 
+First run:
+
+```powershell
+$env:RELAY_HOST='127.0.0.1'
+$env:RELAY_PORT='8787'
+$env:RELAY_PUBLIC_WS_URL='wss://relay.example.com'
+$env:RELAY_PUBLIC_HTTP_URL='https://relay.example.com'
+$env:RELAY_SQLITE_PATH='C:\cmc\relay.sqlite'
+npm run server:relay:init
+```
+
+Later runs:
+
+```powershell
+npm run server:relay
+```
+
+You can override the config path with `CMC_SERVER_RELAY_CONFIG`. The default path is `.relay/server-relay-config.json`.
+
+Direct environment-only run:
+
 ```powershell
 $env:RELAY_HOST='127.0.0.1'
 $env:RELAY_PORT='8787'
@@ -135,8 +156,7 @@ $env:RELAY_PUBLIC_WS_URL='wss://relay.example.com'
 $env:RELAY_PUBLIC_HTTP_URL='https://relay.example.com'
 $env:RELAY_PAIRING_TOKEN='use-a-long-random-pairing-secret'
 $env:RELAY_HOST_TOKEN='use-a-different-long-random-host-secret'
-$env:RELAY_IDENTITY_STORE_PATH='C:\cmc\identity-store.json'
-$env:RELAY_GIT_AUDIT_LOG_PATH='C:\cmc\git-audit.ndjson'
+$env:RELAY_SQLITE_PATH='C:\cmc\relay.sqlite'
 npm run server:relay
 ```
 
@@ -158,7 +178,30 @@ The current first-pass server token model separates pairing and host auth:
 - Device tokens authorize Android/client WebSocket control messages after pairing.
 - `RELAY_DEV_TOKEN` remains a local development fallback, but should not be used as the recommended server deployment shape.
 
-Before broader public exposure, replace the long-lived pairing token with a short-lived one-time pairing code, add per-host token rotation, and expose device revocation.
+### Device Management
+
+Server Relay exposes a small admin surface for trusted device management:
+
+- `GET /devices` lists active Android devices and trusted Host Bridge devices.
+- `GET /devices?include_revoked=1` also includes revoked entries.
+- `POST /devices/revoke` revokes either an Android `device_id` or a Host Bridge `host_device_id`.
+
+Admin requests require a Relay secret (`RELAY_HOST_TOKEN`, `RELAY_PAIRING_TOKEN`, `RELAY_DEV_TOKEN`, or `RELAY_ADMIN_TOKEN` through the CLI). Ordinary Android device tokens are not accepted for device administration.
+
+CLI usage:
+
+```powershell
+$env:RELAY_PUBLIC_HTTP_URL='https://relay.example.com'
+$env:RELAY_ADMIN_TOKEN='use-a-relay-admin-secret'
+npm run server:devices -- list
+npm run server:devices -- list --all
+npm run server:devices -- revoke android <device_id>
+npm run server:devices -- revoke host <host_device_id>
+```
+
+Revoking an Android device removes it from the in-memory auth set and marks it revoked in SQLite, so existing WebSocket reconnects with that device token are rejected. Revoking a host device marks its saved Host Bridge trust token revoked; the bridge must be started once with `RELAY_HOST_TOKEN` to establish a new trusted host-device token.
+
+Before broader public exposure, replace the long-lived pairing token with a short-lived one-time pairing code, add token rotation UX, and add rate limits for pairing/admin failures.
 
 ## Milestone 2: PC Host Through Server Relay
 
@@ -232,9 +275,11 @@ Acceptance:
 
 Current status:
 
-- A lightweight JSON identity store is now in place for paired devices and registered hosts.
-- The store path is configurable with `RELAY_IDENTITY_STORE_PATH`.
-- Restart verification is available through `npm run verify:relay-identity-storage`.
+- SQLite persistence is now in place for paired devices, known hosts, session snapshots, timeline events, and Git audit events.
+- Android device trust and Host Bridge device trust can be listed and revoked through `npm run server:devices`.
+- The database path is configurable with `RELAY_SQLITE_PATH`; the default is `.relay/relay.sqlite`.
+- Existing JSON identity and NDJSON Git audit files are still read as migration inputs when SQLite is empty.
+- Restart verification is available through `npm run verify:relay-sqlite-persistence`.
 
 ## Milestone 4: Server as Codex Host
 

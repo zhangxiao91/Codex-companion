@@ -2372,6 +2372,208 @@ Result:
 BUILD SUCCESSFUL
 ```
 
+## 2026-05-18: Relay SQLite persistence
+
+Status: completed.
+
+Changes:
+
+- Added Relay SQLite storage at `RELAY_SQLITE_PATH`, defaulting to `.relay/relay.sqlite`.
+- Persisted paired device identities, known hosts, session snapshots, cached timeline events/pages, and Git audit events into SQLite.
+- Kept legacy JSON identity and NDJSON Git audit files as migration inputs when SQLite is empty.
+- Relay `/health` now reports SQLite storage path and persisted row counts.
+- Session snapshots now survive Relay restart; timeline cache and Git audit can also be restored from SQLite.
+- Added `npm run verify:relay-sqlite-persistence` for restart-level persistence coverage.
+
+Verification:
+
+```powershell
+node --check relay/service/sqlite-store.mjs
+node --check relay/service/server.mjs
+node --check tools/verify-relay-sqlite-persistence.mjs
+npm run verify:relay-sqlite-persistence
+npm run verify:git-audit-storage
+npm run verify:relay-identity-storage
+npm run verify:relay-timeline-cache
+```
+
+Result:
+
+```text
+SQLite persistence verified.
+```
+
+Operational note:
+
+- Node 24 currently marks `node:sqlite` as experimental, so Relay prints an ExperimentalWarning on startup. Runtime behavior verified.
+- Existing `.relay/identity-store.json` and `.relay/git-audit.ndjson` are read as migration sources when the SQLite database is empty; new writes go to SQLite.
+
+## 2026-05-18: Android session drawer management
+
+Status: completed.
+
+Changes:
+
+- Added local pinned sessions with SharedPreferences persistence.
+- Added session search in the left drawer across project name, host, branch, repo path, status, and summary.
+- Added drawer grouping by project or host with compact segmented controls.
+- Pinned sessions now render in a dedicated top section, while regular sessions remain grouped and sorted by updated time.
+- Updated drawer session rows with a compact pin/unpin action while keeping the main chat screen unchanged.
+
+Verification:
+
+```powershell
+.\gradlew.bat :app:assembleDebug --no-daemon
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL
+```
+
+## 2026-05-18: One-click desktop pairing start
+
+Status: completed.
+
+Changes:
+
+- Added `npm run start:companion` as a user-facing alias for one-click local pairing.
+- Upgraded `dev:pair` to start Relay and Host Bridge, generate the pairing QR page, and auto-open the page in the desktop browser by default.
+- Added pairing page status tiles for Relay, Host Bridge, and Android URL.
+- Kept terminal QR and raw `cmc1...` pairing code as fallback.
+- Added `CMC_PAIRING_OPEN=0` to disable browser auto-open for tests/headless runs.
+- Added `npm run verify:dev-pairing-open`.
+
+Verification:
+
+```powershell
+node --check tools/dev-pairing-start.mjs
+node --check tools/pairing-display.mjs
+npm run verify:dev-pairing-code
+npm run verify:dev-pairing-open
+```
+
+Result:
+
+```text
+verified
+```
+
+## 2026-05-18: Persistent server Relay launcher
+
+Status: completed.
+
+Changes:
+
+- Added `npm run server:relay:init` for first-time server Relay configuration.
+- Added `.relay/server-relay-config.json` support through `CMC_SERVER_RELAY_CONFIG`.
+- `server:relay` now loads saved listen/public URL/token/SQLite/QR settings, while still allowing environment variables to override them.
+- Missing pairing and host tokens are generated once and saved, instead of changing on every start.
+- Added `npm run verify:server-relay-config`.
+
+Verification:
+
+```powershell
+node --check tools/server-relay-config.mjs
+node --check tools/server-relay-init.mjs
+node --check tools/server-relay-start.mjs
+npm run verify:server-relay-config
+npm run verify:server-relay-start
+```
+
+Result:
+
+```text
+verified
+```
+
+## 2026-05-18: Host device trust
+
+Status: completed.
+
+Changes:
+
+- Added host device trust so Host Bridge only needs `RELAY_HOST_TOKEN` on first registration.
+- Relay now issues a per-host `host_device_token` through `host.trusted` after bootstrap-token registration.
+- Host Bridge saves trusted identity to `HOST_IDENTITY_PATH`, defaulting to `.relay/host-identity.json`.
+- Later Host Bridge starts prefer the saved host device token and can omit `RELAY_HOST_TOKEN`.
+- Relay stores host device tokens as SHA-256 hashes in SQLite and accepts them for host WebSocket messages and detailed health checks.
+- Added `npm run verify:host-device-trust`.
+
+Verification:
+
+```powershell
+node --check bridge/host-bridge/host-identity-store.mjs
+node --check bridge/host-bridge/index.mjs
+node --check relay/service/sqlite-store.mjs
+node --check relay/service/server.mjs
+npm run verify:host-device-trust
+npm run verify:server-bridge-start
+npm run verify:relay-token-separation
+```
+
+Result:
+
+```text
+verified
+```
+
+## 2026-05-18: Host-backed timeline pagination
+
+Status: completed.
+
+Changes:
+
+- Added stable host-side timeline cursors when mapping Codex App Server `thread/read` results.
+- Added host-side `timeline.page` responses so Relay can fetch older history from Host Bridge instead of relying only on Relay memory.
+- Relay now accepts host `timeline.page` messages, caches page events, and broadcasts the page to subscribed clients.
+- Android load-earlier requests now allow Relay to forward pagination to the host after replaying cache.
+- Relay timeline cache now preserves incoming host cursors and deduplicates cached events by `event_id`.
+- Added `npm run verify:host-timeline-pagination` for mapper-level cursor paging checks.
+
+Verification:
+
+```powershell
+node --check bridge/host-bridge/timeline-mapper.mjs
+node --check bridge/host-bridge/codex-adapter.mjs
+node --check bridge/host-bridge/index.mjs
+node --check relay/service/server.mjs
+node --check packages/protocol/index.mjs
+npm run verify:host-timeline-pagination
+npm run verify:relay-timeline-cache
+.\gradlew.bat :app:assembleDebug --no-daemon
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL
+```
+
+## 2026-05-18: Folded response summary polish
+
+Status: completed.
+
+Changes:
+
+- Improved Android folded `Codex response` cards from type-name summaries to result-oriented turn summaries.
+- Folded cards now prioritize errors, then assistant output, then concrete activity facts such as changed files, commands, tools, diff updates, and plan updates.
+- Replaced the collapsed card metadata from raw event count to compact activity metadata such as `2 files - 3 commands - answered`.
+- Added text cleanup for whitespace and long assistant summaries so folded cards stay compact on mobile.
+
+Verification:
+
+```powershell
+.\gradlew.bat :app:assembleDebug --no-daemon
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL
+```
+
 Next recommended step:
 
 1. Install the debug build on a real device and verify unpaired, paired, drawer, prompt, approval, and Git flows by hand.
@@ -2688,6 +2890,179 @@ Verification:
 node --check relay/service/server.mjs
 node --check packages/protocol/index.mjs
 npm run verify:relay-timeline-cache
+.\gradlew.bat :app:assembleDebug --no-daemon
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL
+```
+
+## 2026-05-22: Server device management
+
+Status: completed.
+
+Changes:
+
+- Added Relay admin endpoints for trusted device management:
+  - `GET /devices`
+  - `GET /devices?include_revoked=1`
+  - `POST /devices/revoke`
+- Added SQLite `revoked_at` handling for Android paired devices.
+- Kept revoked Android devices out of loaded auth state and removed revoked Android tokens from the in-memory auth set immediately.
+- Reused existing Host Bridge trusted-device storage and added revocation through `host_device_id`.
+- Kept device administration restricted to Relay secrets; ordinary Android device tokens cannot list or revoke devices.
+- Added `npm run server:devices` for server operators:
+  - `npm run server:devices -- list`
+  - `npm run server:devices -- list --all`
+  - `npm run server:devices -- revoke android <device_id>`
+  - `npm run server:devices -- revoke host <host_device_id>`
+- Added `npm run verify:server-devices`.
+- Updated README and `docs/server-relay-plan.md` with device management usage.
+
+Verification:
+
+```powershell
+node --check relay/service/sqlite-store.mjs
+node --check relay/service/server.mjs
+node --check tools/server-devices.mjs
+node --check tools/verify-server-devices.mjs
+npm run verify:server-devices
+npm run verify:host-device-trust
+npm run verify:relay-token-separation
+npm run verify:relay-sqlite-persistence
+npm run verify:server-bridge-start
+```
+
+Result:
+
+```text
+[verify] Server device management verified.
+[verify] Host device trust verified.
+[verify] Relay pairing/host/device token separation verified.
+[verify] Relay SQLite persistence verified.
+[verify] Server Host Bridge startup helper verified.
+```
+
+Known notes:
+
+- Node 24 prints an ExperimentalWarning for `node:sqlite`; current verification passes with that warning.
+- Revocation is server-side only for now. Android does not yet have a device-management UI.
+
+## 2026-05-22: Codex Console inbox and session stage
+
+Status: completed.
+
+Changes:
+
+- Added Relay-normalized session `stage` derivation for `session.snapshot`.
+- Stage now summarizes mobile-facing progress as `thinking`, `running_command`, `editing_files`, `waiting_approval`, `tests_failed`, `completed`, `needs_user`, or `idle`.
+- Relay refreshes and persists staged session snapshots after session, timeline, approval, and Git updates.
+- Added Android `SessionStage` model with fallback from legacy session `status`.
+- Changed paired Android app startup to a unified `Codex Console` inbox instead of opening a single session by default.
+- Inbox cards show stage pill, stage summary, host, branch, update time, latest event, pin action, and attention-first ordering.
+- Session detail keeps the existing timeline, folded turns, long-history pagination, one-tap bottom scroll, prompt composer, Git, approval, and tools flows.
+- Added `npm run verify:session-stage`.
+- Updated README and architecture docs with the console/inbox and Relay stage boundary.
+
+Verification:
+
+```powershell
+npm run verify:session-stage
+node --check relay/service/server.mjs
+node --check relay/service/session-stage.mjs
+npm run verify:relay-sqlite-persistence
+npm run verify:relay-timeline-cache
+npm run verify:host-timeline-pagination
+npm run verify:server-smoke-local
+.\gradlew.bat :app:assembleDebug --no-daemon
+```
+
+Result:
+
+```text
+[verify] Session stage derivation verified.
+[verify] Relay SQLite persistence verified.
+[verify] Relay timeline cache cursor replay verified.
+[verify] Host timeline cursor pagination verified.
+[smoke] Server Relay smoke test passed.
+BUILD SUCCESSFUL
+```
+
+Known notes:
+
+- Inbox is implemented inside the current single-activity Compose shell; no Android Navigation dependency was added.
+- Stage derivation is intentionally heuristic for this pass. It standardizes current visible progress, but richer Codex-native progress metadata can replace parts of the heuristic later.
+
+## 2026-05-22: Phase 2 low-friction command center
+
+Status: completed.
+
+Changes:
+
+- Added `host.snapshot` to the shared protocol.
+- Relay now broadcasts host snapshots when hosts register, heartbeat, disconnect, and when clients subscribe to all sessions.
+- Added `HostNode` Android model and read-only Hosts bottom sheet from the Inbox.
+- Added quick intervention chips for:
+  - `继续`
+  - `换个方案`
+  - `只修测试`
+  - `总结一下`
+- Quick interventions reuse existing `session.prompt`; no new command or privileged operation protocol was added.
+- Inbox attention cards now expose intervention prompts and short CTA hints for approval, Git review, and unblock flows.
+- Session detail also shows the quick intervention bar above the prompt composer.
+- Added Android local notifications for session completion, failures, approval requests, and user-input blockers.
+- Added Android 13+ notification permission entry in the Inbox.
+- Local notification dedupe avoids repeated notifications for the same approval or same session/stage pair.
+- Added `npm run verify:host-snapshot`.
+- Updated README and architecture docs.
+
+Verification:
+
+```powershell
+node --check packages/protocol/index.mjs
+node --check relay/service/server.mjs
+node --check tools/verify-host-snapshot.mjs
+npm run verify:host-snapshot
+npm run verify:server-smoke-local
+npm run verify:relay-token-separation
+npm run verify:session-stage
+.\gradlew.bat :app:assembleDebug --no-daemon
+```
+
+Result:
+
+```text
+[verify] Host snapshot routing verified.
+[smoke] Server Relay smoke test passed.
+[verify] Relay pairing/host/device token separation verified.
+[verify] Session stage derivation verified.
+BUILD SUCCESSFUL
+```
+
+Known notes:
+
+- Notifications are local and require the app process to be alive and receiving WebSocket events; this is not offline FCM push yet.
+- Notification actions are intentionally not implemented, so approval/deny/continue still happen inside the app context.
+- Host workbench is read-only; server-side device/host management remains CLI/admin scoped.
+
+## 2026-05-22: Android premium UI polish pass
+
+Status: completed.
+
+Changes:
+
+- Refined the Android dark visual system toward a restrained command-center style.
+- Added deeper surface layering with `ElevatedBlack`, `ControlBlack`, `HairlineDark`, and stage accent colors.
+- Updated Inbox cards with a slim stage accent rail, tighter hierarchy, quieter borders, and cleaner metadata.
+- Polished metrics, attention strip, host workbench rows, status pill, status orb, circular controls, timeline bubbles, folded turn cards, operation rows, and composer surfaces.
+- Replaced corrupted quick-action display strings with stable Unicode-backed Chinese labels.
+- Kept the UI functional shape unchanged: Inbox first, session detail second, tools tucked away.
+
+Verification:
+
+```powershell
 .\gradlew.bat :app:assembleDebug --no-daemon
 ```
 

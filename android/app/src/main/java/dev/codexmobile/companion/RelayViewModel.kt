@@ -20,6 +20,7 @@ class RelayViewModel(
             deviceId = settings.deviceId(),
             sessions = settings.sessions(),
             selectedSessionId = settings.selectedSessionId(),
+            pinnedSessionIds = settings.pinnedSessionIds(),
             timeline = settings.timeline()
         )
     )
@@ -45,6 +46,7 @@ class RelayViewModel(
                 relayUrl = normalizedUrl,
                 connectionStatus = "Disconnected",
                 sessions = emptyList(),
+                hosts = emptyList(),
                 selectedSessionId = null,
                 timeline = emptyList(),
                 approvals = emptyList(),
@@ -77,6 +79,7 @@ class RelayViewModel(
                 deviceId = "",
                 connectionStatus = "Disconnected",
                 sessions = emptyList(),
+                hosts = emptyList(),
                 selectedSessionId = null,
                 timeline = emptyList(),
                 approvals = emptyList(),
@@ -115,6 +118,7 @@ class RelayViewModel(
                 deviceId = "",
                 connectionStatus = "Disconnected",
                 sessions = emptyList(),
+                hosts = emptyList(),
                 selectedSessionId = null,
                 timeline = emptyList(),
                 approvals = emptyList(),
@@ -149,6 +153,18 @@ class RelayViewModel(
         settings.saveSelectedSessionId(sessionId)
         relayClient.requestTimeline(sessionId, afterCursor)
         requestGitAudit()
+    }
+
+    fun togglePinnedSession(sessionId: String) {
+        _uiState.update { state ->
+            val pinned = if (sessionId in state.pinnedSessionIds) {
+                state.pinnedSessionIds - sessionId
+            } else {
+                state.pinnedSessionIds + sessionId
+            }
+            settings.savePinnedSessionIds(pinned)
+            state.copy(pinnedSessionIds = pinned)
+        }
     }
 
     fun sendPrompt(text: String) {
@@ -199,7 +215,7 @@ class RelayViewModel(
             sessionId = sessionId,
             beforeCursor = beforeCursor,
             limit = TIMELINE_PAGE_SIZE,
-            cacheOnly = true,
+            cacheOnly = false,
             page = true
         )
     }
@@ -260,6 +276,16 @@ class RelayViewModel(
         _uiState.update { it.copy(connectionStatus = "Disconnected", lastError = reason) }
     }
 
+    override fun onHostSnapshot(host: HostNode) {
+        _uiState.update { state ->
+            val hosts = (listOf(host) + state.hosts.filter { it.hostId != host.hostId })
+                .sortedWith(compareByDescending<HostNode> { it.status == "online" }
+                    .thenByDescending { parseIsoMillis(it.lastSeenAt) }
+                    .thenBy { it.displayName.lowercase() })
+            state.copy(hosts = hosts)
+        }
+    }
+
     override fun onSessionSnapshot(session: CodexSession) {
         val shouldSelectNewChat = pendingNewChatHostId == session.hostId
         _uiState.update { state ->
@@ -313,13 +339,19 @@ class RelayViewModel(
         settings.saveTimeline(_uiState.value.timeline)
     }
 
-    override fun onTimelinePage(sessionId: String, events: List<TimelineItem>, hasMoreBefore: Boolean) {
+    override fun onTimelinePage(sessionId: String, events: List<TimelineItem>, hasMoreBefore: Boolean, source: String) {
         _uiState.update { state ->
             val timeline = mergeTimelineEvents(state.timeline, events)
+            val waitingForHostPage = source == "cache" && state.timelineLoadingEarlier
+            val nextHasMoreEarlier = if (waitingForHostPage) {
+                state.timelineHasMoreEarlier
+            } else {
+                state.timelineHasMoreEarlier + (sessionId to hasMoreBefore)
+            }
             state.copy(
                 timeline = timeline,
-                timelineLoadingEarlier = false,
-                timelineHasMoreEarlier = state.timelineHasMoreEarlier + (sessionId to hasMoreBefore),
+                timelineLoadingEarlier = waitingForHostPage,
+                timelineHasMoreEarlier = nextHasMoreEarlier,
                 lastHealthCheck = if (events.isEmpty()) "No earlier timeline events cached" else "Loaded ${events.size} earlier timeline event(s)",
                 lastError = null
             )
@@ -345,7 +377,7 @@ class RelayViewModel(
     }
 
     override fun onError(message: String) {
-        _uiState.update { it.copy(lastError = message) }
+        _uiState.update { it.copy(timelineLoadingEarlier = false, lastError = message) }
     }
 
     override fun onCleared() {
@@ -414,4 +446,7 @@ class RelayViewModel(
         val sessionId = _uiState.value.selectedSessionId ?: return
         relayClient.requestGit(sessionId, action, filePath, message, commitStrategy)
     }
+
+    private fun parseIsoMillis(raw: String): Long =
+        runCatching { Instant.parse(raw).toEpochMilli() }.getOrDefault(0L)
 }

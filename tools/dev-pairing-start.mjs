@@ -31,24 +31,6 @@ children.push(relay);
 
 await waitForOutput(relay, '[relay] listening', 5000);
 
-console.log(`[pairing] Relay URL for Android: ${relayUrlForAndroid}`);
-console.log(`[pairing] Host Bridge adapter: ${codexAdapter}`);
-console.log('[pairing] Pairing code:');
-console.log(pairingCode);
-console.log('');
-await displayPairingCode({
-  pairingCode,
-  relayUrl: relayUrlForAndroid,
-  title: 'Codex Mobile Companion Dev Pairing'
-});
-console.log('');
-console.log('[pairing] Paste this code into Android > Relay connection > Pairing code, then tap Use code.');
-console.log('[pairing] Keep this terminal running while using the app.');
-if (lanHost.startsWith('169.254.')) {
-  console.log('[pairing] Warning: selected a 169.254.x.x link-local address. Set RELAY_LAN_HOST to your Wi-Fi/LAN IPv4 address if Android cannot connect.');
-}
-console.log('');
-
 const bridge = spawnProcess('bridge', 'node', ['bridge/host-bridge/index.mjs'], {
   ...process.env,
   CODEX_ADAPTER: codexAdapter,
@@ -56,6 +38,40 @@ const bridge = spawnProcess('bridge', 'node', ['bridge/host-bridge/index.mjs'], 
   RELAY_DEV_TOKEN: token
 });
 children.push(bridge);
+
+const bridgeConnected = await waitForOutput(bridge, '[bridge] connected', 2000)
+  .then(() => true)
+  .catch((error) => {
+    console.warn(`[pairing] Host Bridge did not report connected yet: ${error.message}`);
+    return false;
+  });
+
+console.log(`[pairing] Relay URL for Android: ${relayUrlForAndroid}`);
+console.log(`[pairing] Host Bridge adapter: ${codexAdapter}`);
+console.log('[pairing] Pairing code:');
+console.log(pairingCode);
+console.log('');
+const pairingDisplay = await displayPairingCode({
+  pairingCode,
+  relayUrl: relayUrlForAndroid,
+  title: 'Codex Mobile Companion',
+  statusItems: [
+    { label: 'Relay', detail: `Running on port ${relayPort}` },
+    { label: 'Host Bridge', detail: bridgeConnected ? `Connected with ${codexAdapter}` : `Starting with ${codexAdapter}` },
+    { label: 'Android URL', detail: relayUrlForAndroid }
+  ]
+});
+if (pairingDisplay.htmlPath) {
+  await maybeOpenPairingPage(pairingDisplay.htmlPath);
+}
+console.log('');
+console.log('[pairing] Android: open Codex Mobile Companion, tap Scan QR code, then scan the browser page.');
+console.log('[pairing] Fallback: paste the printed cmc1 pairing code into Android > Paste pairing code.');
+console.log('[pairing] Keep this terminal running while using the app.');
+if (lanHost.startsWith('169.254.')) {
+  console.log('[pairing] Warning: selected a 169.254.x.x link-local address. Set RELAY_LAN_HOST to your Wi-Fi/LAN IPv4 address if Android cannot connect.');
+}
+console.log('');
 
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
@@ -176,4 +192,48 @@ function shutdown() {
     }
   }
   process.exit(0);
+}
+
+async function maybeOpenPairingPage(htmlPath) {
+  const openMode = String(process.env.CMC_PAIRING_OPEN ?? '1').trim().toLowerCase();
+  if (['0', 'false', 'no', 'off'].includes(openMode)) {
+    console.log('[pairing] Auto-open disabled by CMC_PAIRING_OPEN=0.');
+    return;
+  }
+
+  const opened = await openFile(htmlPath).catch((error) => {
+    console.warn(`[pairing] Could not auto-open pairing page: ${error.message}`);
+    return false;
+  });
+
+  if (opened) {
+    console.log('[pairing] Opened pairing page in your browser.');
+  }
+}
+
+function openFile(filePath) {
+  return new Promise((resolve, reject) => {
+    let command;
+    let args;
+    if (process.platform === 'win32') {
+      command = 'cmd.exe';
+      args = ['/c', 'start', '', filePath];
+    } else if (process.platform === 'darwin') {
+      command = 'open';
+      args = [filePath];
+    } else {
+      command = 'xdg-open';
+      args = [filePath];
+    }
+
+    const child = spawn(command, args, {
+      stdio: 'ignore',
+      detached: true
+    });
+    child.once('error', reject);
+    child.once('spawn', () => {
+      child.unref();
+      resolve(true);
+    });
+  });
 }

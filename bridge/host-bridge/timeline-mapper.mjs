@@ -18,9 +18,6 @@ export function mapThreadToTimelineEvents(thread, options = {}) {
       const event = mapThreadItemToTimelineEvent(thread.id, turn, item);
       if (event) {
         events.push(event);
-        if (limit && events.length >= limit) {
-          return events;
-        }
       }
     }
 
@@ -47,7 +44,49 @@ export function mapThreadToTimelineEvents(thread, options = {}) {
     ));
   }
 
-  return limit ? events.slice(0, limit) : events;
+  const eventsWithCursors = events.map((event, index) => ({
+    ...event,
+    cursor: String(index + 1)
+  }));
+  const afterCursor = parseCursor(options.afterCursor);
+  const beforeCursor = parseCursor(options.beforeCursor);
+
+  if (beforeCursor > 0) {
+    return limit
+      ? eventsWithCursors.filter((event) => parseCursor(event.cursor) < beforeCursor).slice(-limit)
+      : eventsWithCursors.filter((event) => parseCursor(event.cursor) < beforeCursor);
+  }
+
+  if (afterCursor > 0) {
+    const newerEvents = eventsWithCursors.filter((event) => parseCursor(event.cursor) > afterCursor);
+    return limit ? newerEvents.slice(0, limit) : newerEvents;
+  }
+
+  return limit ? eventsWithCursors.slice(-limit) : eventsWithCursors;
+}
+
+export function mapThreadToTimelinePage(thread, options = {}) {
+  const allEvents = mapThreadToTimelineEvents(thread);
+  const events = mapThreadToTimelineEvents(thread, options);
+  const cursors = events.map((event) => parseCursor(event.cursor)).filter((cursor) => cursor > 0);
+  const oldestCursor = cursors.length > 0 ? Math.min(...cursors) : 0;
+  const newestCursor = cursors.length > 0 ? Math.max(...cursors) : 0;
+
+  return {
+    session_id: thread.id,
+    events,
+    before_cursor: options.beforeCursor ?? null,
+    after_cursor: options.afterCursor ?? null,
+    oldest_cursor: oldestCursor > 0 ? String(oldestCursor) : null,
+    newest_cursor: newestCursor > 0 ? String(newestCursor) : null,
+    has_more_before: oldestCursor > 0
+      ? allEvents.some((event) => parseCursor(event.cursor) < oldestCursor)
+      : false,
+    has_more_after: newestCursor > 0
+      ? allEvents.some((event) => parseCursor(event.cursor) > newestCursor)
+      : false,
+    source: 'host'
+  };
 }
 
 export function mapAppServerNotificationToTimelineEvents(message) {
@@ -328,4 +367,13 @@ function truncate(text, maxLength = 500) {
   }
 
   return `${text.slice(0, maxLength - 3)}...`;
+}
+
+function parseCursor(cursor) {
+  if (cursor === undefined || cursor === null || cursor === '') {
+    return 0;
+  }
+
+  const parsed = Number.parseInt(cursor, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }

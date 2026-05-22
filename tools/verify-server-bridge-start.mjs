@@ -30,6 +30,7 @@ try {
     RELAY_HOST_TOKEN: hostToken,
     HOST_ID: 'server-bridge-verify-host',
     HOST_NAME: 'Server Bridge Verify Host',
+    HOST_IDENTITY_PATH: join(tempDir, 'host-identity.json'),
     CODEX_ADAPTER: 'mock'
   });
   processes.push(bridge);

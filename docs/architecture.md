@@ -196,9 +196,29 @@ Session 表示一个 Codex thread/task。
 - `repo_path`
 - `branch`
 - `status`: `idle` | `running` | `waiting_for_input` | `waiting_for_approval` | `tests_running` | `failed` | `ready_for_review` | `completed`
+- `stage`: Relay-normalized mobile progress state. Current MVP values are `thinking`, `running_command`, `editing_files`, `waiting_approval`, `tests_failed`, `completed`, `needs_user`, and `idle`.
 - `summary`
 - `last_event_id`
 - `updated_at`
+
+Relay owns `stage` derivation. It recomputes the field from session snapshots, timeline events, approval state, and Git result metadata before broadcasting `session.snapshot`. Android treats `stage` as the display source of truth and only falls back to `status` for older Relay/Host payloads.
+
+### 4.2.1 Host Snapshot
+
+`host.snapshot` is the mobile-facing host workbench payload. Relay broadcasts it when a host registers, heartbeats, disconnects, or when a client subscribes to all sessions.
+
+Key fields:
+
+- `host.host_id`
+- `host.display_name`
+- `host.status`: `online` | `offline`
+- `host.capabilities`
+- `host.last_seen_at`
+- `host.bridge_version`
+- `host.kind`
+- `session_count`
+
+Android currently treats this as read-only execution-node metadata. Host management actions such as revoke, rename, trust rotation, or remote start/stop remain server/admin flows.
 
 ### 4.3 Timeline Event
 

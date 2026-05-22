@@ -8,8 +8,29 @@ data class CodexSession(
     val branch: String,
     val status: String,
     val summary: String,
-    val updatedAt: String
+    val updatedAt: String,
+    val stage: SessionStage = SessionStage.fromStatus(status, summary, updatedAt)
 )
+
+data class SessionStage(
+    val type: String,
+    val label: String,
+    val summary: String,
+    val severity: String,
+    val updatedAt: String
+) {
+    companion object {
+        fun fromStatus(status: String, summary: String, updatedAt: String): SessionStage {
+            val normalized = status.lowercase()
+            return when (normalized) {
+                "running" -> SessionStage("thinking", "Thinking", summary.ifBlank { "Codex is working." }, "active", updatedAt)
+                "waiting_for_input" -> SessionStage("needs_user", "Needs input", summary.ifBlank { "Codex is waiting for your input." }, "warning", updatedAt)
+                "completed" -> SessionStage("completed", "Completed", summary.ifBlank { "Codex completed the latest work." }, "success", updatedAt)
+                else -> SessionStage("idle", "Idle", summary.ifBlank { "No active Codex work is running." }, "neutral", updatedAt)
+            }
+        }
+    }
+}
 
 data class TimelineItem(
     val eventId: String,
@@ -19,6 +40,17 @@ data class TimelineItem(
     val summary: String,
     val createdAt: String,
     val cursor: String?
+)
+
+data class HostNode(
+    val hostId: String,
+    val displayName: String,
+    val status: String,
+    val capabilities: List<String>,
+    val sessionCount: Int,
+    val lastSeenAt: String,
+    val bridgeVersion: String,
+    val kind: String
 )
 
 data class ApprovalItem(
@@ -84,7 +116,9 @@ data class RelayUiState(
     val deviceId: String = "",
     val connectionStatus: String = "Disconnected",
     val sessions: List<CodexSession> = emptyList(),
+    val hosts: List<HostNode> = emptyList(),
     val selectedSessionId: String? = null,
+    val pinnedSessionIds: Set<String> = emptySet(),
     val timeline: List<TimelineItem> = emptyList(),
     val approvals: List<ApprovalItem> = emptyList(),
     val gitSnapshots: Map<String, GitSnapshot> = emptyMap(),

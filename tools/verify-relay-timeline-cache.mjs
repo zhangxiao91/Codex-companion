@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
   MessageType,
@@ -9,6 +12,7 @@ import {
 
 const processes = [];
 const devToken = 'relay-cache-test-token';
+const tempDir = await mkdtemp(join(tmpdir(), 'cmc-relay-cache-'));
 
 try {
   const relayPort = '8797';
@@ -17,7 +21,10 @@ try {
     ...process.env,
     RELAY_PORT: relayPort,
     RELAY_TIMELINE_CACHE_LIMIT: '10',
-    RELAY_DEV_TOKEN: devToken
+    RELAY_DEV_TOKEN: devToken,
+    RELAY_SQLITE_PATH: join(tempDir, 'relay.sqlite'),
+    RELAY_GIT_AUDIT_LOG_PATH: join(tempDir, 'git-audit.ndjson'),
+    RELAY_IDENTITY_STORE_PATH: join(tempDir, 'identity-store.json')
   });
   processes.push(relay);
   await waitForOutput(relay, '[relay] listening', 5000);
@@ -121,7 +128,8 @@ try {
     }
   }
 
-  await delay(250);
+  await delay(500);
+  await rm(tempDir, { recursive: true, force: true });
 }
 
 function createEvent(sessionId, type, title) {

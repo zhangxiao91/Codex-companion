@@ -17,12 +17,13 @@ class RelayClient(
     interface Listener {
         fun onConnected()
         fun onDisconnected(reason: String)
+        fun onHostSnapshot(host: HostNode)
         fun onSessionSnapshot(session: CodexSession)
         fun onApprovalRequest(approval: ApprovalItem)
         fun onGitSnapshot(snapshot: GitSnapshot)
         fun onGitAudit(sessionId: String, events: List<GitAuditItem>)
         fun onTimelineEvent(event: TimelineItem)
-        fun onTimelinePage(sessionId: String, events: List<TimelineItem>, hasMoreBefore: Boolean)
+        fun onTimelinePage(sessionId: String, events: List<TimelineItem>, hasMoreBefore: Boolean, source: String)
         fun onHealthCheck(summary: String)
         fun onPairingComplete(deviceId: String, deviceToken: String)
         fun onError(message: String)
@@ -275,6 +276,10 @@ class RelayClient(
         runCatching {
             val message = JSONObject(raw)
             when (val type = message.getString("type")) {
+                "host.snapshot" -> listener.onHostSnapshot(
+                    parseHostSnapshot(message.getJSONObject("payload"))
+                )
+
                 "session.snapshot" -> listener.onSessionSnapshot(
                     parseSession(message.getJSONObject("payload").getJSONObject("session"))
                 )
@@ -302,7 +307,8 @@ class RelayClient(
                     listener.onTimelinePage(
                         sessionId = payload.optString("session_id", ""),
                         events = events,
-                        hasMoreBefore = payload.optBoolean("has_more_before", false)
+                        hasMoreBefore = payload.optBoolean("has_more_before", false),
+                        source = payload.optString("source", "")
                     )
                 }
 
@@ -409,16 +415,56 @@ class RelayClient(
         createdAt = json.optString("created_at", "")
     )
 
-    private fun parseSession(json: JSONObject): CodexSession = CodexSession(
-        sessionId = json.getString("session_id"),
-        hostId = json.getString("host_id"),
-        projectName = json.optString("project_name", "Codex Session"),
-        repoPath = json.optString("repo_path", ""),
-        branch = json.optString("branch", "unknown"),
-        status = json.optString("status", "idle"),
-        summary = json.optString("summary", ""),
-        updatedAt = json.optString("updated_at", "")
-    )
+    private fun parseSession(json: JSONObject): CodexSession {
+        val status = json.optString("status", "idle")
+        val summary = json.optString("summary", "")
+        val updatedAt = json.optString("updated_at", "")
+        return CodexSession(
+            sessionId = json.getString("session_id"),
+            hostId = json.getString("host_id"),
+            projectName = json.optString("project_name", "Codex Session"),
+            repoPath = json.optString("repo_path", ""),
+            branch = json.optString("branch", "unknown"),
+            status = status,
+            summary = summary,
+            updatedAt = updatedAt,
+            stage = parseSessionStage(json.optJSONObject("stage"), status, summary, updatedAt)
+        )
+    }
+
+    private fun parseSessionStage(json: JSONObject?, status: String, summary: String, updatedAt: String): SessionStage {
+        if (json == null) {
+            return SessionStage.fromStatus(status, summary, updatedAt)
+        }
+        return SessionStage(
+            type = json.optString("type", "").ifBlank { SessionStage.fromStatus(status, summary, updatedAt).type },
+            label = json.optString("label", "").ifBlank { SessionStage.fromStatus(status, summary, updatedAt).label },
+            summary = json.optString("summary", "").ifBlank { summary },
+            severity = json.optString("severity", "").ifBlank { SessionStage.fromStatus(status, summary, updatedAt).severity },
+            updatedAt = json.optString("updated_at", "").ifBlank { updatedAt }
+        )
+    }
+
+    private fun parseHostSnapshot(payload: JSONObject): HostNode {
+        val host = payload.getJSONObject("host")
+        val capabilitiesArray = host.optJSONArray("capabilities")
+        val capabilities = if (capabilitiesArray == null) {
+            emptyList()
+        } else {
+            List(capabilitiesArray.length()) { index -> capabilitiesArray.optString(index, "") }
+                .filter { it.isNotBlank() }
+        }
+        return HostNode(
+            hostId = host.getString("host_id"),
+            displayName = host.optString("display_name", host.optString("host_id", "Host")),
+            status = host.optString("status", "offline"),
+            capabilities = capabilities,
+            sessionCount = payload.optInt("session_count", 0),
+            lastSeenAt = host.optString("last_seen_at", ""),
+            bridgeVersion = host.optString("bridge_version", ""),
+            kind = host.optString("kind", "")
+        )
+    }
 
     private fun parseTimelineEvent(json: JSONObject): TimelineItem = TimelineItem(
         eventId = json.optString("event_id", UUID.randomUUID().toString()),

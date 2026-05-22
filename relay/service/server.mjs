@@ -1,5 +1,4 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { appendFileSync, mkdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { dirname, resolve } from 'node:path';
@@ -12,6 +11,8 @@ import {
   requirePayloadField
 } from '../../packages/protocol/index.mjs';
 import { createIdentityStore, snapshotIdentityState } from './identity-store.mjs';
+import { deriveSessionStage } from './session-stage.mjs';
+import { createRelaySqliteStore } from './sqlite-store.mjs';
 import { handleWebSocketUpgrade } from './ws-server.mjs';
 
 const port = Number.parseInt(process.env.RELAY_PORT ?? '8787', 10);
@@ -27,6 +28,7 @@ const gitAuditLogPath = resolve(process.env.RELAY_GIT_AUDIT_LOG_PATH ?? '.relay/
 const publicHttpUrl = trimTrailingSlash(process.env.RELAY_PUBLIC_HTTP_URL ?? '');
 const publicWsUrl = trimTrailingSlash(process.env.RELAY_PUBLIC_WS_URL ?? '');
 const identityStore = createIdentityStore();
+const relayStore = createRelaySqliteStore({ path: resolveRelaySqlitePath() });
 
 if (host === '0.0.0.0' && !hasAnyRelaySecret()) {
   console.error('[relay] refusing to listen on 0.0.0.0 without RELAY_DEV_TOKEN, RELAY_PAIRING_TOKEN, or RELAY_HOST_TOKEN');
@@ -42,6 +44,7 @@ const state = {
   subscriptions: new Map(),
   timelineEvents: new Map(),
   gitAuditEvents: [],
+  gitSnapshots: new Map(),
   deviceTokens: new Map(),
   nextTimelineCursor: 1
 };
@@ -66,9 +69,35 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (path === '/devices' && request.method === 'GET') {
+    handleDevicesQuery(request, response, url);
+    return;
+  }
+
+  if (path === '/devices/revoke' && request.method === 'POST') {
+    await handleDeviceRevoke(request, response);
+    return;
+  }
+
   response.writeHead(404);
   response.end('not found');
 });
+
+function resolveRelaySqlitePath() {
+  if (process.env.RELAY_SQLITE_PATH) {
+    return process.env.RELAY_SQLITE_PATH;
+  }
+
+  if (process.env.RELAY_IDENTITY_STORE_PATH) {
+    return resolve(dirname(process.env.RELAY_IDENTITY_STORE_PATH), 'relay.sqlite');
+  }
+
+  if (process.env.RELAY_GIT_AUDIT_LOG_PATH) {
+    return resolve(dirname(process.env.RELAY_GIT_AUDIT_LOG_PATH), 'relay.sqlite');
+  }
+
+  return '.relay/relay.sqlite';
+}
 
 server.on('upgrade', (request, socket, head) => {
   handleWebSocketUpgrade(request, socket, head, (connection) => {
@@ -84,8 +113,7 @@ server.on('upgrade', (request, socket, head) => {
   });
 });
 
-await loadGitAuditEvents();
-loadIdentityState();
+await loadPersistentState();
 
 server.listen(port, host, () => {
   console.log(`[relay] listening on ws://${host}:${port}`);
@@ -140,6 +168,9 @@ function handleMessage(connection, raw) {
         break;
       case MessageType.TimelineEvent:
         handleTimelineEvent(connection, message);
+        break;
+      case MessageType.TimelinePage:
+        handleTimelinePage(connection, message);
         break;
       default:
         sendError(connection, `Unsupported message type: ${message.type}`);
@@ -197,14 +228,21 @@ function createHealthPayload(request) {
     },
     audit: {
       git_audit_log_path: gitAuditLogPath,
+      sqlite_path: relayStore.path,
       audit_log_limit: auditLogLimit,
       persistent_git_audit_enabled: true
     },
     identity: {
-      identity_store_path: identityStore.path,
+      identity_store_path: relayStore.path,
       persistent_identity_enabled: true,
       stored_devices: state.deviceTokens.size,
-      stored_hosts: state.hosts.size
+      stored_hosts: state.hosts.size,
+      trusted_host_devices: relayStore.counts().host_devices
+    },
+    storage: {
+      kind: 'sqlite',
+      path: relayStore.path,
+      counts: relayStore.counts()
     },
     checked_at: new Date().toISOString()
   };
@@ -218,7 +256,9 @@ function isAuthorized(message) {
   if (isHostMessage(message.type)) {
     return isAuthorizedHostToken(message.auth?.host_token)
       || isAuthorizedHostToken(message.auth?.dev_token)
-      || isAuthorizedHostToken(message.auth?.token);
+      || isAuthorizedHostToken(message.auth?.token)
+      || isAuthorizedHostDeviceToken(message.auth?.host_device_token)
+      || isAuthorizedHostDeviceToken(message.auth?.token);
   }
 
   if (isClientMessage(message.type)) {
@@ -240,9 +280,24 @@ function isHealthRequestAuthorized(request) {
     || isAuthorizedRelaySecret(request.headers['x-relay-pairing-token'])
     || isAuthorizedRelaySecret(request.headers['x-relay-host-token'])
     || isAuthorizedRelaySecret(request.headers['x-relay-auth-token'])
+    || isAuthorizedHostDeviceToken(request.headers['x-relay-host-device-token'])
     || isAuthorizedDeviceToken(request.headers['x-relay-device-token'])
     || isAuthorizedDeviceToken(request.headers['x-relay-auth-token'])
     || isAuthorizedDeviceToken(bearerToken);
+}
+
+function isAdminRequestAuthorized(request) {
+  if (!hasAnyRelaySecret()) {
+    return true;
+  }
+
+  const authorization = request.headers.authorization ?? '';
+  const bearerToken = authorization.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : '';
+  return isAuthorizedRelaySecret(request.headers['x-relay-dev-token'])
+    || isAuthorizedRelaySecret(request.headers['x-relay-pairing-token'])
+    || isAuthorizedRelaySecret(request.headers['x-relay-host-token'])
+    || isAuthorizedRelaySecret(request.headers['x-relay-auth-token'])
+    || isAuthorizedRelaySecret(bearerToken);
 }
 
 function hasAnyRelaySecret() {
@@ -261,6 +316,20 @@ function isAuthorizedHostToken(token) {
   return Boolean(token && hostToken && token === hostToken);
 }
 
+function isAuthorizedHostDeviceToken(token) {
+  if (!token) {
+    return false;
+  }
+
+  const hostDevice = relayStore.findHostDeviceByToken(token);
+  if (!hostDevice) {
+    return false;
+  }
+
+  relayStore.touchHostDevice(token);
+  return true;
+}
+
 function isAuthorizedDeviceToken(token) {
   if (!token || !state.deviceTokens.has(token)) {
     return false;
@@ -277,7 +346,8 @@ function isHostMessage(type) {
     || type === MessageType.ApprovalRequest
     || type === MessageType.GitSnapshot
     || type === MessageType.SessionSnapshot
-    || type === MessageType.TimelineEvent;
+    || type === MessageType.TimelineEvent
+    || type === MessageType.TimelinePage;
 }
 
 function isClientMessage(type) {
@@ -380,6 +450,88 @@ function handleGitAuditQuery(request, response, url) {
   });
 }
 
+function handleDevicesQuery(request, response, url) {
+  if (!isAdminRequestAuthorized(request)) {
+    writeJson(response, 401, {
+      ok: false,
+      error: 'unauthorized',
+      detail: 'Missing or invalid Relay admin token.'
+    });
+    return;
+  }
+
+  const includeRevoked = url.searchParams.get('include_revoked') === '1';
+  writeJson(response, 200, {
+    ok: true,
+    devices: relayStore.listDevices({ includeRevoked }),
+    host_devices: relayStore.listHostDevices({ includeRevoked }),
+    counts: relayStore.counts()
+  });
+}
+
+async function handleDeviceRevoke(request, response) {
+  if (!isAdminRequestAuthorized(request)) {
+    writeJson(response, 401, {
+      ok: false,
+      error: 'unauthorized',
+      detail: 'Missing or invalid Relay admin token.'
+    });
+    return;
+  }
+
+  try {
+    const rawBody = await readRequestBody(request, 4096);
+    const body = rawBody ? JSON.parse(rawBody) : {};
+    const type = String(body.type ?? body.kind ?? '').trim();
+    const now = new Date().toISOString();
+
+    if (type === 'android') {
+      const deviceId = String(body.device_id ?? '').trim();
+      if (!deviceId) {
+        throw new Error('device_id is required for android revoke.');
+      }
+      const revoked = relayStore.revokeDeviceById(deviceId);
+      for (const [token, device] of state.deviceTokens.entries()) {
+        if (device.device_id === deviceId) {
+          state.deviceTokens.delete(token);
+        }
+      }
+      writeJson(response, 200, {
+        ok: true,
+        type,
+        device_id: deviceId,
+        revoked,
+        revoked_at: now
+      });
+      return;
+    }
+
+    if (type === 'host') {
+      const hostDeviceId = String(body.host_device_id ?? '').trim();
+      if (!hostDeviceId) {
+        throw new Error('host_device_id is required for host revoke.');
+      }
+      const revoked = relayStore.revokeHostDevice(hostDeviceId);
+      writeJson(response, 200, {
+        ok: true,
+        type,
+        host_device_id: hostDeviceId,
+        revoked,
+        revoked_at: now
+      });
+      return;
+    }
+
+    throw new Error('type must be android or host.');
+  } catch (error) {
+    writeJson(response, 400, {
+      ok: false,
+      error: 'device_revoke_failed',
+      detail: error.message
+    });
+  }
+}
+
 function clampInteger(value, min, max, fallback) {
   const parsed = Number.parseInt(value ?? '', 10);
   if (!Number.isFinite(parsed)) {
@@ -389,7 +541,62 @@ function clampInteger(value, min, max, fallback) {
   return Math.min(Math.max(parsed, min), max);
 }
 
-async function loadGitAuditEvents() {
+async function loadPersistentState() {
+  loadSqliteState();
+  await migrateLegacyIdentityState();
+  await migrateLegacyGitAuditEvents();
+}
+
+function loadSqliteState() {
+  const devices = relayStore.loadDevices();
+  for (const device of devices) {
+    state.deviceTokens.set(device.token, {
+      device_id: device.device_id,
+      display_name: device.display_name,
+      paired_at: device.paired_at ?? new Date().toISOString(),
+      last_seen_at: device.last_seen_at ?? device.paired_at ?? new Date().toISOString()
+    });
+  }
+
+  const hosts = relayStore.loadHosts();
+  for (const host of hosts) {
+    state.hosts.set(host.host_id, {
+      ...host,
+      status: 'offline',
+      last_seen_at: host.last_seen_at ?? new Date().toISOString()
+    });
+  }
+
+  const sessions = relayStore.loadSessions();
+  for (const session of sessions) {
+    state.sessions.set(session.session_id, session);
+  }
+
+  const timelineEvents = relayStore.loadTimelineEvents(timelineCacheLimit);
+  for (const event of timelineEvents) {
+    const events = state.timelineEvents.get(event.session_id) ?? [];
+    events.push(event);
+    events.sort((a, b) => parseCursor(a.cursor) - parseCursor(b.cursor));
+    state.timelineEvents.set(event.session_id, events);
+    state.nextTimelineCursor = Math.max(state.nextTimelineCursor, parseCursor(event.cursor) + 1);
+  }
+
+  state.gitAuditEvents = relayStore.loadGitAuditEvents(auditLogLimit);
+
+  const counts = relayStore.counts();
+  if (counts.devices || counts.hosts || counts.sessions || counts.timeline_events || counts.git_audit_events) {
+    if (counts.devices || counts.hosts) {
+      console.log(`[relay] loaded ${counts.devices} device(s) and ${counts.hosts} host(s) from ${relayStore.path}`);
+    }
+    console.log(`[relay] loaded sqlite state from ${relayStore.path}: devices=${counts.devices}, hosts=${counts.hosts}, sessions=${counts.sessions}, timeline_events=${counts.timeline_events}, git_audit_events=${counts.git_audit_events}`);
+  }
+}
+
+async function migrateLegacyGitAuditEvents() {
+  if (state.gitAuditEvents.length > 0) {
+    return;
+  }
+
   try {
     const content = await readFile(gitAuditLogPath, 'utf8');
     const events = content
@@ -398,7 +605,11 @@ async function loadGitAuditEvents() {
       .map((line) => JSON.parse(line))
       .filter(isGitAuditEvent);
     state.gitAuditEvents = events.slice(-auditLogLimit);
-    console.log(`[relay] loaded ${state.gitAuditEvents.length} git audit event(s) from ${gitAuditLogPath}`);
+    for (const event of state.gitAuditEvents) {
+      relayStore.saveGitAuditEvent(event);
+    }
+    relayStore.trimGitAuditEvents(auditLogLimit);
+    console.log(`[relay] migrated ${state.gitAuditEvents.length} git audit event(s) from ${gitAuditLogPath} to ${relayStore.path}`);
   } catch (error) {
     if (error.code !== 'ENOENT') {
       console.error(`[relay] failed to load git audit log: ${error.message}`);
@@ -408,35 +619,43 @@ async function loadGitAuditEvents() {
 
 function persistGitAuditEvent(event) {
   try {
-    mkdirSync(dirname(gitAuditLogPath), { recursive: true });
-    appendFileSync(gitAuditLogPath, `${JSON.stringify(event)}\n`, 'utf8');
+    relayStore.saveGitAuditEvent(event);
+    relayStore.trimGitAuditEvents(auditLogLimit);
   } catch (error) {
     console.error(`[relay] failed to persist git audit event: ${error.message}`);
   }
 }
 
-function loadIdentityState() {
+async function migrateLegacyIdentityState() {
+  if (state.deviceTokens.size > 0 || state.hosts.size > 0) {
+    return;
+  }
+
   try {
     const snapshot = identityStore.load();
     for (const device of snapshot.devices) {
-      state.deviceTokens.set(device.token, {
+      const storedDevice = {
         device_id: device.device_id,
         display_name: device.display_name,
         paired_at: device.paired_at ?? new Date().toISOString(),
         last_seen_at: device.last_seen_at ?? device.paired_at ?? new Date().toISOString()
-      });
+      };
+      state.deviceTokens.set(device.token, storedDevice);
+      relayStore.saveDevice(device.token, storedDevice);
     }
 
     for (const host of snapshot.hosts) {
-      state.hosts.set(host.host_id, {
+      const storedHost = {
         ...host,
         status: 'offline',
         last_seen_at: host.last_seen_at ?? new Date().toISOString()
-      });
+      };
+      state.hosts.set(host.host_id, storedHost);
+      relayStore.saveHost(storedHost);
     }
 
     if (snapshot.devices.length > 0 || snapshot.hosts.length > 0) {
-      console.log(`[relay] loaded ${snapshot.devices.length} device(s) and ${snapshot.hosts.length} host(s) from ${identityStore.path}`);
+      console.log(`[relay] migrated ${snapshot.devices.length} device(s) and ${snapshot.hosts.length} host(s) from ${identityStore.path} to ${relayStore.path}`);
     }
   } catch (error) {
     console.error(`[relay] failed to load identity store: ${error.message}`);
@@ -445,9 +664,15 @@ function loadIdentityState() {
 
 function persistIdentityState() {
   try {
-    identityStore.save(snapshotIdentityState(state));
+    const snapshot = snapshotIdentityState(state);
+    for (const device of snapshot.devices) {
+      relayStore.saveDevice(device.token, device);
+    }
+    for (const host of snapshot.hosts) {
+      relayStore.saveHost(host);
+    }
   } catch (error) {
-    console.error(`[relay] failed to persist identity store: ${error.message}`);
+    console.error(`[relay] failed to persist sqlite identity state: ${error.message}`);
   }
 }
 
@@ -496,6 +721,7 @@ function handleHostRegister(connection, message) {
   requirePayloadField(message, 'host_id');
   requirePayloadField(message, 'display_name');
 
+  const trustedHostDevice = trustHostDeviceForRegister(message);
   const host = {
     ...message.payload,
     status: 'online',
@@ -509,6 +735,10 @@ function handleHostRegister(connection, message) {
   persistIdentityState();
 
   console.log(`[relay] host registered: ${host.host_id}`);
+  if (trustedHostDevice) {
+    send(connection, createMessage(MessageType.HostTrusted, trustedHostDevice));
+  }
+  broadcastHostSnapshot(host.host_id);
 }
 
 function handleHostHeartbeat(connection, message) {
@@ -523,6 +753,37 @@ function handleHostHeartbeat(connection, message) {
   host.last_seen_at = new Date().toISOString();
   host.status = 'online';
   persistIdentityState();
+  broadcastHostSnapshot(host.host_id);
+}
+
+function trustHostDeviceForRegister(message) {
+  const existingToken = message.auth?.host_device_token;
+  if (existingToken && isAuthorizedHostDeviceToken(existingToken)) {
+    return null;
+  }
+
+  const bootstrapToken = message.auth?.host_token ?? message.auth?.dev_token ?? message.auth?.token;
+  if (!isAuthorizedHostToken(bootstrapToken)) {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+  const hostDeviceId = `hostdev_${randomBytes(16).toString('base64url')}`;
+  const hostDeviceToken = `cmc_hostdev_${randomBytes(32).toString('base64url')}`;
+  relayStore.saveHostDevice(hostDeviceToken, {
+    host_device_id: hostDeviceId,
+    host_id: message.payload.host_id,
+    display_name: message.payload.display_name,
+    trusted_at: now,
+    last_seen_at: now
+  });
+
+  return {
+    host_id: message.payload.host_id,
+    host_device_id: hostDeviceId,
+    host_device_token: hostDeviceToken,
+    trusted_at: now
+  };
 }
 
 function handleSessionCreateEphemeral(connection, message) {
@@ -558,6 +819,7 @@ function handleApprovalRequest(connection, message) {
   broadcastToClients(createMessage(MessageType.ApprovalRequest, {
     approval: state.approvals.get(approval.approval_id)
   }));
+  refreshSessionStage(approval.session_id);
 }
 
 function handleApprovalDecision(connection, message) {
@@ -600,6 +862,7 @@ function handleApprovalDecision(connection, message) {
   console.log(`[relay] routing approval decision to host ${session.host_id}: ${approval.approval_id}`);
   send(hostConnection, message);
   broadcastToClients(createMessage(MessageType.ApprovalRequest, { approval: resolvedApproval }));
+  refreshSessionStage(approval.session_id);
 }
 
 function handleGitRequest(connection, message) {
@@ -651,6 +914,7 @@ function handleGitSnapshot(connection, message) {
   requirePayloadField(message, 'snapshot');
 
   const snapshot = message.payload.snapshot;
+  state.gitSnapshots.set(snapshot.session_id, snapshot);
   console.log(`[relay] git snapshot: ${snapshot.session_id} ${snapshot.action}`);
   appendGitAuditEvent({
     audit_id: snapshot.audit_id || randomUUID(),
@@ -665,16 +929,18 @@ function handleGitSnapshot(connection, message) {
     completed_at: new Date().toISOString()
   });
   broadcastToClients(message);
+  refreshSessionStage(snapshot.session_id);
 }
 
 function handleSessionSnapshot(connection, message) {
   requirePayloadField(message, 'session');
 
-  const { session } = message.payload;
+  const session = withDerivedSessionStage(message.payload.session);
   state.sessions.set(session.session_id, session);
+  relayStore.saveSession(session);
 
   console.log(`[relay] session snapshot: ${session.session_id}`);
-  broadcastToClients(message);
+  broadcastToClients(createMessage(MessageType.SessionSnapshot, { session }));
 }
 
 function handleSessionSubscribe(connection, message) {
@@ -689,6 +955,9 @@ function handleSessionSubscribe(connection, message) {
   state.subscriptions.set(connection, subscriptions);
 
   if (sessionId === '*') {
+    for (const host of state.hosts.values()) {
+      send(connection, createMessage(MessageType.HostSnapshot, createHostSnapshotPayload(host.host_id)));
+    }
     for (const session of state.sessions.values()) {
       if (!state.hostConnections.has(session.host_id)) {
         continue;
@@ -789,6 +1058,20 @@ function handleTimelineEvent(connection, message) {
   const event = cacheTimelineEvent(message.payload.event);
   console.log(`[relay] timeline event: ${event.title}`);
   broadcastToClients(createMessage(MessageType.TimelineEvent, { event }));
+  refreshSessionStage(event.session_id);
+}
+
+function handleTimelinePage(connection, message) {
+  requirePayloadField(message, 'session_id');
+  const events = Array.isArray(message.payload.events) ? message.payload.events : [];
+  const cachedEvents = events.map((event) => cacheTimelineEvent(event));
+  console.log(`[relay] timeline page: ${message.payload.session_id} ${cachedEvents.length} event(s)`);
+  broadcastToClients(createMessage(MessageType.TimelinePage, {
+    ...message.payload,
+    events: cachedEvents,
+    source: message.payload.source ?? 'host'
+  }));
+  refreshSessionStage(message.payload.session_id);
 }
 
 function handleClose(connection) {
@@ -804,8 +1087,30 @@ function handleClose(connection) {
 
     state.hostConnections.delete(connection.hostId);
     clearSessionsForHost(connection.hostId);
+    persistIdentityState();
+    broadcastHostSnapshot(connection.hostId);
     console.log(`[relay] host disconnected: ${connection.hostId}`);
   }
+}
+
+function broadcastHostSnapshot(hostId) {
+  const host = state.hosts.get(hostId);
+  if (!host) {
+    return;
+  }
+  broadcastToClients(createMessage(MessageType.HostSnapshot, createHostSnapshotPayload(hostId)));
+}
+
+function createHostSnapshotPayload(hostId) {
+  const host = state.hosts.get(hostId);
+  const sessionCount = [...state.sessions.values()].filter((session) => session.host_id === hostId).length;
+  return {
+    host: {
+      ...host,
+      status: state.hostConnections.has(hostId) ? 'online' : (host?.status ?? 'offline')
+    },
+    session_count: sessionCount
+  };
 }
 
 function clearSessionsForHost(hostId) {
@@ -821,8 +1126,15 @@ function broadcastToClients(message) {
     const eventSessionId = message.payload?.event?.session_id;
     const snapshotSessionId = message.payload?.session?.session_id;
     const gitSessionId = message.payload?.snapshot?.session_id;
-    const sessionId = eventSessionId ?? snapshotSessionId ?? gitSessionId;
+    const pageSessionId = message.payload?.session_id;
+    const hostId = message.payload?.host?.host_id;
+    const sessionId = eventSessionId ?? snapshotSessionId ?? gitSessionId ?? pageSessionId;
     const subscriptions = state.subscriptions.get(client);
+
+    if (hostId && subscriptions?.has('*')) {
+      send(client, message);
+      continue;
+    }
 
     if (!sessionId || !subscriptions || subscriptions.has('*') || subscriptions.has(sessionId)) {
       send(client, message);
@@ -831,8 +1143,9 @@ function broadcastToClients(message) {
 }
 
 function cacheTimelineEvent(event) {
-  const cursor = state.nextTimelineCursor;
-  state.nextTimelineCursor += 1;
+  const incomingCursor = parseCursor(event.cursor);
+  const cursor = incomingCursor > 0 ? incomingCursor : state.nextTimelineCursor;
+  state.nextTimelineCursor = Math.max(state.nextTimelineCursor, cursor + 1);
 
   const cachedEvent = {
     ...event,
@@ -840,14 +1153,18 @@ function cacheTimelineEvent(event) {
     cached_at: new Date().toISOString()
   };
 
-  const events = state.timelineEvents.get(cachedEvent.session_id) ?? [];
+  const events = (state.timelineEvents.get(cachedEvent.session_id) ?? [])
+    .filter((item) => item.event_id !== cachedEvent.event_id);
   events.push(cachedEvent);
+  events.sort((a, b) => parseCursor(a.cursor) - parseCursor(b.cursor));
 
   while (events.length > timelineCacheLimit) {
     events.shift();
   }
 
   state.timelineEvents.set(cachedEvent.session_id, events);
+  relayStore.saveTimelineEvent(cachedEvent);
+  relayStore.trimTimelineEvents(timelineCacheLimit);
   return cachedEvent;
 }
 
@@ -866,6 +1183,31 @@ function appendGitAuditEvent(event) {
 
   const timelineEvent = cacheTimelineEvent(createGitAuditTimelineEvent(auditEvent));
   broadcastToClients(createMessage(MessageType.TimelineEvent, { event: timelineEvent }));
+  refreshSessionStage(auditEvent.session_id);
+}
+
+function refreshSessionStage(sessionId) {
+  const session = state.sessions.get(sessionId);
+  if (!session) {
+    return;
+  }
+
+  const stagedSession = withDerivedSessionStage(session);
+  state.sessions.set(sessionId, stagedSession);
+  relayStore.saveSession(stagedSession);
+  broadcastToClients(createMessage(MessageType.SessionSnapshot, { session: stagedSession }));
+}
+
+function withDerivedSessionStage(session) {
+  return {
+    ...session,
+    stage: deriveSessionStage(
+      session,
+      state.timelineEvents.get(session.session_id) ?? [],
+      [...state.approvals.values()],
+      [...state.gitSnapshots.values()]
+    )
+  };
 }
 
 function createGitAuditTimelineEvent(auditEvent) {
@@ -962,7 +1304,8 @@ function sendCachedTimeline(connection, sessionId, options = {}) {
       oldest_cursor: oldestSelectedCursor > 0 ? String(oldestSelectedCursor) : null,
       newest_cursor: newestSelectedCursor > 0 ? String(newestSelectedCursor) : null,
       has_more_before: hasMoreBefore,
-      has_more_after: hasMoreAfter
+      has_more_after: hasMoreAfter,
+      source: 'cache'
     }));
     return;
   }

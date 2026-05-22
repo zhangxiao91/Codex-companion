@@ -8,6 +8,7 @@ export async function displayPairingCode({
   pairingCode,
   relayUrl,
   title = 'Codex Mobile Companion Pairing',
+  statusItems = [],
   outputDir = process.env.CMC_PAIRING_OUTPUT_DIR ?? DEFAULT_OUTPUT_DIR,
   mode = process.env.CMC_PAIRING_QR ?? 'both'
 }) {
@@ -46,7 +47,8 @@ export async function displayPairingCode({
       title,
       relayUrl,
       pairingCode,
-      qrSvg
+      qrSvg,
+      statusItems
     }), 'utf8');
     result.htmlPath = htmlPath;
     console.log(`[pairing] Pairing page: ${htmlPath}`);
@@ -65,7 +67,7 @@ function normalizeMode(mode) {
   return 'both';
 }
 
-function renderPairingHtml({ title, relayUrl, pairingCode, qrSvg }) {
+function renderPairingHtml({ title, relayUrl, pairingCode, qrSvg, statusItems }) {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -123,6 +125,29 @@ function renderPairingHtml({ title, relayUrl, pairingCode, qrSvg }) {
       display: grid;
       gap: 14px;
     }
+    .status {
+      margin: 0 0 18px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 10px;
+    }
+    .status-item {
+      border: 1px solid #e2e6ef;
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: #f8fafc;
+    }
+    .status-item strong {
+      display: block;
+      font-size: 13px;
+      color: #171a21;
+    }
+    .status-item span {
+      display: block;
+      margin-top: 3px;
+      font-size: 12px;
+      color: #687386;
+    }
     dt {
       font-size: 12px;
       font-weight: 700;
@@ -159,9 +184,12 @@ function renderPairingHtml({ title, relayUrl, pairingCode, qrSvg }) {
       p, dt {
         color: #a7b0c2;
       }
-      .qr, code {
+      .qr, code, .status-item {
         border-color: #303747;
         background: #f7f8fb;
+        color: #111827;
+      }
+      .status-item strong {
         color: #111827;
       }
     }
@@ -170,7 +198,8 @@ function renderPairingHtml({ title, relayUrl, pairingCode, qrSvg }) {
 <body>
   <main>
     <h1>${escapeHtml(title)}</h1>
-    <p>Scan this QR code from the Android app, or paste the pairing code manually.</p>
+    <p>Scan this QR code from the Android app. Keep this terminal running while you use the app.</p>
+    ${renderStatusItems(statusItems)}
     <div class="qr" aria-label="Pairing QR code">
       ${qrSvg}
     </div>
@@ -188,6 +217,17 @@ function renderPairingHtml({ title, relayUrl, pairingCode, qrSvg }) {
 </body>
 </html>
 `;
+}
+
+function renderStatusItems(statusItems) {
+  const safeItems = Array.isArray(statusItems) ? statusItems : [];
+  if (safeItems.length === 0) {
+    return '';
+  }
+
+  return `<section class="status" aria-label="Pairing status">
+${safeItems.map((item) => `      <div class="status-item"><strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(item.detail)}</span></div>`).join('\n')}
+    </section>`;
 }
 
 function escapeHtml(value) {

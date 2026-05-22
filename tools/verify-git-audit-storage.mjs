@@ -75,8 +75,8 @@ try {
     stopProcess(child);
   }
 
+  await delay(500);
   await rm(tempDir, { recursive: true, force: true });
-  await delay(250);
 }
 
 async function startRelay() {
@@ -84,6 +84,7 @@ async function startRelay() {
     ...process.env,
     RELAY_PORT: relayPort,
     RELAY_DEV_TOKEN: devToken,
+    RELAY_SQLITE_PATH: join(tempDir, 'relay.sqlite'),
     RELAY_GIT_AUDIT_LOG_PATH: auditPath,
     RELAY_AUDIT_LOG_LIMIT: '50'
   });

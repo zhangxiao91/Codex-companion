@@ -93,15 +93,42 @@ Current serverization target:
 - Point Android pairing and WebSocket connection at the server URL.
 - Point local PC Host Bridge at the server Relay through an outbound connection.
 - Later, run another Host Bridge on the server itself so server-side Codex appears as a normal host beside the local PC.
-- Persist paired devices and registered host metadata with `RELAY_IDENTITY_STORE_PATH` so Relay restarts do not require re-pairing.
+- Persist paired devices, registered host metadata, session snapshots, timeline cache, and Git audit metadata in SQLite. Use `RELAY_SQLITE_PATH` to choose the database path; the default is `.relay/relay.sqlite`.
+- Android is now shaped as a Codex Console: paired devices land on a unified session inbox first, then open an individual session detail only when needed.
+- Relay standardizes each session's current `stage` in `session.snapshot`, so Android can show progress states consistently across local PC, server, and cloud/devbox hosts.
+- Android includes low-friction quick prompts for common interventions, a read-only Hosts workbench, and local in-app-process notifications for completion, failures, approvals, and blockers.
 
 Server Relay helper commands:
+
+Local one-click pairing for development:
+
+```powershell
+npm run start:companion
+```
+
+This starts the local Relay and Host Bridge, generates a QR pairing page, and opens it in your browser. Set `CMC_PAIRING_OPEN=0` to skip opening the browser.
+
+First-time server Relay setup:
+
+```powershell
+$env:RELAY_PUBLIC_WS_URL='wss://relay.example.com'
+$env:RELAY_PUBLIC_HTTP_URL='https://relay.example.com'
+$env:RELAY_SQLITE_PATH='.relay/relay.sqlite'
+npm run server:relay:init
+```
+
+This saves `.relay/server-relay-config.json`, including generated pairing and host tokens when they are not provided. Later starts can use the saved config:
+
+```powershell
+npm run server:relay
+```
 
 ```powershell
 $env:RELAY_PUBLIC_WS_URL='wss://relay.example.com'
 $env:RELAY_PUBLIC_HTTP_URL='https://relay.example.com'
 $env:RELAY_PAIRING_TOKEN='choose-a-long-random-pairing-token'
 $env:RELAY_HOST_TOKEN='choose-a-different-long-random-host-token'
+$env:RELAY_SQLITE_PATH='.relay/relay.sqlite'
 npm run server:relay
 ```
 
@@ -114,6 +141,21 @@ $env:HOST_ID='local-pc'
 $env:HOST_NAME='Local PC'
 npm run server:bridge
 ```
+
+The first successful Host Bridge registration stores a trusted host identity at `.relay/host-identity.json` by default. Later starts can omit `RELAY_HOST_TOKEN` and use the saved host device token. Set `HOST_IDENTITY_PATH` to choose another identity file.
+
+Server device management:
+
+```powershell
+$env:RELAY_PUBLIC_HTTP_URL='https://relay.example.com'
+$env:RELAY_ADMIN_TOKEN='<relay-host-token-or-pairing-token>'
+npm run server:devices -- list
+npm run server:devices -- list --all
+npm run server:devices -- revoke android <device_id>
+npm run server:devices -- revoke host <host_device_id>
+```
+
+`list` shows currently trusted Android devices and Host Bridge devices. `list --all` also shows revoked devices. Revoking an Android device invalidates its device token, so it must pair again. Revoking a host device invalidates the saved `.relay/host-identity.json` trust token for that Host Bridge; the bridge can be trusted again by starting it once with `RELAY_HOST_TOKEN`.
 
 For public or campus-network access, run the Node Relay behind an HTTPS/WSS reverse proxy and bind Relay itself to `127.0.0.1`. Only expose public `443` and SSH on the server firewall; do not expose `8787` directly. Concrete Caddy and Nginx examples are in [docs/server-relay-plan.md](docs/server-relay-plan.md).
 

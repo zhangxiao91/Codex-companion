@@ -7,8 +7,14 @@ import {
 } from '../../packages/protocol/index.mjs';
 import { createCodexAdapter } from './codex-adapter.mjs';
 import { handleGitRequest } from './git-adapter.mjs';
+import { createHostIdentityStore } from './host-identity-store.mjs';
 
 const relayUrl = process.env.RELAY_URL ?? DEFAULT_RELAY_URL;
+const hostIdentityStore = createHostIdentityStore();
+const storedHostIdentity = hostIdentityStore.load();
+let hostDeviceToken = process.env.RELAY_HOST_DEVICE_TOKEN
+  ?? storedHostIdentity.host_device_token
+  ?? '';
 const hostToken = process.env.RELAY_HOST_TOKEN
   ?? process.env.RELAY_DEV_TOKEN
   ?? process.env.DEV_TOKEN
@@ -78,6 +84,22 @@ socket.addEventListener('message', async (event) => {
       return;
     }
 
+    if (message.type === MessageType.HostTrusted) {
+      const token = message.payload.host_device_token;
+      if (typeof token === 'string' && token) {
+        hostDeviceToken = token;
+        hostIdentityStore.save({
+          host_id: message.payload.host_id ?? hostId,
+          host_device_id: message.payload.host_device_id ?? '',
+          host_device_token: token,
+          relay_url: relayUrl,
+          display_name: displayName
+        });
+        console.log(`[bridge] saved host device trust at ${hostIdentityStore.path}`);
+      }
+      return;
+    }
+
     if (message.type === MessageType.SessionTimelineRequest) {
       const { session_id: sessionId } = message.payload;
       console.log(`[bridge] received timeline request for ${sessionId}`);
@@ -87,7 +109,10 @@ socket.addEventListener('message', async (event) => {
       }
 
       const responses = await adapter.readTimeline(sessionId, {
-        limit: message.payload.limit
+        afterCursor: message.payload.after_cursor,
+        beforeCursor: message.payload.before_cursor,
+        limit: message.payload.limit,
+        page: message.payload.page === true
       });
       for (const response of responses) {
         socket.send(encodeMessage(withAuth(response)));
@@ -160,7 +185,7 @@ function createRelayMessage(type, payload) {
 }
 
 function withAuth(message) {
-  if (!hostToken) {
+  if (!hostDeviceToken && !hostToken) {
     return message;
   }
 
@@ -168,11 +193,14 @@ function withAuth(message) {
     ...message,
     auth: {
       ...(message.auth ?? {}),
-      host_token: hostToken
+      ...(hostDeviceToken ? { host_device_token: hostDeviceToken } : { host_token: hostToken })
     }
   };
 }
 
 function authOptions() {
+  if (hostDeviceToken) {
+    return { auth: { host_device_token: hostDeviceToken } };
+  }
   return hostToken ? { auth: { host_token: hostToken } } : {};
 }

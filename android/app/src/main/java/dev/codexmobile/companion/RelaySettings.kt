@@ -43,17 +43,28 @@ class RelaySettings(context: Context) {
         preferences.edit().putString(KEY_SELECTED_SESSION_ID, sessionId).apply()
     }
 
+    fun pinnedSessionIds(): Set<String> =
+        preferences.getStringSet(KEY_PINNED_SESSION_IDS, emptySet()) ?: emptySet()
+
+    fun savePinnedSessionIds(sessionIds: Set<String>) {
+        preferences.edit().putStringSet(KEY_PINNED_SESSION_IDS, sessionIds).apply()
+    }
+
     fun sessions(): List<CodexSession> = readJsonArray(KEY_SESSIONS).mapNotNull { item ->
         runCatching {
+            val status = item.optString("status", "idle")
+            val summary = item.optString("summary", "")
+            val updatedAt = item.optString("updated_at", "")
             CodexSession(
                 sessionId = item.getString("session_id"),
                 hostId = item.getString("host_id"),
                 projectName = item.optString("project_name", "Codex Session"),
                 repoPath = item.optString("repo_path", ""),
                 branch = item.optString("branch", "unknown"),
-                status = item.optString("status", "idle"),
-                summary = item.optString("summary", ""),
-                updatedAt = item.optString("updated_at", "")
+                status = status,
+                summary = summary,
+                updatedAt = updatedAt,
+                stage = readSessionStage(item.optJSONObject("stage"), status, summary, updatedAt)
             )
         }.getOrNull()
     }
@@ -71,6 +82,15 @@ class RelaySettings(context: Context) {
                     .put("status", session.status)
                     .put("summary", session.summary)
                     .put("updated_at", session.updatedAt)
+                    .put(
+                        "stage",
+                        JSONObject()
+                            .put("type", session.stage.type)
+                            .put("label", session.stage.label)
+                            .put("summary", session.stage.summary)
+                            .put("severity", session.stage.severity)
+                            .put("updated_at", session.stage.updatedAt)
+                    )
             )
         }
         preferences.edit().putString(KEY_SESSIONS, json.toString()).apply()
@@ -112,6 +132,7 @@ class RelaySettings(context: Context) {
             .remove(KEY_SELECTED_SESSION_ID)
             .remove(KEY_SESSIONS)
             .remove(KEY_TIMELINE)
+            .remove(KEY_PINNED_SESSION_IDS)
             .apply()
     }
 
@@ -123,6 +144,20 @@ class RelaySettings(context: Context) {
         }.getOrDefault(emptyList())
     }
 
+    private fun readSessionStage(json: JSONObject?, status: String, summary: String, updatedAt: String): SessionStage {
+        if (json == null) {
+            return SessionStage.fromStatus(status, summary, updatedAt)
+        }
+        val fallback = SessionStage.fromStatus(status, summary, updatedAt)
+        return SessionStage(
+            type = json.optString("type", fallback.type),
+            label = json.optString("label", fallback.label),
+            summary = json.optString("summary", fallback.summary),
+            severity = json.optString("severity", fallback.severity),
+            updatedAt = json.optString("updated_at", fallback.updatedAt)
+        )
+    }
+
     private companion object {
         const val PREFERENCES_NAME = "relay_settings"
         const val KEY_RELAY_URL = "relay_url"
@@ -130,6 +165,7 @@ class RelaySettings(context: Context) {
         const val KEY_DEVICE_TOKEN = "device_token"
         const val KEY_DEVICE_ID = "device_id"
         const val KEY_SELECTED_SESSION_ID = "selected_session_id"
+        const val KEY_PINNED_SESSION_IDS = "pinned_session_ids"
         const val KEY_SESSIONS = "sessions"
         const val KEY_TIMELINE = "timeline"
         const val MAX_SESSIONS = 20

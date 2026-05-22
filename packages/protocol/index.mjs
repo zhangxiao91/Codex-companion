@@ -5,7 +5,9 @@ export const DEFAULT_RELAY_URL = process.env.RELAY_URL ?? 'ws://127.0.0.1:8787';
 export const MessageType = Object.freeze({
   Error: 'error',
   HostRegister: 'host.register',
+  HostTrusted: 'host.trusted',
   HostHeartbeat: 'host.heartbeat',
+  HostSnapshot: 'host.snapshot',
   ApprovalRequest: 'approval.request',
   ApprovalDecision: 'approval.decision',
   GitRequest: 'git.request',

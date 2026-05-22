@@ -11,7 +11,8 @@ import {
 import { StdioJsonTransport } from './app-server-stdio-transport.mjs';
 import {
   mapAppServerNotificationToTimelineEvents,
-  mapThreadToTimelineEvents
+  mapThreadToTimelineEvents,
+  mapThreadToTimelinePage
 } from './timeline-mapper.mjs';
 
 export class MockCodexAdapter {
@@ -102,14 +103,32 @@ export class MockCodexAdapter {
       throw new Error(`Unknown mock session: ${sessionId}`);
     }
 
+    const event = createTimelineEvent(
+      sessionId,
+      'Mock timeline loaded',
+      'Mock Codex session timeline is available.',
+      { adapter: 'mock' }
+    );
+
+    if (options.page) {
+      return [
+        createMessage(MessageType.TimelinePage, {
+          session_id: sessionId,
+          events: [{ ...event, cursor: '1' }],
+          before_cursor: options.beforeCursor ?? null,
+          after_cursor: options.afterCursor ?? null,
+          oldest_cursor: '1',
+          newest_cursor: '1',
+          has_more_before: false,
+          has_more_after: false,
+          source: 'host'
+        })
+      ];
+    }
+
     return [
       createMessage(MessageType.TimelineEvent, {
-        event: createTimelineEvent(
-          sessionId,
-          'Mock timeline loaded',
-          'Mock Codex session timeline is available.',
-          { adapter: 'mock' }
-        )
+        event
       })
     ].slice(0, options.limit ?? 1);
   }
@@ -298,6 +317,12 @@ export class AppServerCodexAdapter {
       threadId: sessionId,
       includeTurns: true
     });
+
+    if (options.page) {
+      return [
+        createMessage(MessageType.TimelinePage, mapThreadToTimelinePage(response.thread, options))
+      ];
+    }
 
     return mapThreadToTimelineEvents(response.thread, options).map((event) => (
       createMessage(MessageType.TimelineEvent, { event })
