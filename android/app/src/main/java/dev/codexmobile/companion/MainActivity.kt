@@ -27,7 +27,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -408,6 +410,7 @@ private fun InboxScreen(
     onHealthCheck: () -> Unit
 ) {
     var hostsOpen by remember { mutableStateOf(false) }
+    var actionsOpen by remember { mutableStateOf(false) }
     var notificationBaselineReady by remember { mutableStateOf(false) }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -436,11 +439,10 @@ private fun InboxScreen(
     ) {
         InboxTopBar(
             uiState = uiState,
-            onReconnect = onReconnect,
             onNewChat = onNewChat,
-            onHosts = { hostsOpen = true },
-            onHealthCheck = onHealthCheck
+            onMore = { actionsOpen = true }
         )
+        MainStatusNotice(uiState)
         InboxMetricRow(uiState)
         if (!onNotificationsEnabled() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             NotificationPermissionStrip {
@@ -469,10 +471,6 @@ private fun InboxScreen(
                         latestEvent = latestTimelineForSession(uiState.timeline, session.sessionId),
                         pinned = session.sessionId in uiState.pinnedSessionIds,
                         onPinToggle = { onPinnedSessionToggle(session.sessionId) },
-                        onQuickPrompt = { prompt ->
-                            onSessionSelected(session.sessionId)
-                            onPromptSend(prompt)
-                        },
                         onClick = { onSessionSelected(session.sessionId) }
                     )
                 }
@@ -488,6 +486,35 @@ private fun InboxScreen(
             dragHandle = null
         ) {
             HostWorkbenchSheet(uiState = uiState)
+        }
+    }
+
+    if (actionsOpen) {
+        ModalBottomSheet(
+            onDismissRequest = { actionsOpen = false },
+            containerColor = SheetBlack,
+            contentColor = PrimaryText,
+            dragHandle = null
+        ) {
+            InboxActionSheet(
+                uiState = uiState,
+                onNewChat = {
+                    actionsOpen = false
+                    onNewChat()
+                },
+                onHosts = {
+                    actionsOpen = false
+                    hostsOpen = true
+                },
+                onReconnect = {
+                    actionsOpen = false
+                    onReconnect()
+                },
+                onHealthCheck = {
+                    actionsOpen = false
+                    onHealthCheck()
+                }
+            )
         }
     }
 }
@@ -519,10 +546,8 @@ private fun NotificationPermissionStrip(onEnable: () -> Unit) {
 @Composable
 private fun InboxTopBar(
     uiState: RelayUiState,
-    onReconnect: () -> Unit,
     onNewChat: () -> Unit,
-    onHosts: () -> Unit,
-    onHealthCheck: () -> Unit
+    onMore: () -> Unit
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -532,7 +557,7 @@ private fun InboxTopBar(
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("Command Center", color = PrimaryText, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
             Text(
-                text = "${uiState.sessions.size} sessions across ${uiState.sessions.map { it.hostId }.distinct().size} hosts",
+                text = "${uiState.connectionStatus} / ${uiState.sessions.size} sessions / ${uiState.hosts.count { it.status == "online" }} online hosts",
                 color = SecondaryText,
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1,
@@ -540,10 +565,112 @@ private fun InboxTopBar(
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            CircleTextButton(text = "+", onClick = onNewChat)
-            CircleTextButton(text = "Hosts", onClick = onHosts, wide = true)
-            StatusOrb(uiState.connectionStatus, onReconnect)
-            CircleTextButton(text = "?", onClick = onHealthCheck)
+            PrimaryPillButton(
+                text = "New Chat",
+                enabled = uiState.connectionStatus == "Online",
+                onClick = onNewChat
+            )
+            CircleTextButton(text = "More", onClick = onMore, wide = true)
+        }
+    }
+}
+
+@Composable
+private fun MainStatusNotice(uiState: RelayUiState) {
+    val message = uiState.lastError ?: uiState.lastHealthCheck
+    if (message.isNullOrBlank()) {
+        return
+    }
+    InlineNotice(
+        text = message,
+        tone = if (uiState.lastError.isNullOrBlank()) NoticeTone.Neutral else NoticeTone.Critical
+    )
+}
+
+@Composable
+private fun InboxActionSheet(
+    uiState: RelayUiState,
+    onNewChat: () -> Unit,
+    onHosts: () -> Unit,
+    onReconnect: () -> Unit,
+    onHealthCheck: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .navigationBarsPadding()
+            .padding(horizontal = 18.dp, vertical = 22.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Text("Control", color = PrimaryText, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+        Text("Low-frequency actions stay here so the inbox can stay calm.", color = SecondaryText, style = MaterialTheme.typography.bodySmall)
+        ActionSheetButton(
+            title = "Start a new chat",
+            detail = "Create a fresh Codex session on the active host.",
+            enabled = uiState.connectionStatus == "Online",
+            onClick = onNewChat
+        )
+        ActionSheetButton(
+            title = "Execution nodes",
+            detail = "${uiState.hosts.count { it.status == "online" }} online / ${uiState.hosts.size} total hosts.",
+            onClick = onHosts
+        )
+        ActionSheetButton(
+            title = if (uiState.connectionStatus == "Online") "Refresh relay" else "Reconnect relay",
+            detail = "Reopen the WebSocket and refresh live session state.",
+            onClick = onReconnect
+        )
+        ActionSheetButton(
+            title = "Test connection",
+            detail = "Run the Relay health check and show the result here.",
+            onClick = onHealthCheck
+        )
+    }
+}
+
+@Composable
+private fun ActionSheetButton(
+    title: String,
+    detail: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .clickable(enabled = enabled, onClick = onClick),
+        color = if (enabled) ElevatedBlack else CardBlack.copy(alpha = 0.48f),
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.dp, if (enabled) HairlineDark else StrokeDark.copy(alpha = 0.55f))
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 15.dp, vertical = 13.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(title, color = if (enabled) PrimaryText else TertiaryText, fontWeight = FontWeight.SemiBold)
+            Text(detail, color = TertiaryText, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable
+private fun PrimaryPillButton(text: String, enabled: Boolean = true, onClick: () -> Unit) {
+    Surface(
+        modifier = Modifier
+            .height(44.dp)
+            .widthIn(min = 96.dp)
+            .clip(RoundedCornerShape(99.dp))
+            .clickable(enabled = enabled, onClick = onClick),
+        shape = RoundedCornerShape(99.dp),
+        color = if (enabled) PrimaryText else StrokeDark,
+        border = BorderStroke(1.dp, if (enabled) PrimaryText else HairlineDark)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                modifier = Modifier.padding(horizontal = 14.dp),
+                text = text,
+                color = if (enabled) AppBlack else TertiaryText,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1
+            )
         }
     }
 }
@@ -593,7 +720,6 @@ private fun InboxSessionCard(
     latestEvent: TimelineItem?,
     pinned: Boolean,
     onPinToggle: () -> Unit,
-    onQuickPrompt: (String) -> Unit,
     onClick: () -> Unit
 ) {
     val tone = stageTone(session.stage)
@@ -649,12 +775,6 @@ private fun InboxSessionCard(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                if (needsAttention(session)) {
-                    QuickActionBar(
-                        enabled = true,
-                        onQuickPrompt = onQuickPrompt
-                    )
-                }
                 InboxSessionCta(session)
             }
         }
@@ -677,19 +797,13 @@ private fun InboxSessionCta(session: CodexSession) {
 @Composable
 private fun QuickActionBar(enabled: Boolean, onQuickPrompt: (String) -> Unit) {
     val actions = quickActionPrompts()
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            actions.take(2).forEach { (label, prompt) ->
-                QuickActionChip(label = label, enabled = enabled, modifier = Modifier.weight(1f)) {
-                    onQuickPrompt(prompt)
-                }
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            actions.drop(2).forEach { (label, prompt) ->
-                QuickActionChip(label = label, enabled = enabled, modifier = Modifier.weight(1f)) {
-                    onQuickPrompt(prompt)
-                }
+    LazyRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items(actions) { (label, prompt) ->
+            QuickActionChip(label = label, enabled = enabled) {
+                onQuickPrompt(prompt)
             }
         }
     }
@@ -700,6 +814,7 @@ private fun QuickActionChip(label: String, enabled: Boolean, modifier: Modifier 
     Surface(
         modifier = modifier
             .height(40.dp)
+            .widthIn(min = 86.dp)
             .clip(RoundedCornerShape(99.dp))
             .clickable(enabled = enabled, onClick = onClick),
         color = if (enabled) ControlBlack else CardBlack.copy(alpha = 0.5f),
@@ -707,7 +822,14 @@ private fun QuickActionChip(label: String, enabled: Boolean, modifier: Modifier 
         border = BorderStroke(1.dp, if (enabled) HairlineDark else StrokeDark.copy(alpha = 0.55f))
     ) {
         Box(contentAlignment = Alignment.Center) {
-            Text(label, color = if (enabled) PrimaryText else TertiaryText, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Medium)
+            Text(
+                modifier = Modifier.padding(horizontal = 13.dp),
+                text = label,
+                color = if (enabled) PrimaryText else TertiaryText,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1
+            )
         }
     }
 }
@@ -819,10 +941,9 @@ private fun MainSessionScreen(
             MainTopBar(
                 uiState = uiState,
                 onMenu = onBackToInbox,
-                onTools = { toolsOpen = true },
-                onNewChat = onNewChat,
-                onReconnect = onReconnect
+                onTools = { toolsOpen = true }
             )
+            MainStatusNotice(uiState)
             TimelineStream(uiState = uiState, modifier = Modifier.weight(1f), onLoadEarlier = onLoadEarlierTimeline)
             QuickActionBar(
                 enabled = uiState.selectedSession != null && uiState.connectionStatus == "Online",
@@ -871,14 +992,14 @@ private fun MainSessionScreen(
 }
 
 @Composable
-private fun MainTopBar(uiState: RelayUiState, onMenu: () -> Unit, onTools: () -> Unit, onNewChat: () -> Unit, onReconnect: () -> Unit) {
+private fun MainTopBar(uiState: RelayUiState, onMenu: () -> Unit, onTools: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
         Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            CircleTextButton(text = "<", onClick = onMenu)
+            CircleTextButton(text = "Back", onClick = onMenu, wide = true)
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = uiState.selectedSession?.projectName ?: "Codex",
@@ -898,9 +1019,7 @@ private fun MainTopBar(uiState: RelayUiState, onMenu: () -> Unit, onTools: () ->
             }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            CircleTextButton(text = "+", onClick = onNewChat)
-            StatusOrb(uiState.connectionStatus, onReconnect)
-            CircleTextButton(text = "...", onClick = onTools)
+            CircleTextButton(text = "Tools", onClick = onTools, wide = true)
         }
     }
 }
@@ -1339,7 +1458,6 @@ private fun ChatComposer(selectedSession: CodexSession?, online: Boolean, onProm
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("+", color = PrimaryText, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(horizontal = 10.dp))
             TextField(
                 modifier = Modifier.weight(1f),
                 value = prompt,
@@ -1393,7 +1511,7 @@ private fun CircleTextButton(text: String, onClick: () -> Unit, wide: Boolean = 
     Surface(
         modifier = Modifier
             .height(44.dp)
-            .width(if (wide) 76.dp else 44.dp)
+            .width(if (wide) 88.dp else 44.dp)
             .clip(RoundedCornerShape(99.dp))
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(99.dp),

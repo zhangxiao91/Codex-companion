@@ -178,6 +178,34 @@ The current first-pass server token model separates pairing and host auth:
 - Device tokens authorize Android/client WebSocket control messages after pairing.
 - `RELAY_DEV_TOKEN` remains a local development fallback, but should not be used as the recommended server deployment shape.
 
+### Windows Host Bridge Auto-Start
+
+On a Windows PC, install the Host Bridge as a per-user Windows Task Scheduler entry:
+
+```powershell
+$env:RELAY_URL='wss://relay.example.com'
+$env:HOST_ID='local-pc'
+$env:HOST_NAME='Local PC'
+npm run bridge:windows:install
+npm run bridge:windows:start
+```
+
+This writes `.relay/windows-host-bridge-config.json` and creates a task named `CodexMobileCompanionHostBridge` that runs at user logon. The task starts `tools/windows-host-bridge-run.mjs`, which loads the saved config and launches `npm run server:bridge` behavior through `tools/server-host-bridge-start.mjs`.
+
+By default, the installer does not persist `RELAY_HOST_TOKEN`. Recommended setup is:
+
+1. Run `npm run server:bridge` once with `RELAY_HOST_TOKEN` so Relay issues a saved host device trust file.
+2. Install the Windows auto-start task.
+3. Let later starts use `.relay/host-identity.json`.
+
+If the local machine is trusted and you explicitly accept storing the host bootstrap token, set `CMC_BRIDGE_STORE_HOST_TOKEN=1` while installing. Operational commands:
+
+```powershell
+npm run bridge:windows:status
+npm run bridge:windows:start
+npm run bridge:windows:uninstall
+```
+
 ### Device Management
 
 Server Relay exposes a small admin surface for trusted device management:

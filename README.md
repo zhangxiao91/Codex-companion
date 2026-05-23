@@ -144,6 +144,26 @@ npm run server:bridge
 
 The first successful Host Bridge registration stores a trusted host identity at `.relay/host-identity.json` by default. Later starts can omit `RELAY_HOST_TOKEN` and use the saved host device token. Set `HOST_IDENTITY_PATH` to choose another identity file.
 
+Windows Host Bridge auto-start:
+
+```powershell
+$env:RELAY_URL='wss://relay.example.com'
+$env:HOST_ID='local-pc'
+$env:HOST_NAME='Local PC'
+npm run bridge:windows:install
+npm run bridge:windows:start
+```
+
+The installer saves `.relay/windows-host-bridge-config.json` and creates a Windows Task Scheduler entry named `CodexMobileCompanionHostBridge`. By default it does not store `RELAY_HOST_TOKEN`; it expects the Host Bridge trust file at `.relay/host-identity.json` to already exist. For a first-time setup, run `npm run server:bridge` once with `RELAY_HOST_TOKEN` so the trust file is created, then install auto-start. If you explicitly accept storing the host bootstrap token in the local config, set `CMC_BRIDGE_STORE_HOST_TOKEN=1` during install.
+
+Useful commands:
+
+```powershell
+npm run bridge:windows:status
+npm run bridge:windows:start
+npm run bridge:windows:uninstall
+```
+
 Server device management:
 
 ```powershell

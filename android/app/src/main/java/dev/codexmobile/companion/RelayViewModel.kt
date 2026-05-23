@@ -157,21 +157,32 @@ class RelayViewModel(
 
     fun togglePinnedSession(sessionId: String) {
         _uiState.update { state ->
+            val wasPinned = sessionId in state.pinnedSessionIds
             val pinned = if (sessionId in state.pinnedSessionIds) {
                 state.pinnedSessionIds - sessionId
             } else {
                 state.pinnedSessionIds + sessionId
             }
             settings.savePinnedSessionIds(pinned)
-            state.copy(pinnedSessionIds = pinned)
+            state.copy(
+                pinnedSessionIds = pinned,
+                lastHealthCheck = if (wasPinned) "Session unpinned" else "Session pinned",
+                lastError = null
+            )
         }
     }
 
     fun sendPrompt(text: String) {
-        val sessionId = _uiState.value.selectedSessionId ?: return
-        if (text.isBlank()) {
+        val sessionId = _uiState.value.selectedSessionId
+        if (sessionId == null) {
+            _uiState.update { it.copy(lastError = "Select a session before sending a prompt") }
             return
         }
+        if (text.isBlank()) {
+            _uiState.update { it.copy(lastError = "Prompt cannot be empty") }
+            return
+        }
+        _uiState.update { it.copy(lastHealthCheck = "Prompt sent to Codex", lastError = null) }
         relayClient.sendPrompt(sessionId, text.trim())
     }
 
@@ -256,6 +267,7 @@ class RelayViewModel(
     }
 
     fun decideApproval(approvalId: String, decision: String) {
+        _uiState.update { it.copy(lastHealthCheck = "Approval decision sent", lastError = null) }
         relayClient.sendApprovalDecision(approvalId, decision)
     }
 
@@ -443,7 +455,23 @@ class RelayViewModel(
         message: String? = null,
         commitStrategy: String? = null
     ) {
-        val sessionId = _uiState.value.selectedSessionId ?: return
+        val sessionId = _uiState.value.selectedSessionId
+        if (sessionId == null) {
+            _uiState.update { it.copy(lastError = "Select a session before using Git tools") }
+            return
+        }
+        _uiState.update {
+            it.copy(
+                lastHealthCheck = when (action) {
+                    "status" -> "Requesting Git status"
+                    "diff" -> if (filePath.isNullOrBlank()) "Requesting Git diff" else "Requesting file diff"
+                    "commit" -> "Sending commit request"
+                    "push" -> "Sending push request"
+                    else -> "Sending Git request"
+                },
+                lastError = null
+            )
+        }
         relayClient.requestGit(sessionId, action, filePath, message, commitStrategy)
     }
 

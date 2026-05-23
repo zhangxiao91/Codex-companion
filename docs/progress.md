@@ -2950,6 +2950,45 @@ Known notes:
 - Node 24 prints an ExperimentalWarning for `node:sqlite`; current verification passes with that warning.
 - Revocation is server-side only for now. Android does not yet have a device-management UI.
 
+## 2026-05-23: Windows Host Bridge auto-start helper
+
+Status: completed.
+
+Changes:
+
+- Added a Windows Task Scheduler installer for Host Bridge:
+  - `npm run bridge:windows:install`
+  - `npm run bridge:windows:uninstall`
+  - `npm run bridge:windows:status`
+  - `npm run bridge:windows:start`
+- Added `tools/windows-host-bridge-service.mjs` for install/uninstall/status/start operations.
+- Added `tools/windows-host-bridge-run.mjs`, the hidden startup runner used by the scheduled task.
+- Added `.relay/windows-host-bridge-config.json` as the saved local PC bridge configuration path.
+- Kept `RELAY_HOST_TOKEN` out of the saved config by default; first preference is to use the existing `.relay/host-identity.json` trusted host device token.
+- Added opt-in `CMC_BRIDGE_STORE_HOST_TOKEN=1` for machines where storing the bootstrap host token is acceptable.
+- Added `npm run verify:windows-bridge-service`.
+- Updated README and `docs/server-relay-plan.md` with the Windows auto-start flow.
+
+Verification:
+
+```powershell
+node --check tools/windows-host-bridge-service.mjs
+node --check tools/windows-host-bridge-run.mjs
+node --check tools/verify-windows-host-bridge-service.mjs
+npm run verify:windows-bridge-service
+```
+
+Result:
+
+```text
+[verify] Windows Host Bridge service helper verified.
+```
+
+Usage note:
+
+- Recommended first-time flow is to run `npm run server:bridge` once with `RELAY_HOST_TOKEN`, confirm `.relay/host-identity.json` exists, then run `npm run bridge:windows:install`.
+- The scheduled task starts at Windows user logon and writes logs to `.relay/windows-host-bridge.log`.
+
 ## 2026-05-22: Codex Console inbox and session stage
 
 Status: completed.
@@ -3059,6 +3098,33 @@ Changes:
 - Polished metrics, attention strip, host workbench rows, status pill, status orb, circular controls, timeline bubbles, folded turn cards, operation rows, and composer surfaces.
 - Replaced corrupted quick-action display strings with stable Unicode-backed Chinese labels.
 - Kept the UI functional shape unchanged: Inbox first, session detail second, tools tucked away.
+
+Verification:
+
+```powershell
+.\gradlew.bat :app:assembleDebug --no-daemon
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL
+```
+
+## 2026-05-23: Android UI density and feedback pass
+
+Status: completed.
+
+Changes:
+
+- Reduced Inbox top-bar density from four adjacent controls to one primary `New Chat` action plus a `More` menu.
+- Moved Hosts, reconnect, and health check into a bottom action sheet so low-frequency controls no longer crowd the main inbox.
+- Reduced session detail top-bar density to `Back` and `Tools`; New Chat and Relay controls stay in drawer/tools surfaces.
+- Removed the non-interactive `+` glyph from the composer because it looked like a dead button.
+- Changed quick intervention actions from a two-row button grid to a horizontal suggestion rail.
+- Removed per-card quick-action grids from the Inbox; session cards now stay focused on status, summary, and recency.
+- Added visible main-screen status notices for recent actions/errors using existing `lastHealthCheck` and `lastError`.
+- Added ViewModel feedback for prompt send, pin/unpin, Git requests, and approval decisions so taps produce visible acknowledgement.
 
 Verification:
 
