@@ -42,6 +42,28 @@ data class TimelineItem(
     val cursor: String?
 )
 
+data class PromptDraft(
+    val text: String,
+    val attachments: List<PromptAttachment> = emptyList(),
+    val reasoningEffort: String = "auto",
+    val planModeOnce: Boolean = false,
+    val goalModeOnce: Boolean = false,
+    val goalObjective: String = "",
+    val editingBaseEventId: String? = null,
+    val editingBaseTurnId: String? = null,
+    val clientRequestId: String = java.util.UUID.randomUUID().toString()
+)
+
+data class PromptAttachment(
+    val attachmentId: String = java.util.UUID.randomUUID().toString(),
+    val displayName: String,
+    val mimeType: String,
+    val dataUrl: String,
+    val sizeBytes: Int,
+    val width: Int? = null,
+    val height: Int? = null
+)
+
 data class HostNode(
     val hostId: String,
     val displayName: String,

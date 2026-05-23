@@ -9,6 +9,7 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
+import org.json.JSONArray
 
 class RelayClient(
     private val listener: Listener,
@@ -99,11 +100,34 @@ class RelayClient(
     }
 
     fun sendPrompt(sessionId: String, text: String) {
+        sendPrompt(
+            sessionId,
+            PromptDraft(text = text)
+        )
+    }
+
+    fun sendPrompt(sessionId: String, draft: PromptDraft) {
         send(
             "session.prompt",
+            promptDraftPayload(sessionId, draft)
+        )
+    }
+
+    fun editPrompt(sessionId: String, draft: PromptDraft) {
+        send(
+            "session.prompt.edit",
+            promptDraftPayload(sessionId, draft)
+                .put("base_event_id", draft.editingBaseEventId.orEmpty())
+                .put("base_turn_id", draft.editingBaseTurnId ?: JSONObject.NULL)
+        )
+    }
+
+    fun interruptTurn(sessionId: String) {
+        send(
+            "session.turn.interrupt",
             JSONObject()
                 .put("session_id", sessionId)
-                .put("text", text)
+                .put("client_request_id", java.util.UUID.randomUUID().toString())
         )
     }
 
@@ -561,6 +585,47 @@ class RelayClient(
         reason = json.optString("reason", ""),
         expiresAt = json.optString("expires_at", "").takeIf { it.isNotBlank() }
     )
+
+    private fun promptDraftPayload(sessionId: String, draft: PromptDraft): JSONObject {
+        val input = JSONArray()
+        if (draft.text.isNotBlank()) {
+            input.put(
+                JSONObject()
+                    .put("type", "text")
+                    .put("text", draft.text)
+            )
+        }
+        draft.attachments.forEach { attachment ->
+            input.put(
+                JSONObject()
+                    .put("type", "image")
+                    .put("attachment_id", attachment.attachmentId)
+                    .put("name", attachment.displayName)
+                    .put("mime_type", attachment.mimeType)
+                    .put("size_bytes", attachment.sizeBytes)
+                    .put("data_url", attachment.dataUrl)
+                    .put("width", attachment.width ?: JSONObject.NULL)
+                    .put("height", attachment.height ?: JSONObject.NULL)
+            )
+        }
+
+        val options = JSONObject()
+            .put("reasoning_effort", draft.reasoningEffort)
+            .put("plan_mode", draft.planModeOnce)
+        if (draft.goalModeOnce) {
+            options.put(
+                "goal",
+                JSONObject().put("objective", draft.goalObjective)
+            )
+        }
+
+        return JSONObject()
+            .put("session_id", sessionId)
+            .put("text", draft.text)
+            .put("input", input)
+            .put("options", options)
+            .put("client_request_id", draft.clientRequestId)
+    }
 
     private fun parseTimelineEvent(json: JSONObject): TimelineItem = TimelineItem(
         eventId = json.optString("event_id", UUID.randomUUID().toString()),

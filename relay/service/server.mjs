@@ -21,8 +21,10 @@ const timelineCacheLimit = Number.parseInt(process.env.RELAY_TIMELINE_CACHE_LIMI
 const devToken = process.env.RELAY_DEV_TOKEN ?? '';
 const pairingToken = process.env.RELAY_PAIRING_TOKEN ?? devToken;
 const hostToken = process.env.RELAY_HOST_TOKEN ?? devToken;
-const maxMessageBytes = Number.parseInt(process.env.RELAY_MAX_MESSAGE_BYTES ?? '65536', 10);
+const maxMessageBytes = Number.parseInt(process.env.RELAY_MAX_MESSAGE_BYTES ?? '3000000', 10);
 const maxPromptLength = Number.parseInt(process.env.RELAY_MAX_PROMPT_LENGTH ?? '4000', 10);
+const maxPromptImages = Number.parseInt(process.env.RELAY_MAX_PROMPT_IMAGES ?? '4', 10);
+const maxPromptImageDataUrlBytes = Number.parseInt(process.env.RELAY_MAX_PROMPT_IMAGE_DATA_URL_BYTES ?? '1500000', 10);
 const auditLogLimit = Number.parseInt(process.env.RELAY_AUDIT_LOG_LIMIT ?? '500', 10);
 const gitAuditLogPath = resolve(process.env.RELAY_GIT_AUDIT_LOG_PATH ?? '.relay/git-audit.ndjson');
 const publicHttpUrl = trimTrailingSlash(process.env.RELAY_PUBLIC_HTTP_URL ?? '');
@@ -183,6 +185,15 @@ function handleMessage(connection, raw) {
         break;
       case MessageType.SessionPrompt:
         handleSessionPrompt(connection, message);
+        break;
+      case MessageType.SessionPromptQueue:
+        handleSessionPromptQueue(connection, message);
+        break;
+      case MessageType.SessionPromptEdit:
+        handleSessionPromptEdit(connection, message);
+        break;
+      case MessageType.SessionTurnInterrupt:
+        handleSessionTurnInterrupt(connection, message);
         break;
       case MessageType.SessionTimelineRequest:
         handleSessionTimelineRequest(connection, message);
@@ -384,6 +395,9 @@ function isClientMessage(type) {
     || type === MessageType.SessionCreateEphemeral
     || type === MessageType.SessionSubscribe
     || type === MessageType.SessionPrompt
+    || type === MessageType.SessionPromptQueue
+    || type === MessageType.SessionPromptEdit
+    || type === MessageType.SessionTurnInterrupt
     || type === MessageType.SessionTimelineRequest;
 }
 
@@ -1197,9 +1211,9 @@ function handleSessionSubscribe(connection, message) {
 
 function handleSessionPrompt(connection, message) {
   requirePayloadField(message, 'session_id');
-  requirePayloadField(message, 'text');
-  if (message.payload.text.length > maxPromptLength) {
-    sendError(connection, `Prompt is too long. Maximum is ${maxPromptLength} characters.`);
+  const validationError = validatePromptDraftPayload(message.payload);
+  if (validationError) {
+    sendError(connection, validationError);
     return;
   }
 
@@ -1220,6 +1234,116 @@ function handleSessionPrompt(connection, message) {
 
   console.log(`[relay] routing prompt to host ${session.host_id}: ${message.payload.session_id}`);
   send(hostConnection, message);
+}
+
+function handleSessionPromptQueue(connection, message) {
+  requirePayloadField(message, 'session_id');
+  requirePayloadField(message, 'text');
+  if (typeof message.payload.text !== 'string' || message.payload.text.trim().length === 0) {
+    sendError(connection, 'Queued prompt cannot be empty.');
+    return;
+  }
+  if (message.payload.text.length > maxPromptLength) {
+    sendError(connection, `Queued prompt is too long. Maximum is ${maxPromptLength} characters.`);
+    return;
+  }
+
+  routeSessionControlMessage(connection, message, 'queued prompt');
+}
+
+function handleSessionPromptEdit(connection, message) {
+  requirePayloadField(message, 'session_id');
+  requirePayloadField(message, 'base_event_id');
+  const validationError = validatePromptDraftPayload(message.payload);
+  if (validationError) {
+    sendError(connection, validationError);
+    return;
+  }
+
+  routeSessionControlMessage(connection, message, 'prompt edit');
+}
+
+function handleSessionTurnInterrupt(connection, message) {
+  requirePayloadField(message, 'session_id');
+  routeSessionControlMessage(connection, message, 'turn interrupt');
+}
+
+function routeSessionControlMessage(connection, message, label) {
+  connection.role = SenderRole.Client;
+  state.clients.add(connection);
+
+  const session = state.sessions.get(message.payload.session_id);
+  if (!session) {
+    sendError(connection, `Unknown session: ${message.payload.session_id}`);
+    return;
+  }
+
+  const hostConnection = state.hostConnections.get(session.host_id);
+  if (!hostConnection) {
+    sendError(connection, `Host is offline: ${session.host_id}`);
+    return;
+  }
+
+  console.log(`[relay] routing ${label} to host ${session.host_id}: ${message.payload.session_id}`);
+  send(hostConnection, message);
+}
+
+function validatePromptDraftPayload(payload) {
+  const text = typeof payload.text === 'string' ? payload.text : '';
+  if (text.length > maxPromptLength) {
+    return `Prompt is too long. Maximum is ${maxPromptLength} characters.`;
+  }
+
+  const input = Array.isArray(payload.input) ? payload.input : [];
+  const textParts = input.filter((item) => item?.type === 'text');
+  const imageParts = input.filter((item) => item?.type === 'image');
+  const hasText = text.trim().length > 0 || textParts.some((item) => typeof item.text === 'string' && item.text.trim().length > 0);
+  const hasImage = imageParts.length > 0;
+
+  if (!hasText && !hasImage) {
+    return 'Prompt cannot be empty.';
+  }
+
+  for (const item of textParts) {
+    if (typeof item.text !== 'string') {
+      return 'Prompt text input must be a string.';
+    }
+    if (item.text.length > maxPromptLength) {
+      return `Prompt text input is too long. Maximum is ${maxPromptLength} characters.`;
+    }
+  }
+
+  if (imageParts.length > maxPromptImages) {
+    return `Too many prompt images. Maximum is ${maxPromptImages}.`;
+  }
+
+  for (const item of imageParts) {
+    const dataUrl = item.data_url;
+    if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) {
+      return 'Prompt image input must include a data:image data_url.';
+    }
+    if (Buffer.byteLength(dataUrl, 'utf8') > maxPromptImageDataUrlBytes) {
+      return `Prompt image is too large. Maximum data URL size is ${maxPromptImageDataUrlBytes} bytes.`;
+    }
+  }
+
+  const options = payload.options && typeof payload.options === 'object' ? payload.options : {};
+  const allowedReasoning = new Set(['auto', 'low', 'medium', 'high', 'xhigh']);
+  if (options.reasoning_effort && !allowedReasoning.has(options.reasoning_effort)) {
+    return 'Unsupported reasoning effort.';
+  }
+
+  if (options.goal && typeof options.goal === 'object') {
+    const objective = typeof options.goal.objective === 'string' ? options.goal.objective.trim() : '';
+    if (objective.length === 0) {
+      return 'Goal objective cannot be empty.';
+    }
+    if (objective.length > maxPromptLength) {
+      return `Goal objective is too long. Maximum is ${maxPromptLength} characters.`;
+    }
+  }
+
+  return null;
 }
 
 function handleSessionTimelineRequest(connection, message) {

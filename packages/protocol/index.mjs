@@ -23,6 +23,9 @@ export const MessageType = Object.freeze({
   SessionSnapshot: 'session.snapshot',
   SessionSubscribe: 'session.subscribe',
   SessionPrompt: 'session.prompt',
+  SessionPromptQueue: 'session.prompt.queue',
+  SessionPromptEdit: 'session.prompt.edit',
+  SessionTurnInterrupt: 'session.turn.interrupt',
   SessionTimelineRequest: 'session.timeline.request',
   TimelineEvent: 'timeline.event',
   TimelinePage: 'timeline.page'

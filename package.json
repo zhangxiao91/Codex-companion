@@ -42,6 +42,7 @@
     "verify:host-snapshot": "node tools/verify-host-snapshot.mjs",
     "verify:host-timeline-pagination": "node tools/verify-host-timeline-pagination.mjs",
     "verify:power-control-flow": "node tools/verify-power-control-flow.mjs",
+    "verify:rich-prompt-flow": "node tools/verify-rich-prompt-flow.mjs",
     "verify:pairing-qr": "node tools/verify-pairing-qr.mjs",
     "verify:relay-health": "node tools/verify-relay-health.mjs",
     "verify:relay-identity-storage": "node tools/verify-relay-identity-storage.mjs",

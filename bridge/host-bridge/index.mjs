@@ -51,7 +51,7 @@ socket.addEventListener('open', async () => {
     display_name: displayName,
     kind: 'local_pc',
     bridge_version: bridgeVersion,
-    capabilities: ['session.list', 'session.prompt', 'timeline.event', 'git.status', 'git.diff', ...powerController.capabilities()]
+    capabilities: ['session.list', 'session.prompt', 'session.prompt.edit', 'session.turn.interrupt', 'timeline.event', 'git.status', 'git.diff', ...powerController.capabilities()]
   });
 
   console.log('[bridge] registered host capabilities: session.list, session.prompt, timeline.event, git.status, git.diff');
@@ -83,9 +83,25 @@ socket.addEventListener('message', async (event) => {
     message = decodeMessage(event.data);
 
     if (message.type === MessageType.SessionPrompt) {
-      const { session_id: sessionId, text } = message.payload;
+      const { session_id: sessionId } = message.payload;
       console.log(`[bridge] received prompt for ${sessionId}`);
-      const response = await adapter.sendPrompt(sessionId, text);
+      const response = await adapter.sendPrompt(sessionId, message.payload);
+      socket.send(encodeMessage(withAuth(response)));
+      return;
+    }
+
+    if (message.type === MessageType.SessionPromptEdit) {
+      const { session_id: sessionId } = message.payload;
+      console.log(`[bridge] received prompt edit for ${sessionId}`);
+      const response = await adapter.editPrompt(sessionId, message.payload);
+      socket.send(encodeMessage(withAuth(response)));
+      return;
+    }
+
+    if (message.type === MessageType.SessionTurnInterrupt) {
+      const { session_id: sessionId } = message.payload;
+      console.log(`[bridge] received turn interrupt for ${sessionId}`);
+      const response = await adapter.interruptTurn(sessionId, message.payload);
       socket.send(encodeMessage(withAuth(response)));
       return;
     }

@@ -173,17 +173,57 @@ class RelayViewModel(
     }
 
     fun sendPrompt(text: String) {
+        sendPrompt(PromptDraft(text = text.trim()))
+    }
+
+    fun sendPrompt(draft: PromptDraft) {
         val sessionId = _uiState.value.selectedSessionId
         if (sessionId == null) {
             _uiState.update { it.copy(lastError = "Select a session before sending a prompt") }
             return
         }
-        if (text.isBlank()) {
+        if (draft.text.isBlank() && draft.attachments.isEmpty()) {
             _uiState.update { it.copy(lastError = "Prompt cannot be empty") }
             return
         }
+        if (draft.goalModeOnce && draft.goalObjective.isBlank()) {
+            _uiState.update { it.copy(lastError = "Goal objective cannot be empty") }
+            return
+        }
         _uiState.update { it.copy(lastHealthCheck = "Prompt sent to Codex", lastError = null) }
-        relayClient.sendPrompt(sessionId, text.trim())
+        relayClient.sendPrompt(sessionId, draft.copy(text = draft.text.trim()))
+    }
+
+    fun editPrompt(draft: PromptDraft) {
+        val sessionId = _uiState.value.selectedSessionId
+        if (sessionId == null) {
+            _uiState.update { it.copy(lastError = "Select a session before editing a prompt") }
+            return
+        }
+        if (draft.editingBaseEventId.isNullOrBlank()) {
+            _uiState.update { it.copy(lastError = "No editable prompt selected") }
+            return
+        }
+        if (draft.text.isBlank() && draft.attachments.isEmpty()) {
+            _uiState.update { it.copy(lastError = "Edited prompt cannot be empty") }
+            return
+        }
+        if (draft.goalModeOnce && draft.goalObjective.isBlank()) {
+            _uiState.update { it.copy(lastError = "Goal objective cannot be empty") }
+            return
+        }
+        _uiState.update { it.copy(lastHealthCheck = "Edited prompt sent to Codex", lastError = null) }
+        relayClient.editPrompt(sessionId, draft.copy(text = draft.text.trim()))
+    }
+
+    fun interruptTurn() {
+        val sessionId = _uiState.value.selectedSessionId
+        if (sessionId == null) {
+            _uiState.update { it.copy(lastError = "Select a session before pausing Codex") }
+            return
+        }
+        _uiState.update { it.copy(lastHealthCheck = "Pause requested", lastError = null) }
+        relayClient.interruptTurn(sessionId)
     }
 
     fun createNewChat() {

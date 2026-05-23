@@ -2,7 +2,12 @@ package dev.codexmobile.companion
 
 import android.os.Bundle
 import android.Manifest
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
 import android.os.Build
+import android.util.Base64
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -69,6 +74,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -81,6 +87,7 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
@@ -116,6 +123,9 @@ class MainActivity : ComponentActivity() {
                 onGitAuditRefresh = viewModel::requestGitAudit,
                 onApprovalDecision = viewModel::decideApproval,
                 onPromptSend = viewModel::sendPrompt,
+                onPromptDraftSend = { draft -> viewModel.sendPrompt(draft) },
+                onPromptEdit = viewModel::editPrompt,
+                onInterruptTurn = viewModel::interruptTurn,
                 onNewChat = viewModel::createNewChat,
                 onPinnedSessionToggle = viewModel::togglePinnedSession,
                 onLoadEarlierTimeline = viewModel::loadEarlierTimeline,
@@ -174,6 +184,9 @@ private fun CompanionApp(
     onGitAuditRefresh: () -> Unit,
     onApprovalDecision: (String, String) -> Unit,
     onPromptSend: (String) -> Unit,
+    onPromptDraftSend: (PromptDraft) -> Unit,
+    onPromptEdit: (PromptDraft) -> Unit,
+    onInterruptTurn: () -> Unit,
     onNewChat: () -> Unit,
     onPinnedSessionToggle: (String) -> Unit,
     onLoadEarlierTimeline: () -> Unit,
@@ -236,6 +249,9 @@ private fun CompanionApp(
                     onGitAuditRefresh = onGitAuditRefresh,
                     onApprovalDecision = onApprovalDecision,
                     onPromptSend = onPromptSend,
+                    onPromptDraftSend = onPromptDraftSend,
+                    onPromptEdit = onPromptEdit,
+                    onInterruptTurn = onInterruptTurn,
                     onNewChat = onNewChat,
                     onPinnedSessionToggle = onPinnedSessionToggle,
                     onLoadEarlierTimeline = onLoadEarlierTimeline,
@@ -916,6 +932,9 @@ private fun MainSessionScreen(
     onGitAuditRefresh: () -> Unit,
     onApprovalDecision: (String, String) -> Unit,
     onPromptSend: (String) -> Unit,
+    onPromptDraftSend: (PromptDraft) -> Unit,
+    onPromptEdit: (PromptDraft) -> Unit,
+    onInterruptTurn: () -> Unit,
     onNewChat: () -> Unit,
     onPinnedSessionToggle: (String) -> Unit,
     onLoadEarlierTimeline: () -> Unit,
@@ -967,10 +986,13 @@ private fun MainSessionScreen(
                 enabled = uiState.selectedSession != null && uiState.connectionStatus == "Online",
                 onQuickPrompt = onPromptSend
             )
-            ChatComposer(
+            RichChatComposer(
                 selectedSession = uiState.selectedSession,
+                timeline = uiState.timeline.filter { it.sessionId == uiState.selectedSessionId },
                 online = uiState.connectionStatus == "Online",
-                onPromptSend = onPromptSend
+                onPromptSend = onPromptDraftSend,
+                onPromptEdit = onPromptEdit,
+                onInterruptTurn = onInterruptTurn
             )
         }
     }
@@ -1537,52 +1559,294 @@ private fun CopyMessageButton(label: String, foreground: Color, onCopy: () -> Un
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ChatComposer(selectedSession: CodexSession?, online: Boolean, onPromptSend: (String) -> Unit) {
+private fun RichChatComposer(
+    selectedSession: CodexSession?,
+    timeline: List<TimelineItem>,
+    online: Boolean,
+    onPromptSend: (PromptDraft) -> Unit,
+    onPromptEdit: (PromptDraft) -> Unit,
+    onInterruptTurn: () -> Unit
+) {
+    val context = LocalContext.current
     var prompt by remember(selectedSession?.sessionId) { mutableStateOf("") }
+    var attachments by remember(selectedSession?.sessionId) { mutableStateOf<List<PromptAttachment>>(emptyList()) }
+    var reasoningEffort by remember(selectedSession?.sessionId) { mutableStateOf("auto") }
+    var planMode by remember(selectedSession?.sessionId) { mutableStateOf(false) }
+    var goalMode by remember(selectedSession?.sessionId) { mutableStateOf(false) }
+    var goalObjective by remember(selectedSession?.sessionId) { mutableStateOf("") }
+    var editingEvent by remember(selectedSession?.sessionId) { mutableStateOf<TimelineItem?>(null) }
+    var optionsOpen by remember { mutableStateOf(false) }
+    var attachOpen by remember { mutableStateOf(false) }
+    var localError by remember { mutableStateOf<String?>(null) }
+    val latestUserPrompt = remember(timeline) { timeline.filter { isUserPrompt(it) }.maxByOrNull { parseIsoMillis(it.createdAt) } }
+    val active = selectedSession?.let { isSessionActivelyRunning(it, timeline) } == true
     val enabled = selectedSession != null && online
+    val canSend = enabled && (prompt.isNotBlank() || attachments.isNotEmpty()) && (!goalMode || goalObjective.isNotBlank())
+    val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            val result = runCatching { promptAttachmentFromUri(context, uri) }
+            result.onSuccess { attachments = (attachments + it).take(MAX_PROMPT_ATTACHMENTS) }
+            result.onFailure { localError = it.message ?: "Unable to attach image" }
+        }
+    }
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
+        if (bitmap != null) {
+            val result = runCatching { promptAttachmentFromBitmap(bitmap) }
+            result.onSuccess { attachments = (attachments + it).take(MAX_PROMPT_ATTACHMENTS) }
+            result.onFailure { localError = it.message ?: "Unable to capture image" }
+        }
+    }
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(99.dp),
+        shape = RoundedCornerShape(24.dp),
         color = ControlBlack,
         border = BorderStroke(1.dp, HairlineDark)
     ) {
-        Row(
-            modifier = Modifier.padding(start = 8.dp, end = 8.dp, top = 7.dp, bottom = 7.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            TextField(
-                modifier = Modifier.weight(1f),
-                value = prompt,
-                onValueChange = { prompt = it },
-                enabled = enabled,
-                singleLine = true,
-                placeholder = { Text(if (selectedSession == null) "Select a session" else "Message Codex", color = TertiaryText) },
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = Color.Transparent,
-                    disabledContainerColor = Color.Transparent,
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent,
-                    disabledIndicatorColor = Color.Transparent,
-                    focusedTextColor = PrimaryText,
-                    unfocusedTextColor = PrimaryText,
-                    disabledTextColor = TertiaryText
-                )
-            )
-            Button(
-                enabled = enabled && prompt.isNotBlank(),
-                shape = RoundedCornerShape(99.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = AccentBlue, disabledContainerColor = StrokeDark),
-                onClick = {
-                    onPromptSend(prompt)
-                    prompt = ""
+        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (editingEvent != null) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        modifier = Modifier.weight(1f),
+                        text = "Editing: ${cleanTimelineText(editingEvent?.summary.orEmpty())}",
+                        color = SecondaryText,
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    TextButton(onClick = { editingEvent = null }) { Text("Cancel", color = SecondaryText) }
                 }
-            ) {
-                Text("Send")
             }
+
+            if (attachments.isNotEmpty() || planMode || goalMode || reasoningEffort != "auto") {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(attachments, key = { it.attachmentId }) { attachment ->
+                        PromptChip(text = attachment.displayName, onRemove = { attachments = attachments.filterNot { it.attachmentId == attachment.attachmentId } })
+                    }
+                    if (reasoningEffort != "auto") {
+                        item { PromptChip(text = "Reasoning: ${reasoningEffort.uppercase()}", onRemove = { reasoningEffort = "auto" }) }
+                    }
+                    if (planMode) {
+                        item { PromptChip(text = "Plan", onRemove = { planMode = false }) }
+                    }
+                    if (goalMode) {
+                        item { PromptChip(text = "Goal", onRemove = { goalMode = false }) }
+                    }
+                }
+            }
+
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                item {
+                    ComposerToolChip(text = "Add image", enabled = enabled, onClick = { attachOpen = true })
+                }
+                item {
+                    ComposerToolChip(text = "Options", enabled = enabled, onClick = { optionsOpen = true })
+                }
+                if (latestUserPrompt != null && editingEvent == null) {
+                    item {
+                        ComposerToolChip(
+                            text = "Edit last",
+                            enabled = enabled,
+                            onClick = {
+                                editingEvent = latestUserPrompt
+                                prompt = latestUserPrompt.summary
+                            }
+                        )
+                    }
+                }
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Bottom) {
+                TextField(
+                    modifier = Modifier.weight(1f).heightIn(min = 48.dp, max = 132.dp),
+                    value = prompt,
+                    onValueChange = { prompt = it },
+                    enabled = enabled,
+                    singleLine = false,
+                    minLines = 1,
+                    maxLines = 5,
+                    placeholder = { Text(if (selectedSession == null) "Select a session" else "Message Codex", color = TertiaryText) },
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        disabledContainerColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        disabledIndicatorColor = Color.Transparent,
+                        focusedTextColor = PrimaryText,
+                        unfocusedTextColor = PrimaryText,
+                        disabledTextColor = TertiaryText
+                    )
+                )
+                Button(
+                    modifier = Modifier.widthIn(min = 76.dp),
+                    enabled = if (active) enabled else canSend,
+                    shape = RoundedCornerShape(99.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (active) NoticeTone.Critical.foreground else AccentBlue,
+                        disabledContainerColor = StrokeDark
+                    ),
+                    onClick = {
+                        if (active) {
+                            onInterruptTurn()
+                            return@Button
+                        }
+                        val draft = PromptDraft(
+                            text = prompt,
+                            attachments = attachments,
+                            reasoningEffort = reasoningEffort,
+                            planModeOnce = planMode,
+                            goalModeOnce = goalMode,
+                            goalObjective = goalObjective,
+                            editingBaseEventId = editingEvent?.eventId,
+                            editingBaseTurnId = editingEvent?.let { timelineTurnId(it) }
+                        )
+                        if (editingEvent != null) {
+                            onPromptEdit(draft)
+                        } else {
+                            onPromptSend(draft)
+                        }
+                        prompt = ""
+                        attachments = emptyList()
+                        planMode = false
+                        goalMode = false
+                        goalObjective = ""
+                        editingEvent = null
+                        reasoningEffort = "auto"
+                    }
+                ) {
+                    Text(
+                        text = when {
+                            active -> "Stop"
+                            editingEvent != null -> "Update"
+                            else -> "Send"
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            if (localError != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                localError?.let {
+                    Text(it, color = NoticeTone.Critical.foreground, style = MaterialTheme.typography.labelSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+                }
+            }
+        }
+    }
+
+    if (attachOpen) {
+        ModalBottomSheet(
+            onDismissRequest = { attachOpen = false },
+            containerColor = SheetBlack,
+            contentColor = PrimaryText,
+            dragHandle = null
+        ) {
+            Column(modifier = Modifier.navigationBarsPadding().padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Add image", color = PrimaryText, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                CompactActionButton(modifier = Modifier.fillMaxWidth(), text = "Choose from photos", onClick = {
+                    attachOpen = false
+                    galleryLauncher.launch("image/*")
+                })
+                CompactActionButton(modifier = Modifier.fillMaxWidth(), text = "Take photo", onClick = {
+                    attachOpen = false
+                    cameraLauncher.launch(null)
+                })
+            }
+        }
+    }
+
+    if (optionsOpen) {
+        ModalBottomSheet(
+            onDismissRequest = { optionsOpen = false },
+            containerColor = SheetBlack,
+            contentColor = PrimaryText,
+            dragHandle = null
+        ) {
+            Column(modifier = Modifier.navigationBarsPadding().padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text("Run options", color = PrimaryText, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Text("Applies to the next message only.", color = SecondaryText, style = MaterialTheme.typography.bodySmall)
+                SectionTitle("Reasoning")
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(listOf("auto", "low", "medium", "high", "xhigh")) { effort ->
+                        OptionChip(text = effort.uppercase(), selected = reasoningEffort == effort, onClick = { reasoningEffort = effort })
+                    }
+                }
+                OptionRow(title = "Plan mode once", detail = "Ask Codex to plan before changing files.", selected = planMode, onClick = { planMode = !planMode })
+                OptionRow(title = "Goal once", detail = "Wrap the next prompt in a one-shot objective.", selected = goalMode, onClick = { goalMode = !goalMode })
+                if (goalMode) {
+                    DarkTextField(value = goalObjective, onValueChange = { goalObjective = it }, label = "Goal objective")
+                }
+                CompactActionButton(modifier = Modifier.fillMaxWidth(), text = "Done", onClick = { optionsOpen = false })
+            }
+        }
+    }
+}
+
+@Composable
+private fun PromptChip(text: String, onRemove: () -> Unit) {
+    Surface(shape = RoundedCornerShape(99.dp), color = ElevatedBlack, border = BorderStroke(1.dp, HairlineDark)) {
+        Row(modifier = Modifier.padding(start = 10.dp, end = 8.dp, top = 6.dp, bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(text, color = SecondaryText, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                modifier = Modifier.clip(RoundedCornerShape(99.dp)).clickable(onClick = onRemove).padding(horizontal = 4.dp),
+                text = "x",
+                color = TertiaryText,
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
+    }
+}
+
+@Composable
+private fun ComposerToolChip(text: String, enabled: Boolean, onClick: () -> Unit) {
+    Surface(
+        modifier = Modifier.clip(RoundedCornerShape(99.dp)).clickable(enabled = enabled, onClick = onClick),
+        shape = RoundedCornerShape(99.dp),
+        color = if (enabled) ElevatedBlack else StrokeDark,
+        border = BorderStroke(1.dp, HairlineDark)
+    ) {
+        Text(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+            text = text,
+            color = if (enabled) SecondaryText else TertiaryText,
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun OptionChip(text: String, selected: Boolean, onClick: () -> Unit) {
+    Surface(
+        modifier = Modifier.clip(RoundedCornerShape(99.dp)).clickable(onClick = onClick),
+        shape = RoundedCornerShape(99.dp),
+        color = if (selected) AccentBlue else ElevatedBlack,
+        border = if (selected) null else BorderStroke(1.dp, HairlineDark)
+    ) {
+        Text(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), text = text, color = PrimaryText, style = MaterialTheme.typography.labelMedium)
+    }
+}
+
+@Composable
+private fun OptionRow(title: String, detail: String, selected: Boolean, onClick: () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable(onClick = onClick),
+        shape = RoundedCornerShape(16.dp),
+        color = if (selected) AccentBlue.copy(alpha = 0.22f) else ElevatedBlack,
+        border = BorderStroke(1.dp, if (selected) AccentBlue else HairlineDark)
+    ) {
+        Row(modifier = Modifier.padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(title, color = PrimaryText, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                Text(detail, color = SecondaryText, style = MaterialTheme.typography.bodySmall)
+            }
+            Text(if (selected) "On" else "Off", color = if (selected) AccentBlue else TertiaryText, style = MaterialTheme.typography.labelMedium)
         }
     }
 }
@@ -3120,6 +3384,67 @@ private fun copyableTimelineText(event: TimelineItem): String? {
     return event.summary.ifBlank { event.title }.takeIf { it.isNotBlank() }
 }
 
+private fun isSessionActivelyRunning(session: CodexSession, events: List<TimelineItem>): Boolean {
+    if (session.stage.type in setOf("thinking", "running_command", "editing_files")) {
+        return true
+    }
+    val latestStarted = events.filter { it.type == "turn_started" }.maxOfOrNull { parseIsoMillis(it.createdAt) } ?: 0L
+    val latestFinished = events.filter { it.type == "turn_completed" || it.type == "turn_interrupt_requested" }.maxOfOrNull { parseIsoMillis(it.createdAt) } ?: 0L
+    return latestStarted > latestFinished
+}
+
+private fun timelineTurnId(event: TimelineItem): String? {
+    val parts = event.eventId.split(":")
+    return parts.getOrNull(1)?.takeIf { it.isNotBlank() && it != "thread" }
+}
+
+private fun promptAttachmentFromUri(context: Context, uri: Uri): PromptAttachment {
+    val resolver = context.contentResolver
+    val mimeType = resolver.getType(uri) ?: "image/jpeg"
+    val bitmap = resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
+        ?: throw IllegalArgumentException("Unable to decode selected image")
+    return promptAttachmentFromBitmap(bitmap, displayName = "photo.${extensionForMimeType(mimeType)}", mimeType = mimeType)
+}
+
+private fun promptAttachmentFromBitmap(bitmap: Bitmap, displayName: String = "camera.jpg", mimeType: String = "image/jpeg"): PromptAttachment {
+    val scaled = scaleBitmapForPrompt(bitmap)
+    val output = ByteArrayOutputStream()
+    scaled.compress(Bitmap.CompressFormat.JPEG, 82, output)
+    val bytes = output.toByteArray()
+    if (bytes.size > MAX_PROMPT_IMAGE_BYTES) {
+        throw IllegalArgumentException("Image is too large after compression")
+    }
+    val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+    return PromptAttachment(
+        displayName = displayName,
+        mimeType = "image/jpeg",
+        dataUrl = "data:image/jpeg;base64,$base64",
+        sizeBytes = bytes.size,
+        width = scaled.width,
+        height = scaled.height
+    )
+}
+
+private fun scaleBitmapForPrompt(bitmap: Bitmap): Bitmap {
+    val maxSide = 1280
+    val longest = maxOf(bitmap.width, bitmap.height)
+    if (longest <= maxSide) {
+        return bitmap
+    }
+    val scale = maxSide.toFloat() / longest.toFloat()
+    val width = (bitmap.width * scale).toInt().coerceAtLeast(1)
+    val height = (bitmap.height * scale).toInt().coerceAtLeast(1)
+    return Bitmap.createScaledBitmap(bitmap, width, height, true)
+}
+
+private fun extensionForMimeType(mimeType: String): String {
+    return when (mimeType.lowercase()) {
+        "image/png" -> "png"
+        "image/webp" -> "webp"
+        else -> "jpg"
+    }
+}
+
 private fun compactTurnSummary(events: List<TimelineItem>): String {
     val error = events.firstOrNull { it.type == "error" || it.type == "codex_retrying" }
     if (error != null && error.summary.isNotBlank()) {
@@ -3293,6 +3618,8 @@ private val TertiaryText = Color(0xFF7D8897)
 private val AccentBlue = Color(0xFF4D8DFF)
 private val AmberPanel = Color(0xFF261D0D)
 private val AmberStroke = Color(0xFF5E4316)
+private const val MAX_PROMPT_ATTACHMENTS = 4
+private const val MAX_PROMPT_IMAGE_BYTES = 1_100_000
 
 private fun stageAccent(stage: SessionStage): Color {
     return when (stage.severity.lowercase()) {

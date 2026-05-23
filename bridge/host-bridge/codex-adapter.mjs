@@ -80,20 +80,61 @@ export class MockCodexAdapter {
     });
   }
 
-  async sendPrompt(sessionId, text) {
+  async sendPrompt(sessionId, draft) {
+    if (sessionId !== this.session.session_id) {
+      throw new Error(`Unknown mock session: ${sessionId}`);
+    }
+
+    const normalized = normalizePromptDraft(draft);
+    const event = createTimelineEvent(
+      sessionId,
+      'Prompt routed to Host Bridge',
+      `Host Bridge received prompt: ${summarizePromptDraft(normalized)}`,
+      {
+        adapter: 'mock',
+        received_prompt: normalized.text,
+        input_count: normalized.input.length,
+        options: normalized.options
+      }
+    );
+
+    return createMessage(MessageType.TimelineEvent, { event });
+  }
+
+  async editPrompt(sessionId, draft) {
+    if (sessionId !== this.session.session_id) {
+      throw new Error(`Unknown mock session: ${sessionId}`);
+    }
+
+    const normalized = normalizePromptDraft(draft);
+    const event = createTimelineEvent(
+      sessionId,
+      'Prompt edit routed to Host Bridge',
+      `Host Bridge received edited prompt: ${summarizePromptDraft(normalized)}`,
+      {
+        adapter: 'mock',
+        base_event_id: draft.base_event_id,
+        base_turn_id: draft.base_turn_id,
+        received_prompt: normalized.text,
+        options: normalized.options
+      }
+    );
+
+    return createMessage(MessageType.TimelineEvent, { event });
+  }
+
+  async interruptTurn(sessionId) {
     if (sessionId !== this.session.session_id) {
       throw new Error(`Unknown mock session: ${sessionId}`);
     }
 
     const event = createTimelineEvent(
       sessionId,
-      'Prompt routed to Host Bridge',
-      `Host Bridge received prompt: ${text}`,
-      {
-        adapter: 'mock',
-        received_prompt: text
-      }
+      'Turn interrupt routed to Host Bridge',
+      'Host Bridge received a request to pause the active Codex turn.',
+      { adapter: 'mock' }
     );
+    event.type = 'turn_interrupt_requested';
 
     return createMessage(MessageType.TimelineEvent, { event });
   }
@@ -217,25 +258,20 @@ export class AppServerCodexAdapter {
     return this.cachedSessions;
   }
 
-  async sendPrompt(sessionId, text) {
+  async sendPrompt(sessionId, draft) {
+    const normalized = normalizePromptDraft(draft);
     try {
       await this.ensureThreadLoaded(sessionId);
       const activeTurnId = this.activeTurnsByThread.get(sessionId);
+      const input = buildAppServerInput(normalized);
+      const metadata = buildMobileMetadata(normalized);
 
       if (activeTurnId) {
         const response = await this.requestWithThreadLoadedRetry(sessionId, 'turn/steer', {
           threadId: sessionId,
           expectedTurnId: activeTurnId,
-          input: [
-            {
-              type: 'text',
-              text,
-              text_elements: []
-            }
-          ],
-          responsesapiClientMetadata: {
-            source: 'codex-mobile-companion'
-          }
+          input,
+          responsesapiClientMetadata: metadata
         });
 
         return createMessage(MessageType.TimelineEvent, {
@@ -248,7 +284,9 @@ export class AppServerCodexAdapter {
             summary: `Steered turn ${response.turnId}.`,
             payload: {
               turn_id: response.turnId,
-              prompt: text
+              prompt: normalized.text,
+              options: normalized.options,
+              input_count: normalized.input.length
             },
             redaction_level: 'none'
           }
@@ -257,22 +295,14 @@ export class AppServerCodexAdapter {
 
       const response = await this.requestWithThreadLoadedRetry(sessionId, 'turn/start', {
         threadId: sessionId,
-        input: [
-          {
-            type: 'text',
-            text,
-            text_elements: []
-          }
-        ],
+        input,
         approvalPolicy: this.approvalPolicy,
         approvalsReviewer: this.approvalsReviewer,
         sandboxPolicy: {
           type: 'readOnly',
           networkAccess: false
         },
-        responsesapiClientMetadata: {
-          source: 'codex-mobile-companion'
-        }
+        responsesapiClientMetadata: metadata
       });
 
       const turn = response.turn;
@@ -288,7 +318,9 @@ export class AppServerCodexAdapter {
           payload: {
             turn_id: turn.id,
             status: turn.status,
-            prompt: text
+            prompt: normalized.text,
+            options: normalized.options,
+            input_count: normalized.input.length
           },
           redaction_level: 'none'
         }
@@ -303,7 +335,154 @@ export class AppServerCodexAdapter {
           title: 'Prompt failed',
           summary: error.message,
           payload: {
-            prompt: text,
+            prompt: normalized.text,
+            error: error.message
+          },
+          redaction_level: 'none'
+        }
+      });
+    }
+  }
+
+  async editPrompt(sessionId, draft) {
+    const normalized = normalizePromptDraft(draft);
+    try {
+      await this.ensureThreadLoaded(sessionId);
+      this.activeTurnsByThread.delete(sessionId);
+
+      let targetThreadId = sessionId;
+      let forked = false;
+      if (draft.base_turn_id) {
+        try {
+          const forkResponse = await this.requestWithThreadLoadedRetry(sessionId, 'thread/fork', {
+            threadId: sessionId,
+            turnId: draft.base_turn_id
+          });
+          targetThreadId = forkResponse.thread?.id ?? forkResponse.threadId ?? sessionId;
+          forked = targetThreadId !== sessionId;
+        } catch (error) {
+          console.warn(`[bridge] thread/fork failed, falling back to normal turn/start: ${error.message}`);
+        }
+      }
+
+      const editDraft = {
+        ...normalized,
+        text: normalized.text,
+        options: {
+          ...normalized.options,
+          edit: {
+            base_event_id: draft.base_event_id,
+            base_turn_id: draft.base_turn_id ?? null,
+            forked
+          }
+        }
+      };
+      const response = await this.requestWithThreadLoadedRetry(targetThreadId, 'turn/start', {
+        threadId: targetThreadId,
+        input: buildAppServerInput(editDraft),
+        approvalPolicy: this.approvalPolicy,
+        approvalsReviewer: this.approvalsReviewer,
+        sandboxPolicy: {
+          type: 'readOnly',
+          networkAccess: false
+        },
+        responsesapiClientMetadata: buildMobileMetadata(editDraft)
+      });
+
+      const turn = response.turn;
+      this.activeTurnsByThread.set(targetThreadId, turn.id);
+      if (forked) {
+        await this.refreshSessions();
+      }
+
+      return createMessage(MessageType.TimelineEvent, {
+        event: {
+          event_id: `${targetThreadId}:${turn.id}:prompt_edit_requested`,
+          session_id: targetThreadId,
+          created_at: new Date().toISOString(),
+          type: 'prompt_edit_requested',
+          title: 'Edited prompt sent to Codex',
+          summary: forked ? `Started edited turn ${turn.id} in a forked thread.` : `Started edited turn ${turn.id}.`,
+          payload: {
+            turn_id: turn.id,
+            original_session_id: sessionId,
+            base_event_id: draft.base_event_id,
+            base_turn_id: draft.base_turn_id ?? null,
+            prompt: normalized.text,
+            forked
+          },
+          redaction_level: 'none'
+        }
+      });
+    } catch (error) {
+      return createMessage(MessageType.TimelineEvent, {
+        event: {
+          event_id: `${sessionId}:prompt_edit_failed:${Date.now()}`,
+          session_id: sessionId,
+          created_at: new Date().toISOString(),
+          type: 'error',
+          title: 'Prompt edit failed',
+          summary: error.message,
+          payload: {
+            base_event_id: draft.base_event_id,
+            prompt: normalized.text,
+            error: error.message
+          },
+          redaction_level: 'none'
+        }
+      });
+    }
+  }
+
+  async interruptTurn(sessionId) {
+    try {
+      await this.ensureThreadLoaded(sessionId);
+      const activeTurnId = this.activeTurnsByThread.get(sessionId);
+      if (!activeTurnId) {
+        return createMessage(MessageType.TimelineEvent, {
+          event: {
+            event_id: `${sessionId}:turn_interrupt_noop:${Date.now()}`,
+            session_id: sessionId,
+            created_at: new Date().toISOString(),
+            type: 'turn_interrupt_noop',
+            title: 'No active turn to pause',
+            summary: 'Codex does not currently have an active turn for this session.',
+            payload: {},
+            redaction_level: 'none'
+          }
+        });
+      }
+
+      await this.requestWithThreadLoadedRetry(sessionId, 'turn/interrupt', {
+        threadId: sessionId,
+        turnId: activeTurnId
+      });
+      this.activeTurnsByThread.delete(sessionId);
+
+      return createMessage(MessageType.TimelineEvent, {
+        event: {
+          event_id: `${sessionId}:${activeTurnId}:turn_interrupt_requested:${Date.now()}`,
+          session_id: sessionId,
+          created_at: new Date().toISOString(),
+          type: 'turn_interrupt_requested',
+          title: 'Pause requested',
+          summary: `Requested pause for turn ${activeTurnId}.`,
+          payload: {
+            turn_id: activeTurnId
+          },
+          redaction_level: 'none'
+        }
+      });
+    } catch (error) {
+      return createMessage(MessageType.TimelineEvent, {
+        event: {
+          event_id: `${sessionId}:turn_interrupt_failed:${Date.now()}`,
+          session_id: sessionId,
+          created_at: new Date().toISOString(),
+          type: 'error',
+          title: 'Pause failed',
+          summary: error.message,
+          payload: {
             error: error.message
           },
           redaction_level: 'none'
@@ -828,6 +1007,95 @@ function truncateForLog(text, maxLength = 1200) {
   }
 
   return `${text.slice(0, maxLength - 3)}...`;
+}
+
+function normalizePromptDraft(draft) {
+  if (typeof draft === 'string') {
+    return {
+      text: draft,
+      input: [{ type: 'text', text: draft }],
+      options: {},
+      client_request_id: null
+    };
+  }
+
+  const payload = draft && typeof draft === 'object' ? draft : {};
+  const input = Array.isArray(payload.input) && payload.input.length > 0
+    ? payload.input
+    : (typeof payload.text === 'string' ? [{ type: 'text', text: payload.text }] : []);
+  const text = typeof payload.text === 'string'
+    ? payload.text
+    : input.filter((item) => item?.type === 'text').map((item) => item.text ?? '').join('\n');
+
+  return {
+    text,
+    input,
+    options: payload.options && typeof payload.options === 'object' ? payload.options : {},
+    client_request_id: payload.client_request_id ?? null
+  };
+}
+
+function summarizePromptDraft(draft) {
+  const imageCount = draft.input.filter((item) => item?.type === 'image').length;
+  const text = truncateForLog(draft.text, 240);
+  return imageCount > 0 ? `${text || '[image prompt]'} (${imageCount} image${imageCount === 1 ? '' : 's'})` : text;
+}
+
+function buildAppServerInput(draft) {
+  const textParts = draft.input.filter((item) => item?.type === 'text').map((item) => item.text ?? '').filter(Boolean);
+  const text = textParts.join('\n').trim() || draft.text.trim();
+  const instructionPrefix = buildOneShotInstructionPrefix(draft.options);
+  const input = [];
+
+  if (instructionPrefix || text) {
+    input.push({
+      type: 'text',
+      text: [instructionPrefix, text].filter(Boolean).join('\n\n'),
+      text_elements: []
+    });
+  }
+
+  for (const image of draft.input.filter((item) => item?.type === 'image')) {
+    input.push({
+      type: 'image',
+      image_url: image.data_url,
+      data_url: image.data_url,
+      mime_type: image.mime_type,
+      name: image.name
+    });
+  }
+
+  return input;
+}
+
+function buildOneShotInstructionPrefix(options = {}) {
+  const instructions = [];
+  const effort = options.reasoning_effort;
+  if (effort && effort !== 'auto') {
+    instructions.push(`For this turn only, use ${effort} reasoning depth.`);
+  }
+  if (options.plan_mode === true) {
+    instructions.push('For this turn only, start in planning mode. Do not make file or shell changes until the plan is clear.');
+  }
+  if (options.goal?.objective) {
+    instructions.push(`For this turn only, pursue this goal: ${options.goal.objective}`);
+  }
+  if (options.edit?.base_event_id) {
+    instructions.push('This message replaces the previous mobile prompt selected by the user. Continue from the revised prompt.');
+  }
+
+  return instructions.length > 0
+    ? `Mobile run options:\n${instructions.map((item) => `- ${item}`).join('\n')}`
+    : '';
+}
+
+function buildMobileMetadata(draft) {
+  return {
+    source: 'codex-mobile-companion',
+    clientRequestId: draft.client_request_id,
+    mobileOptions: draft.options,
+    inputTypes: draft.input.map((item) => item?.type ?? 'unknown')
+  };
 }
 
 function resolveCodexCli() {

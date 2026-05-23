@@ -3289,3 +3289,132 @@ Result:
 ```text
 BUILD SUCCESSFUL
 ```
+
+## 2026-05-24: Rich mobile composer planning
+
+Status: planned.
+
+Changes:
+
+- Added `docs/mobile-input-composer-plan.md`.
+- Documented the current plain-text prompt path from Android composer through Relay and Host Bridge to Codex App Server.
+- Planned the target frontend shape for a richer mobile composer:
+  - multi-line prompt drafting;
+  - edit-last-message flow;
+  - active-turn pause control;
+  - gallery/camera image attachments;
+  - reasoning-depth selector;
+  - one-shot Plan mode;
+  - one-shot Goal mode.
+- Planned protocol additions for structured prompt drafts, prompt editing, turn interruption, and attachment routing.
+- Recommended implementing `session.turn.interrupt` first because App Server already exposes `turn/interrupt` and it validates the non-prompt action path.
+
+Verification:
+
+```powershell
+Get-Content docs/mobile-input-composer-plan.md -TotalCount 80
+```
+
+Result:
+
+```text
+Plan document created and linked from README.
+```
+
+## 2026-05-24: Rich mobile composer implementation
+
+Status: completed.
+
+Changes:
+
+- Extended the protocol with:
+  - `session.prompt.edit`
+  - `session.turn.interrupt`
+- Kept `session.prompt` backward compatible while adding structured draft payloads:
+  - text input;
+  - image input as capped `data:image/...` data URLs;
+  - `reasoning_effort`;
+  - one-shot `plan_mode`;
+  - one-shot `goal.objective`;
+  - `client_request_id`.
+- Relay now validates structured prompt drafts, image count/size metadata, reasoning values, and goal objective presence before routing.
+- Host Bridge now advertises and handles prompt edit and turn interrupt capabilities.
+- Mock adapter and App Server adapter now accept structured prompt drafts.
+- App Server adapter maps:
+  - normal prompt to `turn/start` or `turn/steer`;
+  - pause to `turn/interrupt`;
+  - edit to a fork-first flow with a safe turn/start fallback;
+  - reasoning/Plan/Goal options to explicit one-shot mobile instructions and metadata.
+- Android now uses `RichChatComposer`:
+  - multi-line text input;
+  - gallery image selection;
+  - camera preview capture;
+  - removable attachment/option chips;
+  - reasoning selector;
+  - one-shot Plan mode;
+  - one-shot Goal mode with objective field;
+  - latest prompt edit mode;
+  - active-turn Stop button.
+- Added `npm run verify:rich-prompt-flow` to verify structured prompt, edit, interrupt, image, reasoning, plan, and goal routing through Relay.
+
+Verification:
+
+```powershell
+node --check packages/protocol/index.mjs
+node --check relay/service/server.mjs
+node --check bridge/host-bridge/index.mjs
+node --check bridge/host-bridge/codex-adapter.mjs
+node --check tools/verify-rich-prompt-flow.mjs
+npm run verify:rich-prompt-flow
+npm run verify:relay-dev-token
+npm run verify:relay-token-separation
+npm run verify:server-smoke-local
+npm run verify:app-server-security-defaults
+.\gradlew.bat :app:assembleDebug --no-daemon
+```
+
+Result:
+
+```text
+[verify] Rich prompt, edit, interrupt, options, and image routing verified.
+[verify] Relay dev-token guard verified.
+[verify] Relay pairing/host/device token separation verified.
+[smoke] Server Relay smoke test passed.
+[verify] App Server security defaults verified.
+BUILD SUCCESSFUL
+```
+
+Known notes:
+
+- Image input uses capped data URLs for the first implementation. The long-term plan still recommends replacing this with short-lived attachment references so Relay never sees image bytes outside transit.
+- App Server native fields for Plan mode, Goal mode, and reasoning depth still need schema confirmation. This implementation applies them as explicit one-shot mobile instructions and metadata, which keeps the behavior functional without relying on unstable unknown fields.
+- A local schema probe with `codex app-server generate-json-schema --experimental` still fails on this machine with `Access is denied`, so native App Server fields could not be confirmed during this pass.
+- Edit uses App Server `thread/fork` when available and falls back to starting a revised turn in the current session if fork is unavailable.
+
+## 2026-05-24: Rich composer layout cleanup
+
+Status: completed.
+
+Changes:
+
+- Moved low-frequency composer actions into a horizontally scrollable tool chip row:
+  - `Add image`
+  - `Options`
+  - `Edit last`
+- Reduced the main composer row to the text field plus one primary action button.
+- Merged `Send` and `Stop` into the same primary action:
+  - active turn: button shows `Stop` and sends `session.turn.interrupt`;
+  - idle turn: button shows `Send` or `Update`.
+- Shrunk removable option/attachment chips by removing default `TextButton` sizing from the close control.
+
+Verification:
+
+```powershell
+.\gradlew.bat :app:assembleDebug --no-daemon
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL
+```

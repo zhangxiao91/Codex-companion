@@ -83,6 +83,7 @@ This replaces the previous LAN-first real-device path as the main product route.
 - [docs/manual-app-server-approval-test.md](docs/manual-app-server-approval-test.md)：真实 App Server approval 手测流程。
 - [docs/manual-android-git-workflow-test.md](docs/manual-android-git-workflow-test.md)：Android Git status/diff/commit/push/audit disposable repo 手测流程。
 - [docs/official-codex-mobile-competitive-strategy.md](docs/official-codex-mobile-competitive-strategy.md): official Codex mobile support research and third-party differentiation strategy.
+- [docs/mobile-input-composer-plan.md](docs/mobile-input-composer-plan.md): rich mobile composer plan for edit, pause, image input, reasoning depth, one-shot Plan mode, and one-shot Goal mode.
 
 ## Current Status
 
