@@ -68,6 +68,31 @@ export function createRelaySqliteStore(options = {}) {
     );
     CREATE INDEX IF NOT EXISTS idx_git_audit_created ON git_audit_events(created_at);
     CREATE INDEX IF NOT EXISTS idx_git_audit_filters ON git_audit_events(session_id, host_id, action, phase);
+    CREATE TABLE IF NOT EXISTS power_control_trusts (
+      trust_id TEXT PRIMARY KEY,
+      host_id TEXT NOT NULL,
+      device_id TEXT NOT NULL,
+      device_display_name TEXT NOT NULL,
+      capabilities_json TEXT NOT NULL DEFAULT '[]',
+      granted_at TEXT NOT NULL,
+      expires_at TEXT,
+      revoked_at TEXT,
+      payload_json TEXT NOT NULL DEFAULT '{}',
+      UNIQUE(host_id, device_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_power_trusts_host_device ON power_control_trusts(host_id, device_id);
+    CREATE TABLE IF NOT EXISTS power_audit_events (
+      event_id TEXT PRIMARY KEY,
+      audit_id TEXT NOT NULL,
+      host_id TEXT NOT NULL,
+      device_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      phase TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_power_audit_created ON power_audit_events(created_at);
+    CREATE INDEX IF NOT EXISTS idx_power_audit_filters ON power_audit_events(host_id, device_id, action, phase);
   `);
   ensureColumn(db, 'devices', 'revoked_at', 'TEXT');
 
@@ -316,6 +341,107 @@ export function createRelaySqliteStore(options = {}) {
         )
       `).run(limit);
     },
+    savePowerTrust(trust) {
+      db.prepare(`
+        INSERT INTO power_control_trusts (trust_id, host_id, device_id, device_display_name, capabilities_json, granted_at, expires_at, revoked_at, payload_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(host_id, device_id) DO UPDATE SET
+          device_display_name = excluded.device_display_name,
+          capabilities_json = excluded.capabilities_json,
+          granted_at = excluded.granted_at,
+          expires_at = excluded.expires_at,
+          revoked_at = excluded.revoked_at,
+          payload_json = excluded.payload_json
+      `).run(
+        trust.trust_id,
+        trust.host_id,
+        trust.device_id,
+        trust.device_display_name ?? '',
+        JSON.stringify(trust.capabilities ?? []),
+        trust.granted_at,
+        trust.expires_at ?? null,
+        trust.revoked_at ?? null,
+        JSON.stringify(trust)
+      );
+    },
+    findPowerTrust(hostId, deviceId) {
+      const now = new Date().toISOString();
+      const row = db.prepare(`
+        SELECT * FROM power_control_trusts
+        WHERE host_id = ?
+          AND device_id = ?
+          AND revoked_at IS NULL
+          AND (expires_at IS NULL OR expires_at > ?)
+      `).get(hostId, deviceId, now);
+      if (!row) {
+        return null;
+      }
+      return {
+        ...parseJson(row.payload_json, {}),
+        trust_id: row.trust_id,
+        host_id: row.host_id,
+        device_id: row.device_id,
+        device_display_name: row.device_display_name,
+        capabilities: parseJson(row.capabilities_json, []),
+        granted_at: row.granted_at,
+        expires_at: row.expires_at ?? null,
+        revoked_at: row.revoked_at ?? null
+      };
+    },
+    listPowerTrusts(options = {}) {
+      const includeRevoked = options.includeRevoked === true;
+      const now = new Date().toISOString();
+      const rows = includeRevoked
+        ? db.prepare('SELECT * FROM power_control_trusts ORDER BY granted_at DESC').all()
+        : db.prepare(`
+          SELECT * FROM power_control_trusts
+          WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)
+          ORDER BY granted_at DESC
+        `).all(now);
+      return rows.map((row) => ({
+        trust_id: row.trust_id,
+        host_id: row.host_id,
+        device_id: row.device_id,
+        device_display_name: row.device_display_name,
+        capabilities: parseJson(row.capabilities_json, []),
+        granted_at: row.granted_at,
+        expires_at: row.expires_at ?? null,
+        revoked_at: row.revoked_at ?? null
+      }));
+    },
+    savePowerAuditEvent(event) {
+      db.prepare(`
+        INSERT INTO power_audit_events (event_id, audit_id, host_id, device_id, action, phase, created_at, payload_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(event_id) DO UPDATE SET
+          payload_json = excluded.payload_json
+      `).run(
+        event.event_id,
+        event.audit_id,
+        event.host_id,
+        event.device_id,
+        event.action,
+        event.phase,
+        event.created_at,
+        JSON.stringify(event)
+      );
+    },
+    trimPowerAuditEvents(limit) {
+      db.prepare(`
+        DELETE FROM power_audit_events
+        WHERE event_id NOT IN (
+          SELECT event_id FROM power_audit_events ORDER BY created_at DESC LIMIT ?
+        )
+      `).run(limit);
+    },
+    listPowerAuditEvents(limit) {
+      return db.prepare(`
+        SELECT payload_json
+        FROM power_audit_events
+        ORDER BY created_at DESC
+        LIMIT ?
+      `).all(limit).map((row) => parseJson(row.payload_json, null)).filter(Boolean);
+    },
     counts() {
       const count = (table) => db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count;
       return {
@@ -324,7 +450,9 @@ export function createRelaySqliteStore(options = {}) {
         sessions: count('sessions'),
         timeline_events: count('timeline_events'),
         git_audit_events: count('git_audit_events'),
-        host_devices: count('host_devices')
+        host_devices: count('host_devices'),
+        power_control_trusts: count('power_control_trusts'),
+        power_audit_events: count('power_audit_events')
       };
     }
   };

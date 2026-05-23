@@ -2372,6 +2372,54 @@ Result:
 BUILD SUCCESSFUL
 ```
 
+## 2026-05-23: Android turn folding interaction refinement
+
+Status: completed.
+
+Changes:
+
+- Changed folded Codex turn cards so tapping an expanded card no longer collapses it.
+- Made the explicit `Hide` button the only collapse path for an expanded Codex turn.
+- Kept collapsed turn summaries tappable via the message body or `Show` action.
+- Added per-row expansion inside an opened Codex turn: tapping a command/file/tool/meta row expands that row's text instead of truncating with ellipsis.
+- Folded `turn_started` and `turn_completed` into the Codex turn group metadata, so completed work between two user prompts stays represented as one Codex message when collapsed.
+- Preserved the previous rule that actively running operations are not folded away.
+
+Verification:
+
+```powershell
+.\gradlew.bat :app:assembleDebug --no-daemon
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL
+```
+
+## 2026-05-23: Android message copy controls
+
+Status: completed.
+
+Changes:
+
+- Added a `Copy` control to user prompt bubbles.
+- Added a `Copy` control to assistant message rows when a Codex turn is expanded.
+- Copy uses the current timeline message text available on the Android client.
+- The existing tap behavior remains intact: collapsed turn summaries expand the turn, expanded detail rows expand truncated row text.
+
+Verification:
+
+```powershell
+.\gradlew.bat :app:assembleDebug --no-daemon
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL
+```
+
 ## 2026-05-18: Relay SQLite persistence
 
 Status: completed.
@@ -2964,6 +3012,9 @@ Changes:
 - Added `tools/windows-host-bridge-service.mjs` for install/uninstall/status/start operations.
 - Added `tools/windows-host-bridge-run.mjs`, the hidden startup runner used by the scheduled task.
 - Added `.relay/windows-host-bridge-config.json` as the saved local PC bridge configuration path.
+- Added a current-user Startup folder launcher fallback for machines where Windows policy rejects `schtasks /Create`.
+- Shortened the scheduled-task action by generating `.relay/windows-host-bridge-task.ps1`, avoiding the Windows 261-character `/TR` limit.
+- Changed the startup runner script to write UTF-8 logs to `.relay/windows-host-bridge.log`.
 - Kept `RELAY_HOST_TOKEN` out of the saved config by default; first preference is to use the existing `.relay/host-identity.json` trusted host device token.
 - Added opt-in `CMC_BRIDGE_STORE_HOST_TOKEN=1` for machines where storing the bootstrap host token is acceptable.
 - Added `npm run verify:windows-bridge-service`.
@@ -2988,6 +3039,107 @@ Usage note:
 
 - Recommended first-time flow is to run `npm run server:bridge` once with `RELAY_HOST_TOKEN`, confirm `.relay/host-identity.json` exists, then run `npm run bridge:windows:install`.
 - The scheduled task starts at Windows user logon and writes logs to `.relay/windows-host-bridge.log`.
+
+## 2026-05-23: PC status, Keep Awake, and Lock with power-control trust
+
+Status: completed.
+
+Changes:
+
+- Added power-control protocol messages:
+  - `power.status`
+  - `power.trust.request`
+  - `power.trust.challenge`
+  - `power.trust.verify`
+  - `power.trust.granted`
+  - `power.request`
+  - `power.result`
+- Relay now routes power-control trust and action requests between Android clients and Host Bridge.
+- Relay derives the Android device identity from the device token and persists granted power-control trust in SQLite.
+- Relay writes metadata-only power-control audit events for trust requests, grants, rejected requests, and completed actions.
+- Host Bridge now creates and reads `.relay/host-policy.json`; power control is disabled by default.
+- Host Bridge reports PC power-control status through `power.status`.
+- Host Bridge generates 6-digit verification challenges for `Enable PC controls`; challenges stay only in Host Bridge memory.
+- Host Bridge handles `keep_awake` and `lock` behind host policy:
+  - Keep Awake is capped by `max_keep_awake_seconds`.
+  - Lock uses Windows `LockWorkStation` outside mock mode.
+  - Verification and action failures return `power.result` instead of failing silently.
+- Android Session tools now include:
+  - PC status summary.
+  - `Enable PC controls`.
+  - verification-code input.
+  - `Keep 30m`, `Keep 1h`, and two-step `Lock PC`.
+- Added `npm run verify:power-control-flow`.
+- Updated README and `docs/server-relay-plan.md`.
+
+Verification:
+
+```powershell
+node --check packages/protocol/index.mjs
+node --check relay/service/sqlite-store.mjs
+node --check relay/service/server.mjs
+node --check bridge/host-bridge/host-policy-store.mjs
+node --check bridge/host-bridge/power-controller.mjs
+node --check bridge/host-bridge/index.mjs
+node --check tools/verify-power-control-flow.mjs
+npm.cmd run verify:power-control-flow
+npm.cmd run verify:relay-token-separation
+npm.cmd run verify:host-device-trust
+npm.cmd run verify:server-devices
+.\gradlew.bat :app:assembleDebug --no-daemon
+git diff --check
+```
+
+Result:
+
+```text
+[verify] Power control trust and request flow verified.
+[verify] Relay pairing/host/device token separation verified.
+[verify] Host device trust verified.
+[verify] Server device management verified.
+BUILD SUCCESSFUL
+```
+
+Known notes:
+
+- `npm` PowerShell shim was blocked by local execution policy, so verification used `npm.cmd`.
+- Android build required Gradle distribution download.
+- Node 24 still prints the expected `node:sqlite` ExperimentalWarning during Relay tests.
+- First manual use requires editing `.relay/host-policy.json` on the PC and restarting Host Bridge.
+
+## 2026-05-23: App Server thread resume hardening
+
+Status: completed.
+
+Context:
+
+- Real-device testing showed mobile timeline/prompt attempts could surface App Server JSON-RPC `-32600` errors with `thread not loaded`.
+- This happened after reconnect/restart when Relay still had session snapshots, but Codex App Server had not loaded that thread's turns into memory.
+
+Changes:
+
+- Hardened `AppServerCodexAdapter.readTimeline()` to ensure the thread is resumed before `thread/read`.
+- Timeline reads now resume with turns included instead of using the lightweight prompt-only `excludeTurns` path.
+- Added one retry for `thread not loaded` responses on `thread/read`, `turn/start`, and `turn/steer`.
+- Added polling after `thread/resume` so the bridge waits briefly for `thread/loaded/list` to reflect the resumed thread.
+- Isolated App Server timeline/prompt verification scripts from workspace `.relay/host-identity.json` and `.relay/relay.sqlite`, avoiding false unauthorized failures against local test Relays.
+
+Verification:
+
+```powershell
+node --check bridge/host-bridge/codex-adapter.mjs
+node --check tools/verify-app-server-timeline.mjs
+node --check tools/verify-app-server-prompt.mjs
+npm run verify:app-server-timeline
+npm run verify:app-server-prompt
+```
+
+Result:
+
+```text
+[verify] App Server thread/read timeline mapped through Relay.
+[verify] App Server ephemeral prompt produced a live assistant/completion event through Relay.
+```
 
 ## 2026-05-22: Codex Console inbox and session stage
 

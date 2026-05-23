@@ -22,6 +22,10 @@ class RelayClient(
         fun onApprovalRequest(approval: ApprovalItem)
         fun onGitSnapshot(snapshot: GitSnapshot)
         fun onGitAudit(sessionId: String, events: List<GitAuditItem>)
+        fun onPowerStatus(status: PowerStatus)
+        fun onPowerTrustChallenge(challenge: PowerTrustChallenge)
+        fun onPowerTrustGranted(trust: PowerTrust)
+        fun onPowerResult(result: PowerResult)
         fun onTimelineEvent(event: TimelineItem)
         fun onTimelinePage(sessionId: String, events: List<TimelineItem>, hasMoreBefore: Boolean, source: String)
         fun onHealthCheck(summary: String)
@@ -131,6 +135,33 @@ class RelayClient(
             payload.put("commit_strategy", commitStrategy)
         }
         send("git.request", payload)
+    }
+
+    fun requestPowerTrust(hostId: String) {
+        send(
+            "power.trust.request",
+            JSONObject().put("host_id", hostId)
+        )
+    }
+
+    fun verifyPowerTrust(hostId: String, challengeId: String, code: String) {
+        send(
+            "power.trust.verify",
+            JSONObject()
+                .put("host_id", hostId)
+                .put("challenge_id", challengeId)
+                .put("code", code)
+        )
+    }
+
+    fun requestPower(hostId: String, action: String, durationSeconds: Int? = null) {
+        val payload = JSONObject()
+            .put("host_id", hostId)
+            .put("action", action)
+        if (durationSeconds != null) {
+            payload.put("duration_seconds", durationSeconds)
+        }
+        send("power.request", payload)
     }
 
     fun sendApprovalDecision(approvalId: String, decision: String) {
@@ -290,6 +321,22 @@ class RelayClient(
 
                 "git.snapshot" -> listener.onGitSnapshot(
                     parseGitSnapshot(message.getJSONObject("payload").getJSONObject("snapshot"))
+                )
+
+                "power.status" -> listener.onPowerStatus(
+                    parsePowerStatus(message.getJSONObject("payload"))
+                )
+
+                "power.trust.challenge" -> listener.onPowerTrustChallenge(
+                    parsePowerTrustChallenge(message.getJSONObject("payload"))
+                )
+
+                "power.trust.granted" -> listener.onPowerTrustGranted(
+                    parsePowerTrust(message.getJSONObject("payload").optJSONObject("trust") ?: message.getJSONObject("payload"))
+                )
+
+                "power.result" -> listener.onPowerResult(
+                    parsePowerResult(message.getJSONObject("payload"))
                 )
 
                 "timeline.event" -> listener.onTimelineEvent(
@@ -465,6 +512,55 @@ class RelayClient(
             kind = host.optString("kind", "")
         )
     }
+
+    private fun parsePowerStatus(payload: JSONObject): PowerStatus {
+        val status = payload.optJSONObject("status") ?: payload
+        return PowerStatus(
+            hostId = payload.optString("host_id", status.optString("host_id", "")),
+            platform = status.optString("platform", ""),
+            powerControlEnabled = status.optBoolean("power_control_enabled", false),
+            allowKeepAwake = status.optBoolean("allow_keep_awake", false),
+            allowLock = status.optBoolean("allow_lock", false),
+            keepAwakeActive = status.optBoolean("keep_awake_active", false),
+            keepAwakeUntil = status.optString("keep_awake_until", "").takeIf { it.isNotBlank() },
+            mockMode = status.optBoolean("mock_mode", false),
+            policyPath = status.optString("policy_path", ""),
+            checkedAt = status.optString("checked_at", "")
+        )
+    }
+
+    private fun parsePowerTrustChallenge(json: JSONObject): PowerTrustChallenge = PowerTrustChallenge(
+        hostId = json.optString("host_id", ""),
+        challengeId = json.optString("challenge_id", ""),
+        deviceId = json.optString("device_id", ""),
+        expiresAt = json.optString("expires_at", ""),
+        message = json.optString("message", "Enter the code shown on your computer.")
+    )
+
+    private fun parsePowerTrust(json: JSONObject): PowerTrust {
+        val capabilitiesArray = json.optJSONArray("capabilities")
+        val capabilities = if (capabilitiesArray == null) {
+            emptyList()
+        } else {
+            List(capabilitiesArray.length()) { index -> capabilitiesArray.optString(index, "") }
+                .filter { it.isNotBlank() }
+        }
+        return PowerTrust(
+            hostId = json.optString("host_id", ""),
+            deviceId = json.optString("device_id", ""),
+            capabilities = capabilities,
+            expiresAt = json.optString("expires_at", "").takeIf { it.isNotBlank() }
+        )
+    }
+
+    private fun parsePowerResult(json: JSONObject): PowerResult = PowerResult(
+        hostId = json.optString("host_id", ""),
+        deviceId = json.optString("device_id", ""),
+        action = json.optString("action", ""),
+        status = json.optString("status", ""),
+        reason = json.optString("reason", ""),
+        expiresAt = json.optString("expires_at", "").takeIf { it.isNotBlank() }
+    )
 
     private fun parseTimelineEvent(json: JSONObject): TimelineItem = TimelineItem(
         eventId = json.optString("event_id", UUID.randomUUID().toString()),

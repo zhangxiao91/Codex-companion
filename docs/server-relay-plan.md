@@ -190,7 +190,7 @@ npm run bridge:windows:install
 npm run bridge:windows:start
 ```
 
-This writes `.relay/windows-host-bridge-config.json` and creates a task named `CodexMobileCompanionHostBridge` that runs at user logon. The task starts `tools/windows-host-bridge-run.mjs`, which loads the saved config and launches `npm run server:bridge` behavior through `tools/server-host-bridge-start.mjs`.
+This writes `.relay/windows-host-bridge-config.json` and tries to create a task named `CodexMobileCompanionHostBridge` that runs at user logon. If Windows policy denies scheduled-task creation, the installer falls back to a current-user Startup folder launcher. Both paths start `tools/windows-host-bridge-run.mjs`, which loads the saved config and launches `npm run server:bridge` behavior through `tools/server-host-bridge-start.mjs`.
 
 By default, the installer does not persist `RELAY_HOST_TOKEN`. Recommended setup is:
 
@@ -205,6 +205,35 @@ npm run bridge:windows:status
 npm run bridge:windows:start
 npm run bridge:windows:uninstall
 ```
+
+### PC Power Controls
+
+Power controls use a stricter trust boundary than ordinary session control:
+
+- Android device pairing only allows normal Codex control.
+- A separate per-device, per-host power-control trust is required for Keep Awake and Lock PC.
+- Relay forwards trust requests and stores granted trust/audit metadata in SQLite.
+- The 6-digit verification challenge exists only in Host Bridge memory.
+- Host Bridge reads `.relay/host-policy.json` and remains the final execution gate.
+
+Host policy is created disabled by default:
+
+```json
+{
+  "power_control": {
+    "enabled": false,
+    "allow_keep_awake": false,
+    "allow_lock": false,
+    "max_keep_awake_seconds": 3600,
+    "allow_on_battery": false,
+    "trust_ttl_seconds": 2592000,
+    "challenge_ttl_seconds": 300,
+    "max_challenge_attempts": 5
+  }
+}
+```
+
+When explicitly enabled, Android can open Session tools, tap `Enable PC controls`, enter the Host Bridge terminal/log verification code, and then request `keep_awake` or `lock`. The host rejects requests if policy disables the action, if Relay has no persisted trust for the Android device, or if the verification challenge is expired/incorrect.
 
 ### Device Management
 

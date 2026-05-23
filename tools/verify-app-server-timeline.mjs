@@ -1,8 +1,12 @@
 import { spawn } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const processes = [];
 const devToken = process.env.RELAY_DEV_TOKEN ?? 'app-server-timeline-token';
+const tempDir = mkdtempSync(join(tmpdir(), 'cmc-app-server-timeline-'));
 
 try {
   const relayPort = '8789';
@@ -10,7 +14,10 @@ try {
   const relay = spawnProcess('relay', 'node', ['relay/service/server.mjs'], {
     ...process.env,
     RELAY_PORT: relayPort,
-    RELAY_DEV_TOKEN: devToken
+    RELAY_DEV_TOKEN: devToken,
+    RELAY_SQLITE_PATH: join(tempDir, 'relay.sqlite'),
+    RELAY_IDENTITY_STORE_PATH: join(tempDir, 'identity.json'),
+    RELAY_GIT_AUDIT_LOG_PATH: join(tempDir, 'git-audit.ndjson')
   });
   processes.push(relay);
   await waitForOutput(relay, '[relay] listening', 5000);
@@ -21,7 +28,8 @@ try {
     RELAY_URL: relayUrl,
     RELAY_DEV_TOKEN: devToken,
     CODEX_ADAPTER: 'app-server',
-    CODEX_APP_SERVER_LISTEN: 'stdio://'
+    CODEX_APP_SERVER_LISTEN: 'stdio://',
+    HOST_IDENTITY_PATH: join(tempDir, 'host-identity.json')
   });
   processes.push(bridge);
   await waitForOutput(bridge, '[bridge] app-server initialized', 15000);

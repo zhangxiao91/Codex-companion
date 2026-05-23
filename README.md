@@ -154,7 +154,7 @@ npm run bridge:windows:install
 npm run bridge:windows:start
 ```
 
-The installer saves `.relay/windows-host-bridge-config.json` and creates a Windows Task Scheduler entry named `CodexMobileCompanionHostBridge`. By default it does not store `RELAY_HOST_TOKEN`; it expects the Host Bridge trust file at `.relay/host-identity.json` to already exist. For a first-time setup, run `npm run server:bridge` once with `RELAY_HOST_TOKEN` so the trust file is created, then install auto-start. If you explicitly accept storing the host bootstrap token in the local config, set `CMC_BRIDGE_STORE_HOST_TOKEN=1` during install.
+The installer saves `.relay/windows-host-bridge-config.json` and tries to create a Windows Task Scheduler entry named `CodexMobileCompanionHostBridge`. If local Windows policy denies scheduled-task creation, it falls back to a current-user Startup folder launcher. By default it does not store `RELAY_HOST_TOKEN`; it expects the Host Bridge trust file at `.relay/host-identity.json` to already exist. For a first-time setup, run `npm run server:bridge` once with `RELAY_HOST_TOKEN` so the trust file is created, then install auto-start. If you explicitly accept storing the host bootstrap token in the local config, set `CMC_BRIDGE_STORE_HOST_TOKEN=1` during install.
 
 Useful commands:
 
@@ -163,6 +163,27 @@ npm run bridge:windows:status
 npm run bridge:windows:start
 npm run bridge:windows:uninstall
 ```
+
+PC power controls:
+
+Host Bridge creates `.relay/host-policy.json` with power control disabled by default. To allow trusted phones to request Keep Awake and Lock PC, edit the policy on the PC:
+
+```json
+{
+  "power_control": {
+    "enabled": true,
+    "allow_keep_awake": true,
+    "allow_lock": true,
+    "max_keep_awake_seconds": 3600,
+    "allow_on_battery": false,
+    "trust_ttl_seconds": 2592000,
+    "challenge_ttl_seconds": 300,
+    "max_challenge_attempts": 5
+  }
+}
+```
+
+Then restart Host Bridge. In Android, open Session tools, tap `Enable PC controls`, enter the 6-digit code printed by Host Bridge, then use `Keep 30m`, `Keep 1h`, or `Lock PC`. The verification challenge is kept only in Host Bridge memory; Relay stores only the granted device/host trust and power-control audit metadata in SQLite.
 
 Server device management:
 

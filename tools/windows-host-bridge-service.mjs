@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadServerRelayConfig } from './server-relay-config.mjs';
@@ -7,6 +7,8 @@ import { loadServerRelayConfig } from './server-relay-config.mjs';
 export const DEFAULT_WINDOWS_BRIDGE_CONFIG_PATH = '.relay/windows-host-bridge-config.json';
 export const DEFAULT_WINDOWS_BRIDGE_TASK_NAME = 'CodexMobileCompanionHostBridge';
 export const DEFAULT_WINDOWS_BRIDGE_LOG_PATH = '.relay/windows-host-bridge.log';
+export const DEFAULT_WINDOWS_BRIDGE_TASK_SCRIPT_PATH = '.relay/windows-host-bridge-task.ps1';
+export const DEFAULT_WINDOWS_BRIDGE_STARTUP_LAUNCHER = 'CodexMobileCompanionHostBridge.vbs';
 
 const isMain = process.argv[1]
   && import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
@@ -54,11 +56,16 @@ export function installWindowsBridgeTask(options = {}) {
   saveWindowsBridgeConfig(config, configPath, { dryRun });
 
   const taskName = resolveTaskName();
-  const taskAction = buildWindowsBridgeTaskAction({
+  const taskScriptPath = resolve(process.env.CMC_WINDOWS_BRIDGE_TASK_SCRIPT_PATH ?? DEFAULT_WINDOWS_BRIDGE_TASK_SCRIPT_PATH);
+  writeWindowsBridgeTaskScript({
+    taskScriptPath,
     cwd: process.cwd(),
     nodePath: process.execPath,
     runnerPath: resolve('tools/windows-host-bridge-run.mjs'),
     logPath: resolve(process.env.CMC_WINDOWS_BRIDGE_LOG_PATH ?? config.log_path ?? DEFAULT_WINDOWS_BRIDGE_LOG_PATH)
+  }, { dryRun });
+  const taskAction = buildWindowsBridgeTaskAction({
+    taskScriptPath
   });
   const args = [
     '/Create',
@@ -68,12 +75,11 @@ export function installWindowsBridgeTask(options = {}) {
     'ONLOGON',
     '/TR',
     taskAction,
-    '/F',
-    '/RL',
-    'LIMITED'
+    '/F'
   ];
 
   console.log('[windows-bridge] Config path:', configPath);
+  console.log('[windows-bridge] Task script:', taskScriptPath);
   console.log('[windows-bridge] Task name:', taskName);
   console.log('[windows-bridge] Task action:', taskAction);
 
@@ -82,8 +88,17 @@ export function installWindowsBridgeTask(options = {}) {
     return { configPath, config, taskName, taskAction };
   }
 
-  runSchtasks(args);
-  console.log('[windows-bridge] Installed. It will start on Windows logon.');
+  try {
+    runSchtasks(args);
+    console.log('[windows-bridge] Installed scheduled task. It will start on Windows logon.');
+  } catch (error) {
+    if (!isAccessDeniedError(error)) {
+      throw error;
+    }
+    const startupLauncherPath = writeWindowsStartupLauncher({ taskScriptPath });
+    console.warn('[windows-bridge] Task Scheduler denied access. Installed Startup folder launcher instead.');
+    console.warn('[windows-bridge] Startup launcher:', startupLauncherPath);
+  }
   console.log('[windows-bridge] Start now with: npm run bridge:windows:start');
   return { configPath, config, taskName, taskAction };
 }
@@ -101,13 +116,32 @@ export function uninstallWindowsBridgeTask(options = {}) {
     return;
   }
 
-  runSchtasks(args);
+  try {
+    runSchtasks(args);
+  } catch (error) {
+    if (!isAccessDeniedError(error) && !isMissingTaskError(error)) {
+      throw error;
+    }
+    console.warn(`[windows-bridge] Scheduled task was not removed: ${error.message}`);
+  }
+
+  const startupLauncherPath = resolveWindowsStartupLauncherPath();
+  if (existsSync(startupLauncherPath)) {
+    rmSync(startupLauncherPath, { force: true });
+    console.log('[windows-bridge] Removed Startup launcher:', startupLauncherPath);
+  }
   console.log('[windows-bridge] Uninstalled.');
 }
 
 export function queryWindowsBridgeTask() {
   assertWindowsOrDryRun(false);
-  runSchtasks(['/Query', '/TN', resolveTaskName(), '/V', '/FO', 'LIST'], { inherit: true });
+  try {
+    runSchtasks(['/Query', '/TN', resolveTaskName(), '/V', '/FO', 'LIST'], { inherit: true });
+  } catch (error) {
+    console.warn(`[windows-bridge] Scheduled task query failed: ${error.message}`);
+  }
+  const startupLauncherPath = resolveWindowsStartupLauncherPath();
+  console.log('[windows-bridge] Startup launcher:', existsSync(startupLauncherPath) ? startupLauncherPath : 'not installed');
 }
 
 export function startWindowsBridgeTask(options = {}) {
@@ -123,8 +157,21 @@ export function startWindowsBridgeTask(options = {}) {
     return;
   }
 
-  runSchtasks(args);
-  console.log('[windows-bridge] Start requested.');
+  try {
+    runSchtasks(args);
+    console.log('[windows-bridge] Scheduled task start requested.');
+    return;
+  } catch (error) {
+    if (!isAccessDeniedError(error) && !isMissingTaskError(error)) {
+      throw error;
+    }
+    const startupLauncherPath = resolveWindowsStartupLauncherPath();
+    if (!existsSync(startupLauncherPath)) {
+      throw error;
+    }
+    runDetached('wscript.exe', [startupLauncherPath]);
+    console.log('[windows-bridge] Started through Startup launcher.');
+  }
 }
 
 export function resolveWindowsBridgeConfigPath() {
@@ -188,15 +235,52 @@ export function validateWindowsBridgeConfig(config) {
 }
 
 export function buildWindowsBridgeTaskAction(options) {
+  const taskScriptPath = options.taskScriptPath ?? resolve(DEFAULT_WINDOWS_BRIDGE_TASK_SCRIPT_PATH);
+  return `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "${taskScriptPath}"`;
+}
+
+export function writeWindowsBridgeTaskScript(options, writeOptions = {}) {
+  const taskScriptPath = options.taskScriptPath ?? resolve(DEFAULT_WINDOWS_BRIDGE_TASK_SCRIPT_PATH);
+  if (writeOptions.dryRun === true) {
+    return taskScriptPath;
+  }
+
   const cwd = options.cwd ?? process.cwd();
   const nodePath = options.nodePath ?? process.execPath;
   const runnerPath = options.runnerPath ?? resolve('tools/windows-host-bridge-run.mjs');
   const logPath = options.logPath ?? resolve(DEFAULT_WINDOWS_BRIDGE_LOG_PATH);
-  const command = [
+  mkdirSync(dirname(taskScriptPath), { recursive: true });
+  writeFileSync(taskScriptPath, [
+    '$ErrorActionPreference = "Continue"',
     `Set-Location -LiteralPath ${quotePowerShell(cwd)}`,
-    `& ${quotePowerShell(nodePath)} ${quotePowerShell(runnerPath)} *>> ${quotePowerShell(logPath)}`
-  ].join('; ');
-  return `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "${escapeForDoubleQuotedArgument(command)}"`;
+    `$logPath = ${quotePowerShell(logPath)}`,
+    `$logDir = Split-Path -Parent $logPath`,
+    'if ($logDir) { New-Item -ItemType Directory -Force -Path $logDir | Out-Null }',
+    `"[$([DateTime]::Now.ToString('o'))] Starting Codex Mobile Companion Host Bridge" | Add-Content -LiteralPath $logPath`,
+    `& ${quotePowerShell(nodePath)} ${quotePowerShell(runnerPath)} 2>&1 | ForEach-Object { $_ | Out-File -LiteralPath $logPath -Append -Encoding utf8 }`,
+    `"[$([DateTime]::Now.ToString('o'))] Host Bridge exited with code $LASTEXITCODE" | Add-Content -LiteralPath $logPath`
+  ].join('\r\n'), 'utf8');
+  return taskScriptPath;
+}
+
+export function resolveWindowsStartupLauncherPath() {
+  const appData = process.env.APPDATA;
+  if (!appData) {
+    return resolve('.relay', DEFAULT_WINDOWS_BRIDGE_STARTUP_LAUNCHER);
+  }
+  return resolve(appData, 'Microsoft/Windows/Start Menu/Programs/Startup', DEFAULT_WINDOWS_BRIDGE_STARTUP_LAUNCHER);
+}
+
+export function writeWindowsStartupLauncher(options = {}) {
+  const taskScriptPath = options.taskScriptPath ?? resolve(DEFAULT_WINDOWS_BRIDGE_TASK_SCRIPT_PATH);
+  const startupLauncherPath = options.startupLauncherPath ?? resolveWindowsStartupLauncherPath();
+  mkdirSync(dirname(startupLauncherPath), { recursive: true });
+  const command = `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "${taskScriptPath}"`;
+  writeFileSync(startupLauncherPath, [
+    'Set shell = CreateObject("WScript.Shell")',
+    `shell.Run ${quoteVbs(command)}, 0, False`
+  ].join('\r\n'), 'utf8');
+  return startupLauncherPath;
 }
 
 function resolveTaskName() {
@@ -235,6 +319,26 @@ function runSchtasks(args, options = {}) {
   }
 }
 
+function runDetached(command, args) {
+  const result = spawnSync(command, args, {
+    encoding: 'utf8',
+    stdio: 'pipe',
+    windowsHide: true
+  });
+  if (result.status !== 0) {
+    const detail = `${result.stderr ?? ''}${result.stdout ?? ''}`.trim();
+    throw new Error(`${command} failed${detail ? `: ${detail}` : ''}`);
+  }
+}
+
+function isAccessDeniedError(error) {
+  return String(error?.message ?? '').toLowerCase().includes('access is denied');
+}
+
+function isMissingTaskError(error) {
+  return String(error?.message ?? '').toLowerCase().includes('cannot find the file specified');
+}
+
 function assertWindowsOrDryRun(dryRun) {
   if (process.platform !== 'win32' && !dryRun) {
     throw new Error('Windows Host Bridge service installation requires Windows.');
@@ -245,8 +349,8 @@ function quotePowerShell(value) {
   return `'${String(value).replaceAll("'", "''")}'`;
 }
 
-function escapeForDoubleQuotedArgument(value) {
-  return String(value).replaceAll('"', '\\"');
+function quoteVbs(value) {
+  return `"${String(value).replaceAll('"', '""')}"`;
 }
 
 function compactObject(value) {

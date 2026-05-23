@@ -257,6 +257,38 @@ class RelayViewModel(
         requestGit("push")
     }
 
+    fun requestPowerTrust() {
+        val host = _uiState.value.selectedHost
+        if (host == null) {
+            _uiState.update { it.copy(lastError = "No online host is available for PC controls") }
+            return
+        }
+        _uiState.update { it.copy(lastHealthCheck = "Requesting PC control verification", lastError = null) }
+        relayClient.requestPowerTrust(host.hostId)
+    }
+
+    fun verifyPowerTrust(code: String) {
+        val challenge = _uiState.value.pendingPowerChallenge
+        if (challenge == null) {
+            _uiState.update { it.copy(lastError = "No pending PC control verification") }
+            return
+        }
+        if (code.isBlank()) {
+            _uiState.update { it.copy(lastError = "Verification code is required") }
+            return
+        }
+        _uiState.update { it.copy(lastHealthCheck = "Verifying PC control code", lastError = null) }
+        relayClient.verifyPowerTrust(challenge.hostId, challenge.challengeId, code.trim())
+    }
+
+    fun requestKeepAwake(durationSeconds: Int) {
+        requestPower("keep_awake", durationSeconds.coerceIn(60, 3600))
+    }
+
+    fun requestLockPc() {
+        requestPower("lock", null)
+    }
+
     fun requestGitAudit() {
         val sessionId = _uiState.value.selectedSessionId ?: return
         relayClient.requestGitAudit(
@@ -340,6 +372,52 @@ class RelayViewModel(
     override fun onGitAudit(sessionId: String, events: List<GitAuditItem>) {
         _uiState.update { state ->
             state.copy(gitAudit = state.gitAudit + (sessionId to events))
+        }
+    }
+
+    override fun onPowerStatus(status: PowerStatus) {
+        _uiState.update { state ->
+            state.copy(powerStatuses = state.powerStatuses + (status.hostId to status))
+        }
+    }
+
+    override fun onPowerTrustChallenge(challenge: PowerTrustChallenge) {
+        if (challenge.deviceId.isNotBlank() && challenge.deviceId != _uiState.value.deviceId) {
+            return
+        }
+        _uiState.update {
+            it.copy(
+                pendingPowerChallenge = challenge,
+                lastHealthCheck = "Enter the code shown on your computer",
+                lastError = null
+            )
+        }
+    }
+
+    override fun onPowerTrustGranted(trust: PowerTrust) {
+        if (trust.deviceId.isNotBlank() && trust.deviceId != _uiState.value.deviceId) {
+            return
+        }
+        _uiState.update { state ->
+            state.copy(
+                powerTrusts = state.powerTrusts + (trust.hostId to trust),
+                pendingPowerChallenge = null,
+                lastHealthCheck = "PC controls enabled",
+                lastError = null
+            )
+        }
+    }
+
+    override fun onPowerResult(result: PowerResult) {
+        if (result.deviceId.isNotBlank() && result.deviceId != _uiState.value.deviceId) {
+            return
+        }
+        _uiState.update {
+            it.copy(
+                lastPowerResult = result,
+                lastHealthCheck = "${result.action}: ${result.status}",
+                lastError = if (result.status == "accepted") null else result.reason.ifBlank { "Power request rejected" }
+            )
         }
     }
 
@@ -473,6 +551,23 @@ class RelayViewModel(
             )
         }
         relayClient.requestGit(sessionId, action, filePath, message, commitStrategy)
+    }
+
+    private fun requestPower(action: String, durationSeconds: Int?) {
+        val state = _uiState.value
+        val host = state.selectedHost
+        if (host == null) {
+            _uiState.update { it.copy(lastError = "No host is available for PC controls") }
+            return
+        }
+        val capability = if (action == "lock") "power.lock" else "power.keep_awake"
+        val trust = state.powerTrusts[host.hostId]
+        if (trust == null || capability !in trust.capabilities) {
+            _uiState.update { it.copy(lastError = "Enable PC controls before using ${action.replace('_', ' ')}") }
+            return
+        }
+        _uiState.update { it.copy(lastHealthCheck = "Sending ${action.replace('_', ' ')} request", lastError = null) }
+        relayClient.requestPower(host.hostId, action, durationSeconds)
     }
 
     private fun parseIsoMillis(raw: String): Long =

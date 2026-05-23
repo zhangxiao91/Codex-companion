@@ -151,6 +151,27 @@ function handleMessage(connection, raw) {
       case MessageType.GitSnapshot:
         handleGitSnapshot(connection, message);
         break;
+      case MessageType.PowerStatus:
+        handlePowerStatus(connection, message);
+        break;
+      case MessageType.PowerTrustRequest:
+        handlePowerTrustRequest(connection, message);
+        break;
+      case MessageType.PowerTrustChallenge:
+        handlePowerTrustChallenge(connection, message);
+        break;
+      case MessageType.PowerTrustVerify:
+        handlePowerTrustVerify(connection, message);
+        break;
+      case MessageType.PowerTrustGranted:
+        handlePowerTrustGranted(connection, message);
+        break;
+      case MessageType.PowerRequest:
+        handlePowerRequest(connection, message);
+        break;
+      case MessageType.PowerResult:
+        handlePowerResult(connection, message);
+        break;
       case MessageType.SessionCreateEphemeral:
         handleSessionCreateEphemeral(connection, message);
         break;
@@ -345,6 +366,10 @@ function isHostMessage(type) {
     || type === MessageType.HostHeartbeat
     || type === MessageType.ApprovalRequest
     || type === MessageType.GitSnapshot
+    || type === MessageType.PowerStatus
+    || type === MessageType.PowerTrustChallenge
+    || type === MessageType.PowerTrustGranted
+    || type === MessageType.PowerResult
     || type === MessageType.SessionSnapshot
     || type === MessageType.TimelineEvent
     || type === MessageType.TimelinePage;
@@ -353,6 +378,9 @@ function isHostMessage(type) {
 function isClientMessage(type) {
   return type === MessageType.ApprovalDecision
     || type === MessageType.GitRequest
+    || type === MessageType.PowerTrustRequest
+    || type === MessageType.PowerTrustVerify
+    || type === MessageType.PowerRequest
     || type === MessageType.SessionCreateEphemeral
     || type === MessageType.SessionSubscribe
     || type === MessageType.SessionPrompt
@@ -932,6 +960,184 @@ function handleGitSnapshot(connection, message) {
   refreshSessionStage(snapshot.session_id);
 }
 
+function handlePowerStatus(connection, message) {
+  requirePayloadField(message, 'host_id');
+  connection.role = SenderRole.Host;
+  connection.hostId = message.payload.host_id;
+
+  const host = state.hosts.get(message.payload.host_id);
+  if (host) {
+    host.power_status = message.payload.status ?? message.payload;
+    host.last_seen_at = new Date().toISOString();
+    state.hosts.set(host.host_id, host);
+    relayStore.saveHost(host);
+  }
+
+  broadcastToClients(createMessage(MessageType.PowerStatus, {
+    ...message.payload,
+    trusted_devices: relayStore.listPowerTrusts()
+      .filter((trust) => trust.host_id === message.payload.host_id)
+      .map((trust) => ({
+        device_id: trust.device_id,
+        capabilities: trust.capabilities,
+        expires_at: trust.expires_at
+      }))
+  }));
+  if (message.payload.host_id) {
+    broadcastHostSnapshot(message.payload.host_id);
+  }
+}
+
+function handlePowerTrustRequest(connection, message) {
+  requirePayloadField(message, 'host_id');
+  const device = deviceInfoForMessage(message);
+  const hostConnection = state.hostConnections.get(message.payload.host_id);
+  connection.role = SenderRole.Client;
+  state.clients.add(connection);
+
+  if (!hostConnection) {
+    sendError(connection, `Host is offline: ${message.payload.host_id}`);
+    return;
+  }
+
+  appendPowerAuditEvent({
+    audit_id: randomUUID(),
+    phase: 'trust_requested',
+    host_id: message.payload.host_id,
+    device_id: device.device_id,
+    action: 'power.trust',
+    device,
+    requested_at: new Date().toISOString()
+  });
+  send(hostConnection, withPowerDevice(message, device));
+}
+
+function handlePowerTrustChallenge(connection, message) {
+  requirePayloadField(message, 'host_id');
+  requirePayloadField(message, 'challenge_id');
+  connection.role = SenderRole.Host;
+  connection.hostId = message.payload.host_id;
+  broadcastToClients(createMessage(MessageType.PowerTrustChallenge, message.payload));
+}
+
+function handlePowerTrustVerify(connection, message) {
+  requirePayloadField(message, 'host_id');
+  requirePayloadField(message, 'challenge_id');
+  requirePayloadField(message, 'code');
+  const device = deviceInfoForMessage(message);
+  const hostConnection = state.hostConnections.get(message.payload.host_id);
+  connection.role = SenderRole.Client;
+  state.clients.add(connection);
+
+  if (!hostConnection) {
+    sendError(connection, `Host is offline: ${message.payload.host_id}`);
+    return;
+  }
+
+  send(hostConnection, withPowerDevice(message, device));
+}
+
+function handlePowerTrustGranted(connection, message) {
+  requirePayloadField(message, 'host_id');
+  requirePayloadField(message, 'device_id');
+  const now = new Date().toISOString();
+  const capabilities = Array.isArray(message.payload.capabilities)
+    ? message.payload.capabilities
+    : ['power.keep_awake', 'power.lock'];
+  const trust = {
+    trust_id: message.payload.trust_id ?? randomUUID(),
+    host_id: message.payload.host_id,
+    device_id: message.payload.device_id,
+    device_display_name: message.payload.device_display_name ?? '',
+    capabilities,
+    granted_at: message.payload.granted_at ?? now,
+    expires_at: message.payload.expires_at ?? null
+  };
+  relayStore.savePowerTrust(trust);
+  appendPowerAuditEvent({
+    audit_id: message.payload.audit_id ?? randomUUID(),
+    phase: 'trust_granted',
+    host_id: trust.host_id,
+    device_id: trust.device_id,
+    action: 'power.trust',
+    device: {
+      device_id: trust.device_id,
+      display_name: trust.device_display_name
+    },
+    expires_at: trust.expires_at,
+    completed_at: now
+  });
+  broadcastToClients(createMessage(MessageType.PowerTrustGranted, { trust }));
+  broadcastHostSnapshot(trust.host_id);
+}
+
+function handlePowerRequest(connection, message) {
+  requirePayloadField(message, 'host_id');
+  requirePayloadField(message, 'action');
+  const device = deviceInfoForMessage(message);
+  const hostConnection = state.hostConnections.get(message.payload.host_id);
+  connection.role = SenderRole.Client;
+  state.clients.add(connection);
+
+  if (!hostConnection) {
+    sendError(connection, `Host is offline: ${message.payload.host_id}`);
+    return;
+  }
+
+  const capability = capabilityForPowerAction(message.payload.action);
+  const trust = relayStore.findPowerTrust(message.payload.host_id, device.device_id);
+  if (!trust || !trust.capabilities.includes(capability)) {
+    appendPowerAuditEvent({
+      audit_id: randomUUID(),
+      phase: 'rejected',
+      host_id: message.payload.host_id,
+      device_id: device.device_id,
+      action: message.payload.action,
+      device,
+      reason: 'missing_power_control_trust',
+      requested_at: new Date().toISOString()
+    });
+    sendError(connection, `Power control is not trusted for ${device.device_id} on ${message.payload.host_id}.`);
+    return;
+  }
+
+  const auditId = randomUUID();
+  appendPowerAuditEvent({
+    audit_id: auditId,
+    phase: 'requested',
+    host_id: message.payload.host_id,
+    device_id: device.device_id,
+    action: message.payload.action,
+    duration_seconds: message.payload.duration_seconds ?? null,
+    device,
+    requested_at: new Date().toISOString()
+  });
+  send(hostConnection, {
+    ...withPowerDevice(message, device),
+    payload: {
+      ...message.payload,
+      audit_id: auditId
+    }
+  });
+}
+
+function handlePowerResult(connection, message) {
+  requirePayloadField(message, 'host_id');
+  requirePayloadField(message, 'action');
+  appendPowerAuditEvent({
+    audit_id: message.payload.audit_id ?? randomUUID(),
+    phase: 'completed',
+    host_id: message.payload.host_id,
+    device_id: message.payload.device_id ?? 'unknown',
+    action: message.payload.action,
+    result_status: message.payload.status ?? '',
+    result_reason: message.payload.reason ?? '',
+    expires_at: message.payload.expires_at ?? null,
+    completed_at: new Date().toISOString()
+  });
+  broadcastToClients(createMessage(MessageType.PowerResult, message.payload));
+}
+
 function handleSessionSnapshot(connection, message) {
   requirePayloadField(message, 'session');
 
@@ -1184,6 +1390,38 @@ function appendGitAuditEvent(event) {
   const timelineEvent = cacheTimelineEvent(createGitAuditTimelineEvent(auditEvent));
   broadcastToClients(createMessage(MessageType.TimelineEvent, { event: timelineEvent }));
   refreshSessionStage(auditEvent.session_id);
+}
+
+function appendPowerAuditEvent(event) {
+  const auditEvent = {
+    event_id: randomUUID(),
+    created_at: new Date().toISOString(),
+    ...event
+  };
+
+  relayStore.savePowerAuditEvent(auditEvent);
+  relayStore.trimPowerAuditEvents(auditLogLimit);
+}
+
+function withPowerDevice(message, device) {
+  return {
+    ...message,
+    payload: {
+      ...message.payload,
+      device_id: device.device_id,
+      device_display_name: device.display_name
+    }
+  };
+}
+
+function capabilityForPowerAction(action) {
+  if (action === 'lock') {
+    return 'power.lock';
+  }
+  if (action === 'keep_awake') {
+    return 'power.keep_awake';
+  }
+  return `power.${action}`;
 }
 
 function refreshSessionStage(sessionId) {

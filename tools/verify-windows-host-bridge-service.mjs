@@ -4,7 +4,9 @@ import { join } from 'node:path';
 import {
   buildWindowsBridgeConfig,
   buildWindowsBridgeTaskAction,
-  installWindowsBridgeTask
+  installWindowsBridgeTask,
+  writeWindowsBridgeTaskScript,
+  writeWindowsStartupLauncher
 } from './windows-host-bridge-service.mjs';
 
 const tempDir = mkdtempSync(join(tmpdir(), 'cmc-windows-bridge-'));
@@ -35,17 +37,30 @@ try {
   assertEqual(tokenConfig.host_token, 'host-secret', 'stored host_token');
 
   const action = buildWindowsBridgeTaskAction({
-    cwd: 'C:\\Projects\\Codex Mobile',
-    nodePath: 'C:\\Program Files\\nodejs\\node.exe',
-    runnerPath: 'C:\\Projects\\Codex Mobile\\tools\\windows-host-bridge-run.mjs',
-    logPath: 'C:\\Projects\\Codex Mobile\\.relay\\windows-host-bridge.log'
+    taskScriptPath: 'C:\\Projects\\Codex Mobile\\.relay\\windows-host-bridge-task.ps1'
   });
   if (!action.includes('-WindowStyle Hidden')) {
     throw new Error('Task action should start hidden.');
   }
-  if (!action.includes('windows-host-bridge-run.mjs')) {
-    throw new Error('Task action should run the Windows Host Bridge runner.');
+  if (!action.includes('windows-host-bridge-task.ps1')) {
+    throw new Error('Task action should run the generated Windows Host Bridge task script.');
   }
+  if (action.length > 261) {
+    throw new Error(`Task action is too long for schtasks /TR: ${action.length}`);
+  }
+
+  writeWindowsBridgeTaskScript({
+    taskScriptPath: join(tempDir, 'windows-host-bridge-task.ps1'),
+    cwd: 'C:\\Projects\\Codex Mobile',
+    nodePath: 'C:\\Program Files\\nodejs\\node.exe',
+    runnerPath: 'C:\\Projects\\Codex Mobile\\tools\\windows-host-bridge-run.mjs',
+    logPath: join(tempDir, 'bridge.log')
+  });
+
+  writeWindowsStartupLauncher({
+    taskScriptPath: join(tempDir, 'windows-host-bridge-task.ps1'),
+    startupLauncherPath: join(tempDir, 'CodexMobileCompanionHostBridge.vbs')
+  });
 
   process.env.RELAY_URL = 'wss://relay.example.test';
   process.env.HOST_ID = 'verify-host';

@@ -68,7 +68,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -117,6 +119,10 @@ class MainActivity : ComponentActivity() {
                 onNewChat = viewModel::createNewChat,
                 onPinnedSessionToggle = viewModel::togglePinnedSession,
                 onLoadEarlierTimeline = viewModel::loadEarlierTimeline,
+                onPowerTrustRequest = viewModel::requestPowerTrust,
+                onPowerTrustVerify = viewModel::verifyPowerTrust,
+                onKeepAwake = viewModel::requestKeepAwake,
+                onLockPc = viewModel::requestLockPc,
                 onScanQrCode = ::scanPairingCode,
                 onNotificationsEnabled = { localNotifier.notificationsAllowed() },
                 onSessionNotify = localNotifier::notifySessionStage,
@@ -171,6 +177,10 @@ private fun CompanionApp(
     onNewChat: () -> Unit,
     onPinnedSessionToggle: (String) -> Unit,
     onLoadEarlierTimeline: () -> Unit,
+    onPowerTrustRequest: () -> Unit,
+    onPowerTrustVerify: (String) -> Unit,
+    onKeepAwake: (Int) -> Unit,
+    onLockPc: () -> Unit,
     onScanQrCode: () -> Unit,
     onNotificationsEnabled: () -> Boolean,
     onSessionNotify: (CodexSession) -> Unit,
@@ -229,6 +239,10 @@ private fun CompanionApp(
                     onNewChat = onNewChat,
                     onPinnedSessionToggle = onPinnedSessionToggle,
                     onLoadEarlierTimeline = onLoadEarlierTimeline,
+                    onPowerTrustRequest = onPowerTrustRequest,
+                    onPowerTrustVerify = onPowerTrustVerify,
+                    onKeepAwake = onKeepAwake,
+                    onLockPc = onLockPc,
                     onHealthCheck = onHealthCheck
                 )
             } else {
@@ -905,6 +919,10 @@ private fun MainSessionScreen(
     onNewChat: () -> Unit,
     onPinnedSessionToggle: (String) -> Unit,
     onLoadEarlierTimeline: () -> Unit,
+    onPowerTrustRequest: () -> Unit,
+    onPowerTrustVerify: (String) -> Unit,
+    onKeepAwake: (Int) -> Unit,
+    onLockPc: () -> Unit,
     onHealthCheck: () -> Unit
 ) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -973,6 +991,13 @@ private fun MainSessionScreen(
             ) {
                 Text("Session tools", color = PrimaryText, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                 ConnectionToolCard(uiState = uiState, onReconnect = onReconnect, onHealthCheck = onHealthCheck)
+                PcControlsPanel(
+                    uiState = uiState,
+                    onPowerTrustRequest = onPowerTrustRequest,
+                    onPowerTrustVerify = onPowerTrustVerify,
+                    onKeepAwake = onKeepAwake,
+                    onLockPc = onLockPc
+                )
                 ApprovalInbox(uiState.pendingApprovals, uiState.selectedSessionId, onApprovalDecision)
                 GitPanel(
                     selectedSession = uiState.selectedSession,
@@ -1241,6 +1266,7 @@ private fun TimelineStream(uiState: RelayUiState, modifier: Modifier = Modifier,
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val expandedOperationGroups = remember(selectedSession?.sessionId) { mutableStateMapOf<String, Boolean>() }
+    val expandedOperationRows = remember(selectedSession?.sessionId) { mutableStateMapOf<String, Boolean>() }
     val displayItems = remember(events) { buildTimelineDisplayItems(events) }
     val hasMoreEarlier = uiState.selectedSessionId?.let { uiState.timelineHasMoreEarlier[it] } != false
 
@@ -1283,9 +1309,10 @@ private fun TimelineStream(uiState: RelayUiState, modifier: Modifier = Modifier,
                         is TimelineDisplayItem.TurnGroup -> TimelineTurnGroup(
                             group = item,
                             expanded = expandedOperationGroups[item.groupId] == true,
-                            onToggle = {
-                                expandedOperationGroups[item.groupId] = expandedOperationGroups[item.groupId] != true
-                            }
+                            expandedRows = expandedOperationRows,
+                            onExpand = { expandedOperationGroups[item.groupId] = true },
+                            onHide = { expandedOperationGroups[item.groupId] = false },
+                            onRowExpand = { eventId -> expandedOperationRows[eventId] = true }
                         )
                     }
                 }
@@ -1357,6 +1384,8 @@ private fun TimelineHistoryControl(loading: Boolean, hasMore: Boolean, onLoadEar
 @Composable
 private fun TimelineBubble(event: TimelineItem) {
     val isUser = event.title.contains("prompt", ignoreCase = true) || event.type.contains("user", ignoreCase = true)
+    val copyText = copyableTimelineText(event)
+    val clipboard = LocalClipboardManager.current
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start) {
         Surface(
             modifier = Modifier.fillMaxWidth(if (isUser) 0.82f else 0.9f),
@@ -1365,7 +1394,23 @@ private fun TimelineBubble(event: TimelineItem) {
             border = if (isUser) null else BorderStroke(1.dp, HairlineDark)
         ) {
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(event.title, color = PrimaryText, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        modifier = Modifier.weight(1f),
+                        text = event.title,
+                        color = PrimaryText,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (copyText != null) {
+                        CopyMessageButton(
+                            label = "Copy",
+                            foreground = if (isUser) PrimaryText.copy(alpha = 0.78f) else SecondaryText,
+                            onCopy = { clipboard.setText(AnnotatedString(copyText)) }
+                        )
+                    }
+                }
                 Text(event.summary, color = if (isUser) PrimaryText.copy(alpha = 0.92f) else SecondaryText, style = MaterialTheme.typography.bodyMedium)
                 Text(
                     text = "${event.type} · ${formatMetaTime(event.createdAt)}",
@@ -1381,13 +1426,15 @@ private fun TimelineBubble(event: TimelineItem) {
 private fun TimelineTurnGroup(
     group: TimelineDisplayItem.TurnGroup,
     expanded: Boolean,
-    onToggle: () -> Unit
+    expandedRows: Map<String, Boolean>,
+    onExpand: () -> Unit,
+    onHide: () -> Unit,
+    onRowExpand: (String) -> Unit
 ) {
     Surface(
         modifier = Modifier
             .fillMaxWidth(0.92f)
-            .clip(RoundedCornerShape(18.dp))
-            .clickable(onClick = onToggle),
+            .clip(RoundedCornerShape(18.dp)),
         shape = RoundedCornerShape(18.dp),
         color = ElevatedBlack,
         border = BorderStroke(1.dp, HairlineDark)
@@ -1404,10 +1451,15 @@ private fun TimelineTurnGroup(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                Text(if (expanded) "Hide" else "Show", color = SecondaryText, style = MaterialTheme.typography.labelMedium)
+                TextButton(onClick = if (expanded) onHide else onExpand) {
+                    Text(if (expanded) "Hide" else "Show", color = SecondaryText, style = MaterialTheme.typography.labelMedium)
+                }
             }
             if (!expanded) {
                 Text(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onExpand),
                     text = compactTurnSummary(group.events),
                     color = SecondaryText,
                     style = MaterialTheme.typography.bodySmall,
@@ -1417,7 +1469,11 @@ private fun TimelineTurnGroup(
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     group.events.forEach { event ->
-                        TimelineOperationRow(event)
+                        TimelineOperationRow(
+                            event = event,
+                            expanded = expandedRows[event.eventId] == true,
+                            onExpand = { onRowExpand(event.eventId) }
+                        )
                     }
                 }
             }
@@ -1426,19 +1482,58 @@ private fun TimelineTurnGroup(
 }
 
 @Composable
-private fun TimelineOperationRow(event: TimelineItem) {
+private fun TimelineOperationRow(event: TimelineItem, expanded: Boolean, onExpand: () -> Unit) {
+    val copyText = copyableTimelineText(event)
+    val clipboard = LocalClipboardManager.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .background(AppBlack.copy(alpha = 0.72f), RoundedCornerShape(12.dp))
+            .clickable(onClick = onExpand)
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        Text(compactOperationTitle(event), color = PrimaryText, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                modifier = Modifier.weight(1f),
+                text = compactOperationTitle(event),
+                color = PrimaryText,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Medium
+            )
+            if (copyText != null) {
+                CopyMessageButton(
+                    label = "Copy",
+                    foreground = SecondaryText,
+                    onCopy = { clipboard.setText(AnnotatedString(copyText)) }
+                )
+            }
+        }
         if (event.summary.isNotBlank()) {
-            Text(event.summary, color = SecondaryText, style = MaterialTheme.typography.bodySmall, maxLines = 4, overflow = TextOverflow.Ellipsis)
+            if (expanded) {
+                Text(event.summary, color = SecondaryText, style = MaterialTheme.typography.bodySmall)
+            } else {
+                Text(event.summary, color = SecondaryText, style = MaterialTheme.typography.bodySmall, maxLines = 4, overflow = TextOverflow.Ellipsis)
+            }
         }
         Text("${event.type} · ${formatMetaTime(event.createdAt)}", color = TertiaryText, style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+@Composable
+private fun CopyMessageButton(label: String, foreground: Color, onCopy: () -> Unit) {
+    var copied by remember { mutableStateOf(false) }
+    TextButton(
+        onClick = {
+            onCopy()
+            copied = true
+        }
+    ) {
+        Text(
+            text = if (copied) "Copied" else label,
+            color = foreground,
+            style = MaterialTheme.typography.labelSmall
+        )
     }
 }
 
@@ -1501,6 +1596,100 @@ private fun ConnectionToolCard(uiState: RelayUiState, onReconnect: () -> Unit, o
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 CompactActionButton(modifier = Modifier.weight(1f), text = "Reconnect", onClick = onReconnect)
                 CompactActionButton(modifier = Modifier.weight(1f), text = "Test", onClick = onHealthCheck)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PcControlsPanel(
+    uiState: RelayUiState,
+    onPowerTrustRequest: () -> Unit,
+    onPowerTrustVerify: (String) -> Unit,
+    onKeepAwake: (Int) -> Unit,
+    onLockPc: () -> Unit
+) {
+    var verificationCode by remember(uiState.pendingPowerChallenge?.challengeId) { mutableStateOf("") }
+    var confirmLock by remember { mutableStateOf(false) }
+    val host = uiState.selectedHost
+    val status = uiState.selectedPowerStatus
+    val trust = uiState.selectedPowerTrust
+    val canRequestTrust = host?.capabilities?.contains("power.trust") == true
+    val canUseControls = trust?.capabilities?.isNotEmpty() == true
+
+    Panel {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            SectionTitle("PC controls")
+            Text(
+                text = pcControlsSummary(host, status, trust),
+                color = MutedText,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (!canRequestTrust && trust == null) {
+                InlineNotice(
+                    text = "Host policy has not enabled power controls yet. Enable it in .relay/host-policy.json on the PC.",
+                    tone = NoticeTone.Warning
+                )
+            }
+            if (trust == null) {
+                CompactActionButton(
+                    modifier = Modifier.fillMaxWidth(),
+                    text = "Enable PC controls",
+                    onClick = onPowerTrustRequest
+                )
+            }
+
+            val challenge = uiState.pendingPowerChallenge
+            if (challenge != null && challenge.hostId == host?.hostId) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    InlineNotice(
+                        text = "Enter the 6-digit code printed by Host Bridge. Expires ${formatMetaTime(challenge.expiresAt)}.",
+                        tone = NoticeTone.Warning
+                    )
+                    DarkTextField(
+                        value = verificationCode,
+                        onValueChange = { value -> verificationCode = value.filter { it.isDigit() }.take(6) },
+                        label = "Verification code"
+                    )
+                    CompactActionButton(
+                        modifier = Modifier.fillMaxWidth(),
+                        text = "Verify controls",
+                        onClick = { onPowerTrustVerify(verificationCode) }
+                    )
+                }
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                CompactActionButton(modifier = Modifier.weight(1f), text = "Keep 30m", onClick = { onKeepAwake(1800) })
+                CompactActionButton(modifier = Modifier.weight(1f), text = "Keep 1h", onClick = { onKeepAwake(3600) })
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                CompactActionButton(
+                    modifier = Modifier.weight(1f),
+                    text = if (confirmLock) "Confirm lock" else "Lock PC",
+                    onClick = {
+                        if (confirmLock) {
+                            onLockPc()
+                            confirmLock = false
+                        } else {
+                            confirmLock = true
+                        }
+                    }
+                )
+                Text(
+                    modifier = Modifier.weight(1f),
+                    text = if (canUseControls) "Trusted" else "Needs verification",
+                    color = if (canUseControls) NoticeTone.Positive.foreground else TertiaryText,
+                    style = MaterialTheme.typography.labelMedium
+                )
+            }
+            if (uiState.lastPowerResult != null) {
+                InlineNotice(
+                    text = "${uiState.lastPowerResult.action}: ${uiState.lastPowerResult.status} ${uiState.lastPowerResult.reason}".trim(),
+                    tone = if (uiState.lastPowerResult.status == "accepted") NoticeTone.Positive else NoticeTone.Critical
+                )
             }
         }
     }
@@ -2847,11 +3036,19 @@ private fun shouldFoldIntoCompletedTurn(event: TimelineItem, completedTurnKeys: 
         return false
     }
 
+    if (isTurnBoundaryEvent(event)) {
+        return timelineWorkKey(event) in completedTurnKeys
+    }
+
     if (isActiveOperation(event)) {
         return false
     }
 
     return timelineWorkKey(event) in completedTurnKeys
+}
+
+private fun isTurnBoundaryEvent(event: TimelineItem): Boolean {
+    return event.type == "turn_started" || event.type == "turn_completed"
 }
 
 private fun isUserPrompt(event: TimelineItem): Boolean {
@@ -2913,6 +3110,14 @@ private fun compactOperationTitle(event: TimelineItem): String {
         "request_resolved" -> "Request"
         else -> event.title.ifBlank { event.type }
     }
+}
+
+private fun copyableTimelineText(event: TimelineItem): String? {
+    if (event.type != "assistant_message" && !isUserPrompt(event)) {
+        return null
+    }
+
+    return event.summary.ifBlank { event.title }.takeIf { it.isNotBlank() }
 }
 
 private fun compactTurnSummary(events: List<TimelineItem>): String {
@@ -3103,6 +3308,27 @@ private fun diagnosticsSummary(uiState: RelayUiState): String {
     val connectedAt = uiState.lastConnectedAt ?: "never"
     val selected = uiState.selectedSession?.projectName ?: "none"
     return "sessions=${uiState.sessions.size}, approvals=${uiState.pendingApprovals.size}, events=${uiState.timeline.size}, selected=$selected, last connected=$connectedAt"
+}
+
+private fun pcControlsSummary(host: HostNode?, status: PowerStatus?, trust: PowerTrust?): String {
+    if (host == null) {
+        return "No host selected."
+    }
+    val state = mutableListOf(host.displayName.ifBlank { host.hostId })
+    state.add(host.status)
+    if (status != null) {
+        state.add(if (status.powerControlEnabled) "policy enabled" else "policy disabled")
+        if (status.keepAwakeActive) {
+            state.add("awake until ${formatMetaTime(status.keepAwakeUntil.orEmpty())}")
+        }
+        if (status.mockMode) {
+            state.add("mock mode")
+        }
+    }
+    if (trust != null) {
+        state.add("trusted until ${formatMetaTime(trust.expiresAt.orEmpty())}")
+    }
+    return state.joinToString(" - ")
 }
 
 private fun formatMetaTime(raw: String): String {

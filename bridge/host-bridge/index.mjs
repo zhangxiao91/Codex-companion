@@ -8,6 +8,7 @@ import {
 import { createCodexAdapter } from './codex-adapter.mjs';
 import { handleGitRequest } from './git-adapter.mjs';
 import { createHostIdentityStore } from './host-identity-store.mjs';
+import { createPowerController } from './power-controller.mjs';
 
 const relayUrl = process.env.RELAY_URL ?? DEFAULT_RELAY_URL;
 const hostIdentityStore = createHostIdentityStore();
@@ -22,6 +23,7 @@ const hostToken = process.env.RELAY_HOST_TOKEN
 const hostId = process.env.HOST_ID ?? 'local-dev-host';
 const displayName = process.env.HOST_NAME ?? 'Local Development Host';
 const bridgeVersion = '0.0.1';
+const powerController = createPowerController(hostId, displayName);
 const adapter = createCodexAdapter(hostId, {
   onTimelineEvent: (event) => {
     if (socket.readyState === WebSocket.OPEN) {
@@ -49,10 +51,12 @@ socket.addEventListener('open', async () => {
     display_name: displayName,
     kind: 'local_pc',
     bridge_version: bridgeVersion,
-    capabilities: ['session.list', 'session.prompt', 'timeline.event', 'git.status', 'git.diff']
+    capabilities: ['session.list', 'session.prompt', 'timeline.event', 'git.status', 'git.diff', ...powerController.capabilities()]
   });
 
   console.log('[bridge] registered host capabilities: session.list, session.prompt, timeline.event, git.status, git.diff');
+  console.log(`[bridge] host policy: ${powerController.policyPath}`);
+  send(MessageType.PowerStatus, powerController.status());
 
   for (const session of adapter.listSessions()) {
     send(MessageType.SessionSnapshot, { session });
@@ -69,12 +73,14 @@ socket.addEventListener('open', async () => {
       host_id: hostId,
       bridge_version: bridgeVersion
     });
+    send(MessageType.PowerStatus, powerController.status());
   }, 5000);
 });
 
 socket.addEventListener('message', async (event) => {
+  let message;
   try {
-    const message = decodeMessage(event.data);
+    message = decodeMessage(event.data);
 
     if (message.type === MessageType.SessionPrompt) {
       const { session_id: sessionId, text } = message.payload;
@@ -143,6 +149,49 @@ socket.addEventListener('message', async (event) => {
       return;
     }
 
+    if (message.type === MessageType.PowerTrustRequest) {
+      const challenge = powerController.createTrustChallenge(
+        message.payload.device_id ?? '',
+        message.payload.device_display_name ?? ''
+      );
+      send(MessageType.PowerTrustChallenge, challenge);
+      return;
+    }
+
+    if (message.type === MessageType.PowerTrustVerify) {
+      const result = powerController.verifyTrustChallenge(
+        message.payload.challenge_id,
+        message.payload.code,
+        message.payload.device_id ?? '',
+        message.payload.device_display_name ?? ''
+      );
+      if (result.ok) {
+        send(MessageType.PowerTrustGranted, result.trust);
+      } else {
+        send(MessageType.PowerResult, {
+          host_id: hostId,
+          device_id: message.payload.device_id ?? '',
+          action: 'power.trust',
+          status: 'rejected',
+          reason: result.reason
+        });
+      }
+      return;
+    }
+
+    if (message.type === MessageType.PowerRequest) {
+      const result = await powerController.handlePowerRequest(message.payload);
+      send(MessageType.PowerResult, {
+        host_id: hostId,
+        device_id: message.payload.device_id ?? '',
+        action: message.payload.action,
+        audit_id: message.payload.audit_id,
+        ...result
+      });
+      send(MessageType.PowerStatus, powerController.status());
+      return;
+    }
+
     if (message.type === MessageType.SessionCreateEphemeral) {
       if (typeof adapter.createEphemeralSession !== 'function') {
         return;
@@ -159,6 +208,15 @@ socket.addEventListener('message', async (event) => {
     }
   } catch (error) {
     console.error(`[bridge] failed to handle message: ${error.message}`);
+    if (message && isPowerMessage(message.type)) {
+      send(MessageType.PowerResult, {
+        host_id: hostId,
+        device_id: message.payload?.device_id ?? '',
+        action: message.payload?.action ?? message.type,
+        status: 'rejected',
+        reason: error.message
+      });
+    }
   }
 });
 
@@ -203,4 +261,10 @@ function authOptions() {
     return { auth: { host_device_token: hostDeviceToken } };
   }
   return hostToken ? { auth: { host_token: hostToken } } : {};
+}
+
+function isPowerMessage(type) {
+  return type === MessageType.PowerTrustRequest
+    || type === MessageType.PowerTrustVerify
+    || type === MessageType.PowerRequest;
 }

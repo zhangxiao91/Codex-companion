@@ -223,7 +223,7 @@ export class AppServerCodexAdapter {
       const activeTurnId = this.activeTurnsByThread.get(sessionId);
 
       if (activeTurnId) {
-        const response = await this.request('turn/steer', {
+        const response = await this.requestWithThreadLoadedRetry(sessionId, 'turn/steer', {
           threadId: sessionId,
           expectedTurnId: activeTurnId,
           input: [
@@ -255,7 +255,7 @@ export class AppServerCodexAdapter {
         });
       }
 
-      const response = await this.request('turn/start', {
+      const response = await this.requestWithThreadLoadedRetry(sessionId, 'turn/start', {
         threadId: sessionId,
         input: [
           {
@@ -313,7 +313,8 @@ export class AppServerCodexAdapter {
   }
 
   async readTimeline(sessionId, options = {}) {
-    const response = await this.request('thread/read', {
+    await this.ensureThreadLoaded(sessionId, { includeTurns: true });
+    const response = await this.requestWithThreadLoadedRetry(sessionId, 'thread/read', {
       threadId: sessionId,
       includeTurns: true
     });
@@ -452,12 +453,25 @@ export class AppServerCodexAdapter {
     });
   }
 
-  async ensureThreadLoaded(sessionId) {
+  async requestWithThreadLoadedRetry(sessionId, method, params) {
+    try {
+      return await this.request(method, params);
+    } catch (error) {
+      if (!isThreadNotLoadedError(error)) {
+        throw error;
+      }
+
+      await this.ensureThreadLoaded(sessionId, { force: true, includeTurns: method === 'thread/read' });
+      return this.request(method, params);
+    }
+  }
+
+  async ensureThreadLoaded(sessionId, options = {}) {
     const loaded = await this.request('thread/loaded/list', {
       limit: 100
     });
 
-    if (loaded.data.includes(sessionId)) {
+    if (!options.force && loaded.data.includes(sessionId)) {
       return;
     }
 
@@ -466,9 +480,23 @@ export class AppServerCodexAdapter {
       approvalPolicy: this.approvalPolicy,
       approvalsReviewer: this.approvalsReviewer,
       sandbox: 'read-only',
-      excludeTurns: true,
+      excludeTurns: options.includeTurns === true ? false : true,
       persistExtendedHistory: false
     });
+
+    await this.waitForThreadLoaded(sessionId);
+  }
+
+  async waitForThreadLoaded(sessionId) {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const loaded = await this.request('thread/loaded/list', {
+        limit: 100
+      });
+      if (loaded.data.includes(sessionId)) {
+        return;
+      }
+      await delay(150);
+    }
   }
 
   updateActiveTurnState(message) {
@@ -521,6 +549,11 @@ function mapThreadStatus(status) {
   }
 
   return 'idle';
+}
+
+function isThreadNotLoadedError(error) {
+  const message = String(error?.message ?? '');
+  return message.includes('thread not loaded');
 }
 
 export function mapAppServerApprovalRequest(message) {

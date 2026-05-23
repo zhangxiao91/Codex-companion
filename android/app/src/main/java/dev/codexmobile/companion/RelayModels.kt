@@ -53,6 +53,43 @@ data class HostNode(
     val kind: String
 )
 
+data class PowerStatus(
+    val hostId: String,
+    val platform: String,
+    val powerControlEnabled: Boolean,
+    val allowKeepAwake: Boolean,
+    val allowLock: Boolean,
+    val keepAwakeActive: Boolean,
+    val keepAwakeUntil: String?,
+    val mockMode: Boolean,
+    val policyPath: String,
+    val checkedAt: String
+)
+
+data class PowerTrustChallenge(
+    val hostId: String,
+    val challengeId: String,
+    val deviceId: String,
+    val expiresAt: String,
+    val message: String
+)
+
+data class PowerTrust(
+    val hostId: String,
+    val deviceId: String,
+    val capabilities: List<String>,
+    val expiresAt: String?
+)
+
+data class PowerResult(
+    val hostId: String,
+    val deviceId: String,
+    val action: String,
+    val status: String,
+    val reason: String,
+    val expiresAt: String?
+)
+
 data class ApprovalItem(
     val approvalId: String,
     val sessionId: String,
@@ -117,6 +154,10 @@ data class RelayUiState(
     val connectionStatus: String = "Disconnected",
     val sessions: List<CodexSession> = emptyList(),
     val hosts: List<HostNode> = emptyList(),
+    val powerStatuses: Map<String, PowerStatus> = emptyMap(),
+    val powerTrusts: Map<String, PowerTrust> = emptyMap(),
+    val pendingPowerChallenge: PowerTrustChallenge? = null,
+    val lastPowerResult: PowerResult? = null,
     val selectedSessionId: String? = null,
     val pinnedSessionIds: Set<String> = emptySet(),
     val timeline: List<TimelineItem> = emptyList(),
@@ -140,6 +181,17 @@ data class RelayUiState(
 
     val selectedGitAudit: List<GitAuditItem>
         get() = selectedSessionId?.let { gitAudit[it] } ?: emptyList()
+
+    val selectedHost: HostNode?
+        get() = selectedSession?.hostId?.let { sessionHostId ->
+            hosts.firstOrNull { it.hostId == sessionHostId }
+        } ?: hosts.firstOrNull { it.status == "online" }
+
+    val selectedPowerStatus: PowerStatus?
+        get() = selectedHost?.hostId?.let { powerStatuses[it] }
+
+    val selectedPowerTrust: PowerTrust?
+        get() = selectedHost?.hostId?.let { powerTrusts[it] }
 
     val activeAuthToken: String
         get() = deviceToken.ifBlank { pairingToken }
