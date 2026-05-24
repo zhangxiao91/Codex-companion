@@ -3590,3 +3590,150 @@ Known notes:
 
 - Sending a new prompt still requires the owning Host Bridge to be online; only session archive visibility and cached timeline replay work offline.
 - `session.subscribe "*" ` replays retained session snapshots, while timeline history should be requested with `session.timeline.request`.
+
+## 2026-05-24: Fix stale session stage derivation
+
+Status: completed.
+
+Changes:
+
+- Fixed Relay session-stage derivation so completed turns now win over stale `editing_files` / `thinking` signals from earlier events.
+- Stage derivation now treats `turn_completed` as the terminal boundary for a turn and only keeps active states open if they are newer than that boundary.
+- Added a regression to `npm run verify:session-stage` covering `turn_started` + `file_changed` + `turn_completed` in that order.
+
+Verification:
+
+```powershell
+node --check relay/service/session-stage.mjs
+node --check tools/verify-session-stage.mjs
+npm run verify:session-stage
+npm run verify:notification-events
+npm run verify:relay-sqlite-persistence
+```
+
+Result:
+
+```text
+[verify] Session stage derivation verified.
+[verify] Relay notification events for approval, completion, needs-input, and host-offline verified.
+[verify] Relay SQLite persistence verified.
+```
+
+Known notes:
+
+- This fixes stage display for completed sessions; separate UI text folding and message-group summaries are handled on the Android side.
+
+## 2026-05-24: Investigate unknown sessions and stuck approvals
+
+Status: completed.
+
+Findings:
+
+- `Unknown session` had multiple sources:
+  - Android marked the WebSocket online before sending `session.subscribe "*"`, so `RelayViewModel.onConnected()` could immediately send timeline requests for locally cached sessions before Relay had replayed current server sessions.
+  - Relay returned user-visible errors for stale timeline requests against sessions no longer known to the current Relay.
+  - Host Bridge Git handling only checked the startup `adapter.listSessions()` cache, which can miss App Server threads not present in the first cached list.
+  - A stale saved `.relay/host-identity.json` token could take precedence over an explicitly supplied `RELAY_HOST_TOKEN` / `RELAY_DEV_TOKEN`, causing Bridge messages to be unauthorized even though the WebSocket connected.
+- `approvals waiting` could stick because Relay did not reconcile `approval_resolved` timeline events back into its in-memory pending approval map. If the direct resolved `approval.request` update was missed or reordered, Android could keep seeing a pending approval.
+
+Changes:
+
+- Android RelayClient now sends `session.subscribe "*"` before notifying ViewModel that the connection is online.
+- Relay now treats cache-only stale timeline requests as empty cache pages and logs non-cache stale timeline requests instead of surfacing noisy `Unknown session` errors to the app.
+- Relay now consumes `approval_resolved` timeline events and broadcasts a resolved `approval.request` update for matching pending approvals.
+- Host Bridge now prefers explicitly supplied host tokens over a previously stored host-device token.
+- Host Bridge Git routing now asks adapters for `findSession(sessionId)` before declaring a Git request unknown.
+- App Server adapter added `findSession(sessionId)`, which refreshes its session list before returning unknown.
+- Added `npm run verify:approval-replay-cleanup`.
+
+Verification:
+
+```powershell
+node --check relay/service/server.mjs
+node --check bridge/host-bridge/index.mjs
+node --check bridge/host-bridge/codex-adapter.mjs
+node --check tools/verify-approval-replay-cleanup.mjs
+npm run verify:approval-replay-cleanup
+npm run verify:approval-flow
+npm run verify:relay-offline-host-sessions
+npm run verify:notification-events
+npm run verify:relay-sqlite-persistence
+cd android
+.\gradlew.bat :app:assembleDebug --no-daemon
+```
+
+Result:
+
+```text
+[verify] Approval replay cleanup verified.
+[verify] Approval request/decision flow verified.
+[verify] Relay offline host sessions remain visible and replayable.
+[verify] Relay notification events for approval, completion, needs-input, and host-offline verified.
+[verify] Relay SQLite persistence verified.
+BUILD SUCCESSFUL
+```
+
+Known notes:
+
+- Relay approvals are still in-memory for the full approval object. This fix makes resolved events converge pending UI state, but a later pass should persist active approvals in SQLite as first-class state.
+- Host Bridge `findSession()` refreshes the App Server list, but true arbitrary historical thread lookup may still need a direct App Server read/resume path if a thread is outside the list API results.
+
+## 2026-05-24: Full assistant/user text transport
+
+Completed:
+
+- Host Bridge now includes `payload.full_text` for mapped `user_prompt` and `assistant_message` timeline events.
+- Existing short `summary` fields remain unchanged for compact previews and backward compatibility.
+- Android timeline bubbles now prefer `payload.full_text` over `summary` when rendering user/assistant messages.
+- Android expanded turn rows also prefer `payload.full_text`, so completed-turn expansion can show the full assistant/user text when the event was produced by the updated bridge.
+- Copy actions for assistant/user messages now copy the full text when available.
+
+Verification:
+
+```powershell
+npm run verify:host-timeline-pagination
+cd android
+.\gradlew.bat :app:assembleDebug
+```
+
+Result:
+
+```text
+[verify] Host timeline cursor pagination verified.
+BUILD SUCCESSFUL
+```
+
+Known notes:
+
+- Existing cached timeline events created before this change only have truncated `summary`; they cannot recover missing text unless reloaded from the Codex App Server and remapped.
+- Plan, reasoning, diff, and command-output summaries are still intentionally compact. Full-fidelity handling for those should be designed separately to avoid flooding the mobile timeline.
+
+## 2026-05-24: Expanded message fidelity and per-session Android timeline cache
+
+Completed:
+
+- Expanded completed-turn rows now keep `assistant_message` and `user_prompt` text fully visible by default.
+- Command, diff, plan, reasoning, and other operational rows still keep the tap-to-expand behavior, preserving the compact inspection flow.
+- Android in-memory timeline trimming now keeps up to 2000 events per session instead of 2000 events globally.
+- Android Room timeline loading and trimming now also keep up to 2000 events per session, preventing busy sessions from evicting unrelated conversations.
+- Added `@RewriteQueriesToDropUnusedColumns` to the per-session Room timeline query to avoid returning the temporary ranking column.
+
+Verification:
+
+```powershell
+npm run verify:host-timeline-pagination
+cd android
+.\gradlew.bat :app:assembleDebug
+```
+
+Result:
+
+```text
+[verify] Host timeline cursor pagination verified.
+BUILD SUCCESSFUL
+```
+
+Known notes:
+
+- Room still warns that schema export is not configured. This is pre-existing project hygiene, not a runtime failure.
+- Legacy `RelaySettings` JSON timeline helpers still have a global 2000-event cap, but the active Room cache path now uses per-session retention.

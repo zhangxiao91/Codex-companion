@@ -225,7 +225,11 @@ function mapThreadItemToTimelineEvent(threadId, turn, item) {
         'User prompt',
         summarizeUserInput(item.content),
         turn.startedAt,
-        { ...basePayload, content: item.content }
+        {
+          ...basePayload,
+          content: item.content,
+          full_text: renderUserInputText(item.content)
+        }
       );
     case 'agentMessage':
       return createThreadTimelineEvent(
@@ -234,7 +238,11 @@ function mapThreadItemToTimelineEvent(threadId, turn, item) {
         'Assistant message',
         truncate(item.text),
         turn.completedAt ?? turn.startedAt,
-        { ...basePayload, phase: item.phase }
+        {
+          ...basePayload,
+          phase: item.phase,
+          full_text: typeof item.text === 'string' ? item.text : ''
+        }
       );
     case 'plan':
       return createThreadTimelineEvent(
@@ -350,6 +358,24 @@ function summarizeUserInput(content) {
 
     return `[${item.type}]`;
   }).join('\n'));
+}
+
+function renderUserInputText(content) {
+  return (content ?? []).map((item) => {
+    if (item.type === 'text') {
+      return item.text;
+    }
+
+    if (item.path) {
+      return `[${item.type}: ${item.path}]`;
+    }
+
+    if (item.url) {
+      return `[${item.type}: ${item.url}]`;
+    }
+
+    return `[${item.type}]`;
+  }).join('\n');
 }
 
 function summarizePlan(params) {

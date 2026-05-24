@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 export const DEFAULT_RELAY_URL = process.env.RELAY_URL ?? 'ws://127.0.0.1:8787';
 
 export const MessageType = Object.freeze({
+  Ack: 'message.ack',
   Error: 'error',
   HostRegister: 'host.register',
   HostTrusted: 'host.trusted',

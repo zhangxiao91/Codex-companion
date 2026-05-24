@@ -21,9 +21,20 @@ export function deriveSessionStage(session, timelineEvents = [], approvals = [],
     .filter((snapshot) => snapshot.session_id === session.session_id)
     .sort((a, b) => parseIsoMillis(b.updated_at) - parseIsoMillis(a.updated_at))[0];
   const latestEvent = recentEvents[0];
+  const completedTurns = recentEvents.filter((event) => event.type === 'turn_completed');
+  const latestCompletedTurn = completedTurns[0];
+  const latestCompletedAt = parseIsoMillis(latestCompletedTurn?.created_at);
+  const completedTurnTimes = new Map();
+  for (const event of completedTurns) {
+    const turnId = eventTurnId(event);
+    if (!turnId) {
+      continue;
+    }
+    completedTurnTimes.set(turnId, Math.max(completedTurnTimes.get(turnId) ?? 0, parseIsoMillis(event.created_at)));
+  }
   const failedEvent = recentEvents.find((event) => isFailureEvent(event));
 
-  if (failedEvent || latestGitSnapshot?.result?.ok === false || latestGitSnapshot?.error) {
+  if ((failedEvent && isEventOpen(failedEvent, completedTurnTimes, latestCompletedAt)) || latestGitSnapshot?.result?.ok === false || latestGitSnapshot?.error) {
     return createSessionStage(
       'tests_failed',
       'Needs attention',
@@ -33,8 +44,7 @@ export function deriveSessionStage(session, timelineEvents = [], approvals = [],
     );
   }
 
-  const latestCompletedTurn = latestEvent?.type === 'turn_completed';
-  const runningCommand = recentEvents.find((event) => event.type === 'command_execution' && isActiveTimelineEvent(event));
+  const runningCommand = recentEvents.find((event) => event.type === 'command_execution' && isActiveTimelineEvent(event) && isEventOpen(event, completedTurnTimes, latestCompletedAt));
   if (runningCommand) {
     return createSessionStage(
       'running_command',
@@ -45,17 +55,7 @@ export function deriveSessionStage(session, timelineEvents = [], approvals = [],
     );
   }
 
-  if (session.status === 'completed' || latestCompletedTurn) {
-    return createSessionStage(
-      'completed',
-      'Completed',
-      cleanStageSummary(latestEvent?.summary || session.summary || 'Codex has completed the latest turn.'),
-      'success',
-      latestEvent?.created_at ?? session.updated_at ?? now
-    );
-  }
-
-  const editingFiles = recentEvents.find((event) => event.type === 'file_changed' || event.type === 'diff_update');
+  const editingFiles = recentEvents.find((event) => (event.type === 'file_changed' || event.type === 'diff_update') && isEventOpen(event, completedTurnTimes, latestCompletedAt));
   if (editingFiles) {
     return createSessionStage(
       'editing_files',
@@ -66,14 +66,24 @@ export function deriveSessionStage(session, timelineEvents = [], approvals = [],
     );
   }
 
-  const thinking = recentEvents.find((event) => event.type === 'plan_update' || event.type === 'reasoning_summary' || event.type === 'assistant_delta' || event.type === 'turn_started');
-  if (thinking && !recentEvents.some((event) => event.type === 'turn_completed' && parseIsoMillis(event.created_at) >= parseIsoMillis(thinking.created_at))) {
+  const thinking = recentEvents.find((event) => isThinkingEvent(event) && isEventOpen(event, completedTurnTimes, latestCompletedAt));
+  if (thinking) {
     return createSessionStage(
       'thinking',
       'Thinking',
       cleanStageSummary(thinking.summary || 'Codex is reasoning through the task.'),
       'active',
       thinking.created_at ?? now
+    );
+  }
+
+  if (session.status === 'completed' || latestCompletedTurn) {
+    return createSessionStage(
+      'completed',
+      'Completed',
+      cleanStageSummary(latestCompletedTurn?.summary || session.summary || 'Codex has completed the latest turn.'),
+      'success',
+      latestCompletedTurn?.created_at ?? session.updated_at ?? now
     );
   }
 
@@ -113,6 +123,30 @@ function isActiveTimelineEvent(event) {
     || text.includes('pending')
     || text.includes('in_progress')
     || text.includes('in-progress');
+}
+
+function isThinkingEvent(event) {
+  return event.type === 'plan_update'
+    || event.type === 'reasoning_summary'
+    || event.type === 'assistant_delta'
+    || event.type === 'turn_started';
+}
+
+function isEventOpen(event, completedTurnTimes, latestCompletedAt) {
+  const eventTime = parseIsoMillis(event.created_at);
+  const turnId = eventTurnId(event);
+  if (turnId && completedTurnTimes.has(turnId)) {
+    return eventTime > completedTurnTimes.get(turnId);
+  }
+  if (!turnId && latestCompletedAt > 0) {
+    return eventTime > latestCompletedAt;
+  }
+  return true;
+}
+
+function eventTurnId(event) {
+  const payload = event?.payload && typeof event.payload === 'object' ? event.payload : {};
+  return payload.turn_id ?? payload.turnId ?? event.turn_id ?? event.turnId ?? '';
 }
 
 function isFailureEvent(event) {

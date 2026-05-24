@@ -39,7 +39,11 @@ data class TimelineItem(
     val title: String,
     val summary: String,
     val createdAt: String,
-    val cursor: String?
+    val cursor: String?,
+    val payloadJson: String = "",
+    val turnId: String? = null,
+    val itemId: String? = null,
+    val clientRequestId: String? = null
 )
 
 data class NotificationEvent(
@@ -206,6 +210,8 @@ data class RelayUiState(
     val timelineHasMoreEarlier: Map<String, Boolean> = emptyMap(),
     val promptQueues: Map<String, PromptQueueState> = emptyMap(),
     val notifications: List<NotificationEvent> = emptyList(),
+    val relayRequestState: RelayRequestState = RelayRequestState(),
+    val relayRequestHistory: List<RelayRequestState> = emptyList(),
     val lastConnectedAt: String? = null,
     val lastHealthCheck: String? = null,
     val lastError: String? = null
@@ -239,3 +245,12 @@ data class RelayUiState(
     val activeAuthToken: String
         get() = deviceToken.ifBlank { pairingToken }
 }
+
+data class RelayRequestState(
+    val type: String = "",
+    val label: String = "",
+    val phase: String = "",
+    val messageId: String? = null,
+    val attempts: Int = 0,
+    val updatedAt: String? = null
+)

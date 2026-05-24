@@ -23,11 +23,14 @@ class RelayViewModel(
             selectedSessionId = cacheStore.selectedSessionId(),
             pinnedSessionIds = cacheStore.pinnedSessionIds(),
             timeline = cacheStore.timeline(),
-            promptQueues = cacheStore.promptQueues()
+            promptQueues = cacheStore.promptQueues(),
+            relayRequestState = cacheStore.relayRequestState(),
+            relayRequestHistory = cacheStore.relayRequestHistory()
         )
     )
     val uiState: StateFlow<RelayUiState> = _uiState
     private var pendingNewChatHostId: String? = null
+    private val confirmedSessionIds = mutableSetOf<String>()
 
     fun connect() {
         _uiState.update { it.copy(connectionStatus = "Connecting", lastError = null) }
@@ -156,8 +159,10 @@ class RelayViewModel(
             ?.toString()
         _uiState.update { it.copy(selectedSessionId = sessionId) }
         cacheStore.saveSelectedSessionId(sessionId)
-        relayClient.requestTimeline(sessionId, afterCursor)
-        requestGitAudit()
+        if (sessionId in confirmedSessionIds) {
+            relayClient.requestTimeline(sessionId, afterCursor)
+            requestGitAudit()
+        }
     }
 
     fun togglePinnedSession(sessionId: String) {
@@ -187,6 +192,10 @@ class RelayViewModel(
             _uiState.update { it.copy(lastError = "Select a session before sending a prompt") }
             return
         }
+        if (sessionId !in confirmedSessionIds) {
+            _uiState.update { it.copy(lastError = "Session is still syncing") }
+            return
+        }
         if (draft.text.isBlank() && draft.attachments.isEmpty()) {
             _uiState.update { it.copy(lastError = "Prompt cannot be empty") }
             return
@@ -195,14 +204,20 @@ class RelayViewModel(
             _uiState.update { it.copy(lastError = "Goal objective cannot be empty") }
             return
         }
-        _uiState.update { it.copy(lastHealthCheck = "Prompt sent to Codex", lastError = null) }
-        relayClient.sendPrompt(sessionId, draft.copy(text = draft.text.trim()))
+        val sent = relayClient.sendPrompt(sessionId, draft.copy(text = draft.text.trim()))
+        if (sent) {
+            _uiState.update { it.copy(lastHealthCheck = "Prompt sent to Codex", lastError = null) }
+        }
     }
 
     fun editPrompt(draft: PromptDraft) {
         val sessionId = _uiState.value.selectedSessionId
         if (sessionId == null) {
             _uiState.update { it.copy(lastError = "Select a session before editing a prompt") }
+            return
+        }
+        if (sessionId !in confirmedSessionIds) {
+            _uiState.update { it.copy(lastError = "Session is still syncing") }
             return
         }
         if (draft.editingBaseEventId.isNullOrBlank()) {
@@ -217,14 +232,20 @@ class RelayViewModel(
             _uiState.update { it.copy(lastError = "Goal objective cannot be empty") }
             return
         }
-        _uiState.update { it.copy(lastHealthCheck = "Edited prompt sent to Codex", lastError = null) }
-        relayClient.editPrompt(sessionId, draft.copy(text = draft.text.trim()))
+        val sent = relayClient.editPrompt(sessionId, draft.copy(text = draft.text.trim()))
+        if (sent) {
+            _uiState.update { it.copy(lastHealthCheck = "Edited prompt sent to Codex", lastError = null) }
+        }
     }
 
     fun queuePrompt(text: String) {
         val sessionId = _uiState.value.selectedSessionId
         if (sessionId == null) {
             _uiState.update { it.copy(lastError = "Select a session before queueing a prompt") }
+            return
+        }
+        if (sessionId !in confirmedSessionIds) {
+            _uiState.update { it.copy(lastError = "Session is still syncing") }
             return
         }
         val queue = _uiState.value.promptQueues[sessionId]
@@ -236,8 +257,10 @@ class RelayViewModel(
             _uiState.update { it.copy(lastError = "Queued prompt cannot be empty") }
             return
         }
-        _uiState.update { it.copy(lastHealthCheck = "Prompt queued", lastError = null) }
-        relayClient.queuePrompt(sessionId, text.trim())
+        val sent = relayClient.queuePrompt(sessionId, text.trim())
+        if (sent) {
+            _uiState.update { it.copy(lastHealthCheck = "Prompt queued", lastError = null) }
+        }
     }
 
     fun interruptTurn() {
@@ -246,8 +269,14 @@ class RelayViewModel(
             _uiState.update { it.copy(lastError = "Select a session before pausing Codex") }
             return
         }
-        _uiState.update { it.copy(lastHealthCheck = "Pause requested", lastError = null) }
-        relayClient.interruptTurn(sessionId)
+        if (sessionId !in confirmedSessionIds) {
+            _uiState.update { it.copy(lastError = "Session is still syncing") }
+            return
+        }
+        val sent = relayClient.interruptTurn(sessionId)
+        if (sent) {
+            _uiState.update { it.copy(lastHealthCheck = "Pause requested", lastError = null) }
+        }
     }
 
     fun createNewChat() {
@@ -265,13 +294,21 @@ class RelayViewModel(
         }
 
         pendingNewChatHostId = hostId
-        _uiState.update { it.copy(lastError = null, lastHealthCheck = "Creating new chat on $hostId") }
-        relayClient.createNewChat(hostId)
+        val sent = relayClient.createNewChat(hostId)
+        if (sent) {
+            _uiState.update { it.copy(lastError = null, lastHealthCheck = "Creating new chat on $hostId") }
+        } else {
+            pendingNewChatHostId = null
+        }
     }
 
     fun loadEarlierTimeline() {
         val state = _uiState.value
         val sessionId = state.selectedSessionId ?: return
+        if (sessionId !in confirmedSessionIds) {
+            _uiState.update { it.copy(lastError = "Session is still syncing") }
+            return
+        }
         if (state.timelineLoadingEarlier) {
             return
         }
@@ -285,14 +322,16 @@ class RelayViewModel(
             return
         }
 
-        _uiState.update { it.copy(timelineLoadingEarlier = true, lastError = null) }
-        relayClient.requestTimeline(
+        val sent = relayClient.requestTimeline(
             sessionId = sessionId,
             beforeCursor = beforeCursor,
             limit = TIMELINE_PAGE_SIZE,
             cacheOnly = false,
             page = true
         )
+        if (sent) {
+            _uiState.update { it.copy(timelineLoadingEarlier = true, lastError = null) }
+        }
     }
 
     fun requestGitStatus() {
@@ -327,8 +366,10 @@ class RelayViewModel(
             _uiState.update { it.copy(lastError = "No online host is available for PC controls") }
             return
         }
-        _uiState.update { it.copy(lastHealthCheck = "Requesting PC control verification", lastError = null) }
-        relayClient.requestPowerTrust(host.hostId)
+        val sent = relayClient.requestPowerTrust(host.hostId)
+        if (sent) {
+            _uiState.update { it.copy(lastHealthCheck = "Requesting PC control verification", lastError = null) }
+        }
     }
 
     fun verifyPowerTrust(code: String) {
@@ -341,8 +382,10 @@ class RelayViewModel(
             _uiState.update { it.copy(lastError = "Verification code is required") }
             return
         }
-        _uiState.update { it.copy(lastHealthCheck = "Verifying PC control code", lastError = null) }
-        relayClient.verifyPowerTrust(challenge.hostId, challenge.challengeId, code.trim())
+        val sent = relayClient.verifyPowerTrust(challenge.hostId, challenge.challengeId, code.trim())
+        if (sent) {
+            _uiState.update { it.copy(lastHealthCheck = "Verifying PC control code", lastError = null) }
+        }
     }
 
     fun requestKeepAwake(durationSeconds: Int) {
@@ -355,6 +398,9 @@ class RelayViewModel(
 
     fun requestGitAudit() {
         val sessionId = _uiState.value.selectedSessionId ?: return
+        if (sessionId !in confirmedSessionIds) {
+            return
+        }
         relayClient.requestGitAudit(
             _uiState.value.relayUrl,
             _uiState.value.activeAuthToken,
@@ -363,19 +409,22 @@ class RelayViewModel(
     }
 
     fun decideApproval(approvalId: String, decision: String) {
-        _uiState.update { it.copy(lastHealthCheck = "Approval decision sent", lastError = null) }
-        relayClient.sendApprovalDecision(approvalId, decision)
+        val sent = relayClient.sendApprovalDecision(approvalId, decision)
+        if (sent) {
+            _uiState.update { it.copy(lastHealthCheck = "Approval decision sent", lastError = null) }
+        }
     }
 
     override fun onConnected() {
+        confirmedSessionIds.clear()
         _uiState.update {
             it.copy(
                 connectionStatus = "Online",
                 lastConnectedAt = Instant.now().toString(),
+                approvals = emptyList(),
                 lastError = null
             )
         }
-        syncAllKnownSessions()
     }
 
     override fun onDisconnected(reason: String) {
@@ -393,6 +442,7 @@ class RelayViewModel(
     }
 
     override fun onSessionSnapshot(session: CodexSession) {
+        confirmedSessionIds.add(session.sessionId)
         val shouldSelectNewChat = pendingNewChatHostId == session.hostId
         _uiState.update { state ->
             val sessions = listOf(session) + state.sessions.filter { it.sessionId != session.sessionId }
@@ -520,6 +570,16 @@ class RelayViewModel(
         }
     }
 
+    override fun onRelayRequestState(state: RelayRequestState) {
+        cacheStore.saveRelayRequestState(state)
+        _uiState.update { current ->
+            val history = (listOf(state) + current.relayRequestHistory.filterNot { sameRelayRequest(it, state) })
+                .sortedByDescending { parseIsoMillis(it.updatedAt.orEmpty()) }
+                .take(20)
+            current.copy(relayRequestState = state, relayRequestHistory = history)
+        }
+    }
+
     override fun onHealthCheck(summary: String) {
         _uiState.update { it.copy(lastHealthCheck = summary, lastError = null) }
     }
@@ -551,7 +611,7 @@ class RelayViewModel(
     }
 
     private companion object {
-        const val MAX_TIMELINE_ITEMS = 2000
+        const val MAX_TIMELINE_ITEMS_PER_SESSION = 2000
         const val MAX_APPROVAL_ITEMS = 50
         const val MAX_NOTIFICATION_ITEMS = 200
         const val TIMELINE_PAGE_SIZE = 80
@@ -592,13 +652,19 @@ class RelayViewModel(
         ?.toString()
 
     private fun syncSession(sessionId: String) {
+        if (sessionId !in confirmedSessionIds) {
+            return
+        }
         val latestCursor = latestCursorFor(sessionId) ?: cacheStore.syncState(sessionId)?.latestCursor
         relayClient.requestTimeline(sessionId, latestCursor)
     }
 
     private fun syncAllKnownSessions() {
-        _uiState.value.sessions.forEach { session ->
-            syncSession(session.sessionId)
+        val confirmed = confirmedSessionIds.toSet()
+        _uiState.value.sessions
+            .filter { it.sessionId in confirmed }
+            .forEach { session ->
+                syncSession(session.sessionId)
         }
     }
 
@@ -623,7 +689,11 @@ class RelayViewModel(
         return (incoming + current.filter { it.eventId !in incomingIds })
             .sortedWith(compareByDescending<TimelineItem> { it.cursor?.toLongOrNull() ?: Long.MIN_VALUE }
             .thenByDescending { it.createdAt })
-            .take(MAX_TIMELINE_ITEMS)
+            .groupBy { it.sessionId }
+            .values
+            .flatMap { it.take(MAX_TIMELINE_ITEMS_PER_SESSION) }
+            .sortedWith(compareByDescending<TimelineItem> { it.cursor?.toLongOrNull() ?: Long.MIN_VALUE }
+            .thenByDescending { it.createdAt })
     }
 
     private fun updatePromptQueueState(current: Map<String, PromptQueueState>, event: TimelineItem): Map<String, PromptQueueState> {
@@ -677,19 +747,25 @@ class RelayViewModel(
             _uiState.update { it.copy(lastError = "Select a session before using Git tools") }
             return
         }
-        _uiState.update {
-            it.copy(
-                lastHealthCheck = when (action) {
-                    "status" -> "Requesting Git status"
-                    "diff" -> if (filePath.isNullOrBlank()) "Requesting Git diff" else "Requesting file diff"
-                    "commit" -> "Sending commit request"
-                    "push" -> "Sending push request"
-                    else -> "Sending Git request"
-                },
-                lastError = null
-            )
+        if (sessionId !in confirmedSessionIds) {
+            _uiState.update { it.copy(lastError = "Session is still syncing") }
+            return
         }
-        relayClient.requestGit(sessionId, action, filePath, message, commitStrategy)
+        val sent = relayClient.requestGit(sessionId, action, filePath, message, commitStrategy)
+        if (sent) {
+            _uiState.update {
+                it.copy(
+                    lastHealthCheck = when (action) {
+                        "status" -> "Requesting Git status"
+                        "diff" -> if (filePath.isNullOrBlank()) "Requesting Git diff" else "Requesting file diff"
+                        "commit" -> "Sending commit request"
+                        "push" -> "Sending push request"
+                        else -> "Sending Git request"
+                    },
+                    lastError = null
+                )
+            }
+        }
     }
 
     private fun requestPower(action: String, durationSeconds: Int?) {
@@ -705,10 +781,18 @@ class RelayViewModel(
             _uiState.update { it.copy(lastError = "Enable PC controls before using ${action.replace('_', ' ')}") }
             return
         }
-        _uiState.update { it.copy(lastHealthCheck = "Sending ${action.replace('_', ' ')} request", lastError = null) }
-        relayClient.requestPower(host.hostId, action, durationSeconds)
+        val sent = relayClient.requestPower(host.hostId, action, durationSeconds)
+        if (sent) {
+            _uiState.update { it.copy(lastHealthCheck = "Sending ${action.replace('_', ' ')} request", lastError = null) }
+        }
     }
 
     private fun parseIsoMillis(raw: String): Long =
         runCatching { Instant.parse(raw).toEpochMilli() }.getOrDefault(0L)
+
+    private fun sameRelayRequest(left: RelayRequestState, right: RelayRequestState): Boolean {
+        val leftKey = left.messageId ?: "${left.type}:${left.updatedAt.orEmpty()}"
+        val rightKey = right.messageId ?: "${right.type}:${right.updatedAt.orEmpty()}"
+        return leftKey == rightKey
+    }
 }

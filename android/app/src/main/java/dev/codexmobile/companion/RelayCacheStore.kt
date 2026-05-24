@@ -8,6 +8,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
+import androidx.room.RewriteQueriesToDropUnusedColumns
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import org.json.JSONArray
@@ -62,11 +63,11 @@ class RelayCacheStore(context: Context) {
         dao.clearSessions()
     }
 
-    fun timeline(): List<TimelineItem> = dao.timeline(MAX_TIMELINE_ITEMS).mapNotNull { it.toModel() }
+    fun timeline(): List<TimelineItem> = dao.timeline(MAX_TIMELINE_ITEMS_PER_SESSION).mapNotNull { it.toModel() }
 
     fun saveTimeline(timeline: List<TimelineItem>) {
         dao.upsertTimeline(timeline.map { CachedTimelineItem.fromModel(it) })
-        dao.trimTimeline(MAX_TIMELINE_ITEMS)
+        dao.trimTimeline(MAX_TIMELINE_ITEMS_PER_SESSION)
         updateSyncStateFromTimeline(timeline)
     }
 
@@ -90,6 +91,88 @@ class RelayCacheStore(context: Context) {
         dao.clearPromptQueues()
         dao.upsertPromptQueues(queues.values.map { CachedPromptQueue.fromModel(it) })
     }
+
+    fun relayRequestState(): RelayRequestState {
+        val raw = dao.appState(APP_STATE_RELAY_REQUEST_STATE)?.value.orEmpty()
+        return runCatching {
+            if (raw.isBlank()) {
+                RelayRequestState()
+            } else {
+                val json = JSONObject(raw)
+                relayRequestStateFromJson(json)
+            }
+        }.getOrDefault(RelayRequestState())
+    }
+
+    fun relayRequestHistory(): List<RelayRequestState> {
+        val raw = dao.appState(APP_STATE_RELAY_REQUEST_HISTORY)?.value.orEmpty()
+        return runCatching {
+            if (raw.isBlank()) {
+                emptyList()
+            } else {
+                val array = JSONArray(raw)
+                List(array.length()) { index ->
+                    relayRequestStateFromJson(array.getJSONObject(index))
+                }
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    fun saveRelayRequestState(state: RelayRequestState) {
+        saveAppState(
+            APP_STATE_RELAY_REQUEST_STATE,
+            relayRequestStateToJson(state).toString()
+        )
+        saveRelayRequestHistory(updateRelayRequestHistory(state))
+    }
+
+    fun clearRelayRequestState() {
+        dao.upsertAppState(CachedAppState(APP_STATE_RELAY_REQUEST_STATE, ""))
+    }
+
+    private fun updateRelayRequestHistory(state: RelayRequestState): List<RelayRequestState> {
+        if (state.phase.isBlank()) {
+            return relayRequestHistory()
+        }
+        val key = state.messageId ?: "${state.type}:${state.updatedAt.orEmpty()}"
+        return (listOf(state) + relayRequestHistory().filterNot { existing ->
+            (existing.messageId ?: "${existing.type}:${existing.updatedAt.orEmpty()}") == key
+        })
+            .sortedByDescending { parseIsoMillis(it.updatedAt) }
+            .take(MAX_RELAY_REQUEST_HISTORY)
+    }
+
+    private fun saveRelayRequestHistory(history: List<RelayRequestState>) {
+        val array = JSONArray()
+        history.forEach { array.put(relayRequestStateToJson(it)) }
+        saveAppState(APP_STATE_RELAY_REQUEST_HISTORY, array.toString())
+    }
+
+    private fun relayRequestStateFromJson(json: JSONObject): RelayRequestState {
+        val phase = json.optString("phase", "")
+        val restoredPhase = if (phase == "waiting_ack" || phase == "retrying") {
+            "failed"
+        } else {
+            phase
+        }
+        return RelayRequestState(
+            type = json.optString("type", ""),
+            label = json.optString("label", ""),
+            phase = restoredPhase,
+            messageId = json.optString("message_id", "").takeIf { it.isNotBlank() },
+            attempts = json.optInt("attempts", 0),
+            updatedAt = json.optString("updated_at", "").takeIf { it.isNotBlank() }
+        )
+    }
+
+    private fun relayRequestStateToJson(state: RelayRequestState): JSONObject =
+        JSONObject()
+            .put("type", state.type)
+            .put("label", state.label)
+            .put("phase", state.phase)
+            .put("message_id", state.messageId ?: "")
+            .put("attempts", state.attempts)
+            .put("updated_at", state.updatedAt ?: "")
 
     fun markNotificationSeen(key: String, kind: String): Boolean {
         val existing = dao.notification(key)
@@ -130,10 +213,16 @@ class RelayCacheStore(context: Context) {
         }
     }
 
+    private fun parseIsoMillis(raw: String?): Long =
+        runCatching { java.time.Instant.parse(raw.orEmpty()).toEpochMilli() }.getOrDefault(0L)
+
     companion object {
-        const val MAX_TIMELINE_ITEMS = 2000
+        const val MAX_TIMELINE_ITEMS_PER_SESSION = 2000
+        const val MAX_RELAY_REQUEST_HISTORY = 20
         const val APP_STATE_SELECTED_SESSION = "selected_session_id"
         const val APP_STATE_PINNED_SESSIONS = "pinned_session_ids"
+        const val APP_STATE_RELAY_REQUEST_STATE = "relay_request_state"
+        const val APP_STATE_RELAY_REQUEST_HISTORY = "relay_request_history"
     }
 }
 
@@ -172,14 +261,33 @@ interface RelayCacheDao {
     @Query("DELETE FROM cached_sessions")
     fun clearSessions()
 
-    @Query("SELECT * FROM cached_timeline ORDER BY cursorValue DESC, createdAt DESC LIMIT :limit")
-    fun timeline(limit: Int): List<CachedTimelineItem>
+    @Query("""
+        SELECT *
+        FROM (
+            SELECT *, ROW_NUMBER() OVER (PARTITION BY sessionId ORDER BY cursorValue DESC, createdAt DESC) AS rn
+            FROM cached_timeline
+        )
+        WHERE rn <= :limitPerSession
+        ORDER BY cursorValue DESC, createdAt DESC
+    """)
+    @RewriteQueriesToDropUnusedColumns
+    fun timeline(limitPerSession: Int): List<CachedTimelineItem>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     fun upsertTimeline(items: List<CachedTimelineItem>)
 
-    @Query("DELETE FROM cached_timeline WHERE eventId NOT IN (SELECT eventId FROM cached_timeline ORDER BY cursorValue DESC, createdAt DESC LIMIT :limit)")
-    fun trimTimeline(limit: Int)
+    @Query("""
+        DELETE FROM cached_timeline
+        WHERE eventId IN (
+            SELECT eventId
+            FROM (
+                SELECT eventId, ROW_NUMBER() OVER (PARTITION BY sessionId ORDER BY cursorValue DESC, createdAt DESC) AS rn
+                FROM cached_timeline
+            )
+            WHERE rn > :limitPerSession
+        )
+    """)
+    fun trimTimeline(limitPerSession: Int)
 
     @Query("DELETE FROM cached_timeline")
     fun clearTimeline()
@@ -284,15 +392,27 @@ data class CachedTimelineItem(
     val cursorValue: Long,
     val payloadJson: String
 ) {
-    fun toModel(): TimelineItem = TimelineItem(
-        eventId = eventId,
-        sessionId = sessionId,
-        type = type,
-        title = title,
-        summary = summary,
-        createdAt = createdAt,
-        cursor = cursor
-    )
+    fun toModel(): TimelineItem {
+        val payload = payloadJson.takeIf { it.isNotBlank() }?.let {
+            runCatching { JSONObject(it) }.getOrNull()
+        }
+        return TimelineItem(
+            eventId = eventId,
+            sessionId = sessionId,
+            type = type,
+            title = title,
+            summary = summary,
+            createdAt = createdAt,
+            cursor = cursor,
+            payloadJson = payloadJson,
+            turnId = firstNonBlank(
+                payload?.optString("turn_id", "").orEmpty(),
+                payload?.optString("active_turn_id", "").orEmpty()
+            ),
+            itemId = payload?.optString("item_id", "")?.takeIf { it.isNotBlank() },
+            clientRequestId = payload?.optString("client_request_id", "")?.takeIf { it.isNotBlank() }
+        )
+    }
 
     companion object {
         fun fromModel(event: TimelineItem) = CachedTimelineItem(
@@ -304,16 +424,17 @@ data class CachedTimelineItem(
             createdAt = event.createdAt,
             cursor = event.cursor,
             cursorValue = event.cursor?.toLongOrNull() ?: 0L,
-            payloadJson = JSONObject()
-                .put("event_id", event.eventId)
-                .put("session_id", event.sessionId)
-                .put("type", event.type)
-                .put("title", event.title)
-                .put("summary", event.summary)
-                .put("created_at", event.createdAt)
-                .put("cursor", event.cursor ?: "")
-                .toString()
+            payloadJson = event.payloadJson.ifBlank {
+                JSONObject()
+                    .put("turn_id", event.turnId ?: "")
+                    .put("item_id", event.itemId ?: "")
+                    .put("client_request_id", event.clientRequestId ?: "")
+                    .toString()
+            }
         )
+
+        private fun firstNonBlank(vararg values: String): String? =
+            values.firstOrNull { it.isNotBlank() }
     }
 }
 

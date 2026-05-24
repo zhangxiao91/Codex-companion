@@ -10,6 +10,8 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
 import org.json.JSONArray
+import java.util.Timer
+import java.util.TimerTask
 
 class RelayClient(
     private val listener: Listener,
@@ -30,6 +32,7 @@ class RelayClient(
         fun onTimelineEvent(event: TimelineItem)
         fun onTimelinePage(sessionId: String, events: List<TimelineItem>, hasMoreBefore: Boolean, source: String)
         fun onNotificationEvent(notification: NotificationEvent)
+        fun onRelayRequestState(state: RelayRequestState)
         fun onHealthCheck(summary: String)
         fun onPairingComplete(deviceId: String, deviceToken: String)
         fun onError(message: String)
@@ -37,6 +40,8 @@ class RelayClient(
 
     private var socket: WebSocket? = null
     private var authToken: String = ""
+    private val pendingAcks = mutableMapOf<String, PendingAck>()
+    private val ackTimer = Timer("relay-client-ack-timer", true)
 
     fun connect(url: String = DEFAULT_RELAY_URL, token: String = "") {
         close()
@@ -46,8 +51,9 @@ class RelayClient(
             request,
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
-                    listener.onConnected()
+                    socket = webSocket
                     subscribeAll()
+                    listener.onConnected()
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
@@ -68,10 +74,11 @@ class RelayClient(
     fun close() {
         socket?.close(1000, "closing")
         socket = null
+        clearPendingAcks("Relay disconnected before request was acknowledged.")
     }
 
-    fun subscribeAll() {
-        send("session.subscribe", JSONObject().put("session_id", "*"))
+    fun subscribeAll(): Boolean {
+        return send("session.subscribe", JSONObject().put("session_id", "*"))
     }
 
     fun requestTimeline(
@@ -81,7 +88,7 @@ class RelayClient(
         limit: Int = 300,
         cacheOnly: Boolean = false,
         page: Boolean = false
-    ) {
+    ): Boolean {
         val payload = JSONObject()
             .put("session_id", sessionId)
             .put("limit", limit.coerceIn(1, 300))
@@ -97,25 +104,25 @@ class RelayClient(
         if (page) {
             payload.put("page", true)
         }
-        send("session.timeline.request", payload)
+        return send("session.timeline.request", payload)
     }
 
-    fun sendPrompt(sessionId: String, text: String) {
-        sendPrompt(
+    fun sendPrompt(sessionId: String, text: String): Boolean {
+        return sendPrompt(
             sessionId,
             PromptDraft(text = text)
         )
     }
 
-    fun sendPrompt(sessionId: String, draft: PromptDraft) {
-        send(
+    fun sendPrompt(sessionId: String, draft: PromptDraft): Boolean {
+        return send(
             "session.prompt",
             promptDraftPayload(sessionId, draft)
         )
     }
 
-    fun editPrompt(sessionId: String, draft: PromptDraft) {
-        send(
+    fun editPrompt(sessionId: String, draft: PromptDraft): Boolean {
+        return send(
             "session.prompt.edit",
             promptDraftPayload(sessionId, draft)
                 .put("base_event_id", draft.editingBaseEventId.orEmpty())
@@ -123,8 +130,8 @@ class RelayClient(
         )
     }
 
-    fun queuePrompt(sessionId: String, text: String) {
-        send(
+    fun queuePrompt(sessionId: String, text: String): Boolean {
+        return send(
             "session.prompt.queue",
             JSONObject()
                 .put("session_id", sessionId)
@@ -133,8 +140,8 @@ class RelayClient(
         )
     }
 
-    fun interruptTurn(sessionId: String) {
-        send(
+    fun interruptTurn(sessionId: String): Boolean {
+        return send(
             "session.turn.interrupt",
             JSONObject()
                 .put("session_id", sessionId)
@@ -142,8 +149,8 @@ class RelayClient(
         )
     }
 
-    fun createNewChat(hostId: String) {
-        send(
+    fun createNewChat(hostId: String): Boolean {
+        return send(
             "session.create_ephemeral",
             JSONObject()
                 .put("host_id", hostId)
@@ -156,7 +163,7 @@ class RelayClient(
         filePath: String? = null,
         message: String? = null,
         commitStrategy: String? = null
-    ) {
+    ): Boolean {
         val payload = JSONObject()
             .put("session_id", sessionId)
             .put("action", action)
@@ -169,18 +176,18 @@ class RelayClient(
         if (!commitStrategy.isNullOrBlank()) {
             payload.put("commit_strategy", commitStrategy)
         }
-        send("git.request", payload)
+        return send("git.request", payload)
     }
 
-    fun requestPowerTrust(hostId: String) {
-        send(
+    fun requestPowerTrust(hostId: String): Boolean {
+        return send(
             "power.trust.request",
             JSONObject().put("host_id", hostId)
         )
     }
 
-    fun verifyPowerTrust(hostId: String, challengeId: String, code: String) {
-        send(
+    fun verifyPowerTrust(hostId: String, challengeId: String, code: String): Boolean {
+        return send(
             "power.trust.verify",
             JSONObject()
                 .put("host_id", hostId)
@@ -189,18 +196,18 @@ class RelayClient(
         )
     }
 
-    fun requestPower(hostId: String, action: String, durationSeconds: Int? = null) {
+    fun requestPower(hostId: String, action: String, durationSeconds: Int? = null): Boolean {
         val payload = JSONObject()
             .put("host_id", hostId)
             .put("action", action)
         if (durationSeconds != null) {
             payload.put("duration_seconds", durationSeconds)
         }
-        send("power.request", payload)
+        return send("power.request", payload)
     }
 
-    fun sendApprovalDecision(approvalId: String, decision: String) {
-        send(
+    fun sendApprovalDecision(approvalId: String, decision: String): Boolean {
+        return send(
             "approval.decision",
             JSONObject()
                 .put("approval_id", approvalId)
@@ -398,6 +405,8 @@ class RelayClient(
                     parseNotificationEvent(message.getJSONObject("payload").getJSONObject("notification"))
                 )
 
+                "message.ack" -> handleAck(message.getJSONObject("payload"))
+
                 "error" -> listener.onError(
                     message.getJSONObject("payload").optString("detail", "Relay error")
                 )
@@ -409,16 +418,151 @@ class RelayClient(
         }
     }
 
-    private fun send(type: String, payload: JSONObject) {
+    private fun send(type: String, payload: JSONObject): Boolean {
+        val currentSocket = socket
+        if (currentSocket == null) {
+            listener.onError("Relay is not connected. Reconnect before sending ${type}.")
+            return false
+        }
+
+        val messageId = UUID.randomUUID().toString()
         val message = JSONObject()
-            .put("id", UUID.randomUUID().toString())
+            .put("id", messageId)
             .put("type", type)
             .put("sent_at", java.time.Instant.now().toString())
             .put("payload", payload)
         if (authToken.isNotBlank()) {
             message.put("auth", JSONObject().put("token", authToken))
         }
-        socket?.send(message.toString())
+        val accepted = currentSocket.send(message.toString())
+        if (!accepted) {
+            listener.onError("Relay send failed for ${type}. Reconnect and try again.")
+            return false
+        }
+        trackAckIfNeeded(messageId, type, message)
+        return true
+    }
+
+    private fun trackAckIfNeeded(messageId: String, type: String, message: JSONObject) {
+        if (type !in ACK_REQUIRED_TYPES) {
+            return
+        }
+
+        synchronized(pendingAcks) {
+            pendingAcks[messageId] = PendingAck(messageId, type, message.toString(), attempts = 1)
+        }
+        listener.onRelayRequestState(
+            RelayRequestState(
+                type = type,
+                label = requestLabel(type),
+                phase = "waiting_ack",
+                messageId = messageId,
+                attempts = 1,
+                updatedAt = java.time.Instant.now().toString()
+            )
+        )
+        scheduleAckTimeout(messageId)
+    }
+
+    private fun scheduleAckTimeout(messageId: String) {
+        ackTimer.schedule(
+            object : TimerTask() {
+                override fun run() {
+                    handleAckTimeout(messageId)
+                }
+            },
+            ACK_TIMEOUT_MS
+        )
+    }
+
+    private fun handleAckTimeout(messageId: String) {
+        val retry = synchronized(pendingAcks) {
+            val pending = pendingAcks[messageId] ?: return
+            if (pending.attempts > ACK_MAX_RETRIES) {
+                pendingAcks.remove(messageId)
+                listener.onError("Relay did not acknowledge ${pending.type}. Check connection and retry.")
+                return
+            }
+            val next = pending.copy(attempts = pending.attempts + 1)
+            pendingAcks[messageId] = next
+            next
+        }
+
+        val accepted = socket?.send(retry.rawMessage) == true
+        if (!accepted) {
+            synchronized(pendingAcks) {
+                pendingAcks.remove(messageId)
+            }
+            listener.onError("Relay retry failed for ${retry.type}. Reconnect and try again.")
+            return
+        }
+        listener.onRelayRequestState(
+            RelayRequestState(
+                type = retry.type,
+                label = requestLabel(retry.type),
+                phase = "retrying",
+                messageId = retry.messageId,
+                attempts = retry.attempts,
+                updatedAt = java.time.Instant.now().toString()
+            )
+        )
+        scheduleAckTimeout(messageId)
+    }
+
+    private fun handleAck(payload: JSONObject) {
+        val messageId = payload.optString("message_id", "")
+        if (messageId.isBlank()) {
+            return
+        }
+        val status = payload.optString("status", "accepted")
+        val pending = synchronized(pendingAcks) {
+            pendingAcks.remove(messageId)
+        }
+        listener.onRelayRequestState(
+            RelayRequestState(
+                type = payload.optString("message_type", pending?.type.orEmpty()),
+                label = requestLabel(payload.optString("message_type", pending?.type.orEmpty())),
+                phase = if (status == "duplicate") "duplicate" else "acknowledged",
+                messageId = messageId,
+                attempts = pending?.attempts ?: 1,
+                updatedAt = java.time.Instant.now().toString()
+            )
+        )
+        if (status == "duplicate") {
+            listener.onHealthCheck("Relay already accepted the request. Syncing result.")
+        }
+    }
+
+    private fun clearPendingAcks(reason: String) {
+        val pendingTypes = synchronized(pendingAcks) {
+            val types = pendingAcks.values.map { it.type }.distinct()
+            pendingAcks.clear()
+            types
+        }
+        if (pendingTypes.isNotEmpty()) {
+            listener.onRelayRequestState(
+                RelayRequestState(
+                    label = "Relay request",
+                    phase = "failed",
+                    updatedAt = java.time.Instant.now().toString()
+                )
+            )
+            listener.onError(reason)
+        }
+    }
+
+    private fun requestLabel(type: String): String = when (type) {
+        "session.prompt" -> "Prompt"
+        "session.prompt.queue" -> "Queue"
+        "session.prompt.edit" -> "Edit"
+        "session.turn.interrupt" -> "Stop"
+        "session.create_ephemeral" -> "New chat"
+        "approval.decision" -> "Approval"
+        "git.request" -> "Git"
+        "power.trust.request" -> "PC trust"
+        "power.trust.verify" -> "PC verify"
+        "power.request" -> "PC command"
+        else -> type.ifBlank { "Relay request" }
     }
 
     private fun healthUrlFor(url: String): String {
@@ -652,15 +796,32 @@ class RelayClient(
             .put("client_request_id", draft.clientRequestId)
     }
 
-    private fun parseTimelineEvent(json: JSONObject): TimelineItem = TimelineItem(
-        eventId = json.optString("event_id", UUID.randomUUID().toString()),
-        sessionId = json.getString("session_id"),
-        type = json.optString("type", "event"),
-        title = json.optString("title", "Timeline event"),
-        summary = json.optString("summary", ""),
-        createdAt = json.optString("created_at", ""),
-        cursor = json.optString("cursor").takeIf { it.isNotBlank() }
-    )
+    private fun parseTimelineEvent(json: JSONObject): TimelineItem {
+        val payload = json.optJSONObject("payload")
+        return TimelineItem(
+            eventId = json.optString("event_id", UUID.randomUUID().toString()),
+            sessionId = json.getString("session_id"),
+            type = json.optString("type", "event"),
+            title = json.optString("title", "Timeline event"),
+            summary = json.optString("summary", ""),
+            createdAt = json.optString("created_at", ""),
+            cursor = json.optString("cursor").takeIf { it.isNotBlank() },
+            payloadJson = payload?.toString().orEmpty(),
+            turnId = firstNonBlank(
+                json.optString("turn_id", ""),
+                payload?.optString("turn_id", "").orEmpty(),
+                payload?.optString("active_turn_id", "").orEmpty()
+            ),
+            itemId = firstNonBlank(
+                json.optString("item_id", ""),
+                payload?.optString("item_id", "").orEmpty()
+            ),
+            clientRequestId = firstNonBlank(
+                json.optString("client_request_id", ""),
+                payload?.optString("client_request_id", "").orEmpty()
+            )
+        )
+    }
 
     private fun parseApproval(json: JSONObject): ApprovalItem = ApprovalItem(
         approvalId = json.getString("approval_id"),
@@ -712,11 +873,35 @@ class RelayClient(
         )
     }
 
+    private data class PendingAck(
+        val messageId: String,
+        val type: String,
+        val rawMessage: String,
+        val attempts: Int
+    )
+
     companion object {
         const val DEFAULT_RELAY_URL = "ws://10.0.2.2:8787"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+        private const val ACK_TIMEOUT_MS = 2500L
+        private const val ACK_MAX_RETRIES = 1
+        private val ACK_REQUIRED_TYPES = setOf(
+            "approval.decision",
+            "git.request",
+            "power.trust.request",
+            "power.trust.verify",
+            "power.request",
+            "session.create_ephemeral",
+            "session.prompt",
+            "session.prompt.queue",
+            "session.prompt.edit",
+            "session.turn.interrupt"
+        )
 
         private fun encodeQuery(value: String): String =
             java.net.URLEncoder.encode(value, Charsets.UTF_8.name())
+
+        private fun firstNonBlank(vararg values: String): String? =
+            values.firstOrNull { it.isNotBlank() }
     }
 }

@@ -105,7 +105,15 @@ class RelaySettings(context: Context) {
                 title = item.optString("title", "Timeline event"),
                 summary = item.optString("summary", ""),
                 createdAt = item.optString("created_at", ""),
-                cursor = item.optString("cursor").takeIf { it.isNotBlank() }
+                cursor = item.optString("cursor").takeIf { it.isNotBlank() },
+                payloadJson = item.optJSONObject("payload")?.toString().orEmpty(),
+                turnId = item.optString("turn_id").takeIf { it.isNotBlank() }
+                    ?: item.optJSONObject("payload")?.optString("turn_id")?.takeIf { it.isNotBlank() }
+                    ?: item.optJSONObject("payload")?.optString("active_turn_id")?.takeIf { it.isNotBlank() },
+                itemId = item.optString("item_id").takeIf { it.isNotBlank() }
+                    ?: item.optJSONObject("payload")?.optString("item_id")?.takeIf { it.isNotBlank() },
+                clientRequestId = item.optString("client_request_id").takeIf { it.isNotBlank() }
+                    ?: item.optJSONObject("payload")?.optString("client_request_id")?.takeIf { it.isNotBlank() }
             )
         }.getOrNull()
     }
@@ -122,6 +130,10 @@ class RelaySettings(context: Context) {
                     .put("summary", event.summary)
                     .put("created_at", event.createdAt)
                     .put("cursor", event.cursor ?: "")
+                    .put("turn_id", event.turnId ?: "")
+                    .put("item_id", event.itemId ?: "")
+                    .put("client_request_id", event.clientRequestId ?: "")
+                    .put("payload", runCatching { JSONObject(event.payloadJson) }.getOrNull() ?: JSONObject())
             )
         }
         preferences.edit().putString(KEY_TIMELINE, json.toString()).apply()

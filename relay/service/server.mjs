@@ -27,6 +27,7 @@ const maxPromptImages = Number.parseInt(process.env.RELAY_MAX_PROMPT_IMAGES ?? '
 const maxPromptImageDataUrlBytes = Number.parseInt(process.env.RELAY_MAX_PROMPT_IMAGE_DATA_URL_BYTES ?? '1500000', 10);
 const auditLogLimit = Number.parseInt(process.env.RELAY_AUDIT_LOG_LIMIT ?? '500', 10);
 const notificationLogLimit = Number.parseInt(process.env.RELAY_NOTIFICATION_LOG_LIMIT ?? '200', 10);
+const processedMessageTtlMs = Number.parseInt(process.env.RELAY_PROCESSED_MESSAGE_TTL_MS ?? '120000', 10);
 const gitAuditLogPath = resolve(process.env.RELAY_GIT_AUDIT_LOG_PATH ?? '.relay/git-audit.ndjson');
 const publicHttpUrl = trimTrailingSlash(process.env.RELAY_PUBLIC_HTTP_URL ?? '');
 const publicWsUrl = trimTrailingSlash(process.env.RELAY_PUBLIC_WS_URL ?? '');
@@ -51,6 +52,7 @@ const state = {
   promptQueueStates: new Map(),
   notificationEvents: [],
   deviceTokens: new Map(),
+  processedMessageIds: new Map(),
   nextTimelineCursor: 1
 };
 
@@ -136,6 +138,10 @@ function handleMessage(connection, raw) {
       sendError(connection, 'Unauthorized: missing or invalid Relay auth token.');
       return;
     }
+    if (isDuplicateClientMessage(message)) {
+      sendAck(connection, message, 'duplicate');
+      return;
+    }
 
     switch (message.type) {
       case MessageType.HostRegister:
@@ -212,6 +218,43 @@ function handleMessage(connection, raw) {
     }
   } catch (error) {
     sendError(connection, error.message);
+  }
+}
+
+function isAckableClientMessage(type) {
+  return type === MessageType.ApprovalDecision
+    || type === MessageType.GitRequest
+    || type === MessageType.PowerTrustRequest
+    || type === MessageType.PowerTrustVerify
+    || type === MessageType.PowerRequest
+    || type === MessageType.SessionCreateEphemeral
+    || type === MessageType.SessionPrompt
+    || type === MessageType.SessionPromptQueue
+    || type === MessageType.SessionPromptEdit
+    || type === MessageType.SessionTurnInterrupt;
+}
+
+function isDuplicateClientMessage(message) {
+  pruneProcessedMessageIds();
+  return isAckableClientMessage(message.type)
+    && typeof message.id === 'string'
+    && state.processedMessageIds.has(message.id);
+}
+
+function rememberProcessedMessage(message) {
+  if (typeof message.id !== 'string' || message.id.length === 0) {
+    return;
+  }
+  state.processedMessageIds.set(message.id, Date.now());
+  pruneProcessedMessageIds();
+}
+
+function pruneProcessedMessageIds() {
+  const cutoff = Date.now() - processedMessageTtlMs;
+  for (const [messageId, seenAt] of state.processedMessageIds) {
+    if (seenAt < cutoff) {
+      state.processedMessageIds.delete(messageId);
+    }
   }
 }
 
@@ -634,6 +677,12 @@ function loadSqliteState() {
     state.promptQueueStates.set(queueState.session_id, queueState);
   }
 
+  for (const session of [...state.sessions.values()]) {
+    const stagedSession = withDerivedSessionStage(session);
+    state.sessions.set(stagedSession.session_id, stagedSession);
+    relayStore.saveSession(stagedSession);
+  }
+
   const counts = relayStore.counts();
   if (counts.devices || counts.hosts || counts.sessions || counts.timeline_events || counts.git_audit_events || counts.prompt_queue_states || counts.notification_events) {
     if (counts.devices || counts.hosts) {
@@ -850,7 +899,11 @@ function handleSessionCreateEphemeral(connection, message) {
   }
 
   console.log(`[relay] routing ephemeral session create to host ${message.payload.host_id}`);
-  send(hostConnection, message);
+  if (send(hostConnection, message)) {
+    sendAck(connection, message, 'accepted');
+  } else {
+    sendError(connection, `Host connection failed: ${message.payload.host_id}`);
+  }
 }
 
 function handleApprovalRequest(connection, message) {
@@ -919,9 +972,13 @@ function handleApprovalDecision(connection, message) {
   state.approvals.set(approval.approval_id, resolvedApproval);
 
   console.log(`[relay] routing approval decision to host ${session.host_id}: ${approval.approval_id}`);
-  send(hostConnection, message);
-  broadcastToClients(createMessage(MessageType.ApprovalRequest, { approval: resolvedApproval }));
-  refreshSessionStage(approval.session_id);
+  if (send(hostConnection, message)) {
+    sendAck(connection, message, 'accepted');
+    broadcastToClients(createMessage(MessageType.ApprovalRequest, { approval: resolvedApproval }));
+    refreshSessionStage(approval.session_id);
+  } else {
+    sendError(connection, `Host connection failed: ${session.host_id}`);
+  }
 }
 
 function handleGitRequest(connection, message) {
@@ -960,13 +1017,17 @@ function handleGitRequest(connection, message) {
   });
 
   console.log(`[relay] routing git ${message.payload.action} to host ${session.host_id}: ${message.payload.session_id}`);
-  send(hostConnection, {
+  if (send(hostConnection, {
     ...message,
     payload: {
       ...message.payload,
       audit_id: auditId
     }
-  });
+  })) {
+    sendAck(connection, message, 'accepted');
+  } else {
+    sendError(connection, `Host connection failed: ${session.host_id}`);
+  }
 }
 
 function handleGitSnapshot(connection, message) {
@@ -1040,7 +1101,11 @@ function handlePowerTrustRequest(connection, message) {
     device,
     requested_at: new Date().toISOString()
   });
-  send(hostConnection, withPowerDevice(message, device));
+  if (send(hostConnection, withPowerDevice(message, device))) {
+    sendAck(connection, message, 'accepted');
+  } else {
+    sendError(connection, `Host connection failed: ${message.payload.host_id}`);
+  }
 }
 
 function handlePowerTrustChallenge(connection, message) {
@@ -1065,7 +1130,11 @@ function handlePowerTrustVerify(connection, message) {
     return;
   }
 
-  send(hostConnection, withPowerDevice(message, device));
+  if (send(hostConnection, withPowerDevice(message, device))) {
+    sendAck(connection, message, 'accepted');
+  } else {
+    sendError(connection, `Host connection failed: ${message.payload.host_id}`);
+  }
 }
 
 function handlePowerTrustGranted(connection, message) {
@@ -1143,13 +1212,17 @@ function handlePowerRequest(connection, message) {
     device,
     requested_at: new Date().toISOString()
   });
-  send(hostConnection, {
+  if (send(hostConnection, {
     ...withPowerDevice(message, device),
     payload: {
       ...message.payload,
       audit_id: auditId
     }
-  });
+  })) {
+    sendAck(connection, message, 'accepted');
+  } else {
+    sendError(connection, `Host connection failed: ${message.payload.host_id}`);
+  }
 }
 
 function handlePowerResult(connection, message) {
@@ -1276,7 +1349,11 @@ function handleSessionPrompt(connection, message) {
   }
 
   console.log(`[relay] routing prompt to host ${session.host_id}: ${message.payload.session_id}`);
-  send(hostConnection, message);
+  if (send(hostConnection, message)) {
+    sendAck(connection, message, 'accepted');
+  } else {
+    sendError(connection, `Host connection failed: ${session.host_id}`);
+  }
 }
 
 function handleSessionPromptQueue(connection, message) {
@@ -1328,7 +1405,11 @@ function routeSessionControlMessage(connection, message, label) {
   }
 
   console.log(`[relay] routing ${label} to host ${session.host_id}: ${message.payload.session_id}`);
-  send(hostConnection, message);
+  if (send(hostConnection, message)) {
+    sendAck(connection, message, 'accepted');
+  } else {
+    sendError(connection, `Host connection failed: ${session.host_id}`);
+  }
 }
 
 function validatePromptDraftPayload(payload) {
@@ -1397,6 +1478,21 @@ function handleSessionTimelineRequest(connection, message) {
 
   const session = state.sessions.get(message.payload.session_id);
   if (!session) {
+    if (message.payload.cache_only === true || message.payload.page === true) {
+      send(connection, createMessage(MessageType.TimelinePage, {
+        session_id: message.payload.session_id,
+        events: [],
+        before_cursor: message.payload.before_cursor ?? null,
+        after_cursor: message.payload.after_cursor ?? null,
+        oldest_cursor: null,
+        newest_cursor: null,
+        has_more_before: false,
+        has_more_after: false,
+        source: 'cache'
+      }));
+      return;
+    }
+
     sendError(connection, `Unknown session: ${message.payload.session_id}`);
     return;
   }
@@ -1423,12 +1519,17 @@ function handleSessionTimelineRequest(connection, message) {
   }
 
   console.log(`[relay] routing timeline request to host ${session.host_id}: ${message.payload.session_id}`);
-  send(hostConnection, message);
+  if (send(hostConnection, message)) {
+    sendAck(connection, message, 'accepted');
+  } else {
+    sendError(connection, `Host connection failed: ${session.host_id}`);
+  }
 }
 
 function handleTimelineEvent(connection, message) {
   requirePayloadField(message, 'event');
   const event = cacheTimelineEvent(message.payload.event);
+  maybeResolveApprovalFromTimelineEvent(event);
   console.log(`[relay] timeline event: ${event.title}`);
   broadcastToClients(createMessage(MessageType.TimelineEvent, { event }));
   refreshSessionStage(event.session_id);
@@ -1437,7 +1538,11 @@ function handleTimelineEvent(connection, message) {
 function handleTimelinePage(connection, message) {
   requirePayloadField(message, 'session_id');
   const events = Array.isArray(message.payload.events) ? message.payload.events : [];
-  const cachedEvents = events.map((event) => cacheTimelineEvent(event));
+  const cachedEvents = events.map((event) => {
+    const cachedEvent = cacheTimelineEvent(event);
+    maybeResolveApprovalFromTimelineEvent(cachedEvent);
+    return cachedEvent;
+  });
   console.log(`[relay] timeline page: ${message.payload.session_id} ${cachedEvents.length} event(s)`);
   broadcastToClients(createMessage(MessageType.TimelinePage, {
     ...message.payload,
@@ -1445,6 +1550,32 @@ function handleTimelinePage(connection, message) {
     source: message.payload.source ?? 'host'
   }));
   refreshSessionStage(message.payload.session_id);
+}
+
+function maybeResolveApprovalFromTimelineEvent(event) {
+  if (event.type !== 'approval_resolved') {
+    return;
+  }
+
+  const payload = event.payload && typeof event.payload === 'object' ? event.payload : {};
+  const approvalId = payload.approval_id;
+  if (!approvalId || !state.approvals.has(approvalId)) {
+    return;
+  }
+
+  const approval = state.approvals.get(approvalId);
+  if (approval.status && approval.status !== 'pending') {
+    return;
+  }
+
+  const resolvedApproval = {
+    ...approval,
+    status: payload.decision ?? 'resolved',
+    decided_at: event.created_at ?? new Date().toISOString(),
+    updated_at: event.created_at ?? new Date().toISOString()
+  };
+  state.approvals.set(approvalId, resolvedApproval);
+  broadcastToClients(createMessage(MessageType.ApprovalRequest, { approval: resolvedApproval }));
 }
 
 function handleClose(connection) {
@@ -1863,12 +1994,27 @@ function requireApprovalField(approval, field) {
 function send(connection, message) {
   try {
     connection.sendText(encodeMessage(message));
+    return true;
   } catch (error) {
     console.error('[relay] failed to send websocket message', error.message);
     handleClose(connection);
+    return false;
   }
 }
 
 function sendError(connection, detail) {
   send(connection, createMessage(MessageType.Error, { detail }));
+}
+
+function sendAck(connection, originalMessage, status = 'accepted') {
+  if (!originalMessage?.id || !isAckableClientMessage(originalMessage.type)) {
+    return;
+  }
+
+  rememberProcessedMessage(originalMessage);
+  send(connection, createMessage(MessageType.Ack, {
+    message_id: originalMessage.id,
+    message_type: originalMessage.type,
+    status
+  }));
 }

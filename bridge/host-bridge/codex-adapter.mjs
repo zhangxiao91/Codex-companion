@@ -276,6 +276,16 @@ export class AppServerCodexAdapter {
     return this.cachedSessions;
   }
 
+  async findSession(sessionId) {
+    const cached = this.cachedSessions.find((item) => item.session_id === sessionId);
+    if (cached) {
+      return cached;
+    }
+
+    await this.refreshSessions();
+    return this.cachedSessions.find((item) => item.session_id === sessionId) ?? null;
+  }
+
   async refreshSessions() {
     const response = await this.request('thread/list', {
       limit: 20,

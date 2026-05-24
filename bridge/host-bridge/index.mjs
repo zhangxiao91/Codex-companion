@@ -13,12 +13,12 @@ import { createPowerController } from './power-controller.mjs';
 const relayUrl = process.env.RELAY_URL ?? DEFAULT_RELAY_URL;
 const hostIdentityStore = createHostIdentityStore();
 const storedHostIdentity = hostIdentityStore.load();
-let hostDeviceToken = process.env.RELAY_HOST_DEVICE_TOKEN
-  ?? storedHostIdentity.host_device_token
-  ?? '';
 const hostToken = process.env.RELAY_HOST_TOKEN
   ?? process.env.RELAY_DEV_TOKEN
   ?? process.env.DEV_TOKEN
+  ?? '';
+let hostDeviceToken = process.env.RELAY_HOST_DEVICE_TOKEN
+  ?? (hostToken ? '' : storedHostIdentity.host_device_token)
   ?? '';
 const hostId = process.env.HOST_ID ?? 'local-dev-host';
 const displayName = process.env.HOST_NAME ?? 'Local Development Host';
@@ -162,7 +162,10 @@ socket.addEventListener('message', async (event) => {
     }
 
     if (message.type === MessageType.GitRequest) {
-      const session = adapter.listSessions().find((item) => item.session_id === message.payload.session_id);
+      let session = adapter.listSessions().find((item) => item.session_id === message.payload.session_id);
+      if (!session && typeof adapter.findSession === 'function') {
+        session = await adapter.findSession(message.payload.session_id);
+      }
       if (!session) {
         throw new Error(`Unknown session for git request: ${message.payload.session_id}`);
       }

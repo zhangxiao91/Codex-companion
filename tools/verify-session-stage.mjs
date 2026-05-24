@@ -40,6 +40,15 @@ assert.equal(stage({
   ]
 }).type, 'completed');
 
+assert.equal(stage({
+  session: { ...baseSession, status: 'running' },
+  events: [
+    event('turn_started', 'Turn started', 'Turn started.', '2026-05-22T08:01:00.000Z'),
+    event('file_changed', 'File patch updated', '1 file change(s).', '2026-05-22T08:01:30.000Z'),
+    event('turn_completed', 'Turn completed', 'Turn completed.', '2026-05-22T08:02:00.000Z')
+  ]
+}).type, 'completed');
+
 console.log('[verify] Session stage derivation verified.');
 
 function stage({ session = baseSession, events = [], approvals = [], gitSnapshots = [] }) {

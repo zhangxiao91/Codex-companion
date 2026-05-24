@@ -90,6 +90,7 @@ import java.time.format.DateTimeFormatter
 import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
     private val viewModel by viewModels<RelayViewModel> {
@@ -621,13 +622,186 @@ private fun InboxTopBar(
 @Composable
 private fun MainStatusNotice(uiState: RelayUiState) {
     val message = uiState.lastError ?: uiState.lastHealthCheck
-    if (message.isNullOrBlank()) {
+    val requestState = uiState.relayRequestState
+    val requestHistory = uiState.relayRequestHistory
+    var historyOpen by remember { mutableStateOf(false) }
+    if (message.isNullOrBlank() && requestState.phase.isBlank() && requestHistory.isEmpty()) {
         return
     }
-    InlineNotice(
-        text = message,
-        tone = if (uiState.lastError.isNullOrBlank()) NoticeTone.Neutral else NoticeTone.Critical
-    )
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (requestState.phase.isNotBlank()) {
+            RelayRequestStatusStrip(
+                state = requestState,
+                historyCount = requestHistory.size,
+                historyOpen = historyOpen,
+                onHistoryToggle = { historyOpen = !historyOpen }
+            )
+        } else if (requestHistory.isNotEmpty()) {
+            RelayRequestHistoryHeader(
+                count = requestHistory.size,
+                open = historyOpen,
+                onToggle = { historyOpen = !historyOpen }
+            )
+        }
+        if (historyOpen && requestHistory.isNotEmpty()) {
+            RelayRequestHistoryList(requestHistory)
+        }
+        if (!message.isNullOrBlank()) {
+            InlineNotice(
+                text = message,
+                tone = if (uiState.lastError.isNullOrBlank()) NoticeTone.Neutral else NoticeTone.Critical
+            )
+        }
+    }
+}
+
+@Composable
+private fun RelayRequestStatusStrip(
+    state: RelayRequestState,
+    compact: Boolean = false,
+    historyCount: Int = 0,
+    historyOpen: Boolean = false,
+    onHistoryToggle: (() -> Unit)? = null
+) {
+    val tone = when (state.phase) {
+        "acknowledged", "duplicate" -> NoticeTone.Positive
+        "retrying", "waiting_ack" -> NoticeTone.Warning
+        "failed" -> NoticeTone.Critical
+        else -> NoticeTone.Neutral
+    }
+    val phaseText = when (state.phase) {
+        "waiting_ack" -> "Waiting for Relay"
+        "retrying" -> "Retrying"
+        "acknowledged" -> "Relay confirmed"
+        "duplicate" -> "Already accepted"
+        "failed" -> "Not confirmed"
+        else -> state.phase.replace('_', ' ').ifBlank { "Relay request" }
+    }
+    val attemptText = if (state.attempts > 1) " / attempt ${state.attempts}" else ""
+    val timeText = state.updatedAt?.let { " / ${formatMetaTime(it)}" }.orEmpty()
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = tone.background.copy(alpha = if (compact) 0.54f else 0.72f),
+        shape = RoundedCornerShape(if (compact) 14.dp else 16.dp),
+        border = BorderStroke(1.dp, tone.foreground.copy(alpha = 0.22f))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = if (compact) 10.dp else 12.dp, vertical = if (compact) 7.dp else 9.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                modifier = Modifier.weight(1f),
+                text = "${state.label.ifBlank { "Relay request" }}: $phaseText$attemptText$timeText",
+                color = tone.foreground,
+                style = if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (state.messageId != null && !compact) {
+                Text(
+                    text = state.messageId.take(8),
+                    color = tone.foreground.copy(alpha = 0.68f),
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
+            if (!compact && onHistoryToggle != null && historyCount > 0) {
+                TextButton(onClick = onHistoryToggle) {
+                    Text(
+                        text = if (historyOpen) "Hide" else "History",
+                        color = tone.foreground,
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RelayRequestHistoryHeader(count: Int, open: Boolean, onToggle: () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable(onClick = onToggle),
+        color = ElevatedBlack,
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, HairlineDark)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Relay request history", color = SecondaryText, style = MaterialTheme.typography.bodySmall)
+            Text(if (open) "Hide" else "$count items", color = TertiaryText, style = MaterialTheme.typography.labelSmall)
+        }
+    }
+}
+
+@Composable
+private fun RelayRequestHistoryList(history: List<RelayRequestState>) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = CardBlack.copy(alpha = 0.76f),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, HairlineDark)
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            history.take(6).forEach { item ->
+                RelayRequestHistoryRow(item)
+            }
+            if (history.size > 6) {
+                Text(
+                    text = "${history.size - 6} older request${if (history.size - 6 == 1) "" else "s"} hidden",
+                    color = TertiaryText,
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RelayRequestHistoryRow(state: RelayRequestState) {
+    val tone = when (state.phase) {
+        "acknowledged", "duplicate" -> NoticeTone.Positive
+        "retrying", "waiting_ack" -> NoticeTone.Warning
+        "failed" -> NoticeTone.Critical
+        else -> NoticeTone.Neutral
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier.size(8.dp).background(tone.foreground, RoundedCornerShape(99.dp))
+        )
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                text = "${state.label.ifBlank { "Relay request" }} / ${relayRequestPhaseLabel(state.phase)}",
+                color = PrimaryText,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = "attempts=${state.attempts}${state.messageId?.let { " / ${it.take(8)}" }.orEmpty()}${state.updatedAt?.let { " / ${formatMetaTime(it)}" }.orEmpty()}",
+                color = TertiaryText,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+private fun relayRequestPhaseLabel(phase: String): String = when (phase) {
+    "waiting_ack" -> "Waiting for Relay"
+    "retrying" -> "Retrying"
+    "acknowledged" -> "Relay confirmed"
+    "duplicate" -> "Already accepted"
+    "failed" -> "Not confirmed"
+    else -> phase.replace('_', ' ').ifBlank { "Relay request" }
 }
 
 @Composable
@@ -1004,6 +1178,7 @@ private fun MainSessionScreen(
                 selectedSession = uiState.selectedSession,
                 timeline = uiState.timeline.filter { it.sessionId == uiState.selectedSessionId },
                 queueState = uiState.selectedPromptQueue,
+                relayRequestState = uiState.relayRequestState,
                 online = uiState.connectionStatus == "Online",
                 onPromptSend = onPromptDraftSend,
                 onPromptEdit = onPromptEdit,
@@ -1423,6 +1598,7 @@ private fun TimelineHistoryControl(loading: Boolean, hasMore: Boolean, onLoadEar
 private fun TimelineBubble(event: TimelineItem) {
     val isUser = event.title.contains("prompt", ignoreCase = true) || event.type.contains("user", ignoreCase = true)
     val copyText = copyableTimelineText(event)
+    val bodyText = displayTimelineText(event)
     val clipboard = LocalClipboardManager.current
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start) {
         Surface(
@@ -1449,7 +1625,7 @@ private fun TimelineBubble(event: TimelineItem) {
                         )
                     }
                 }
-                Text(event.summary, color = if (isUser) PrimaryText.copy(alpha = 0.92f) else SecondaryText, style = MaterialTheme.typography.bodyMedium)
+                Text(bodyText, color = if (isUser) PrimaryText.copy(alpha = 0.92f) else SecondaryText, style = MaterialTheme.typography.bodyMedium)
                 Text(
                     text = "${event.type} · ${formatMetaTime(event.createdAt)}",
                     color = if (isUser) PrimaryText.copy(alpha = 0.65f) else TertiaryText,
@@ -1507,9 +1683,10 @@ private fun TimelineTurnGroup(
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     group.events.forEach { event ->
+                        val forceExpanded = event.type == "assistant_message" || isUserPrompt(event)
                         TimelineOperationRow(
                             event = event,
-                            expanded = expandedRows[event.eventId] == true,
+                            expanded = forceExpanded || expandedRows[event.eventId] == true,
                             onExpand = { onRowExpand(event.eventId) }
                         )
                     }
@@ -1522,6 +1699,8 @@ private fun TimelineTurnGroup(
 @Composable
 private fun TimelineOperationRow(event: TimelineItem, expanded: Boolean, onExpand: () -> Unit) {
     val copyText = copyableTimelineText(event)
+    val bodyText = displayTimelineText(event)
+    val forceExpanded = event.type == "assistant_message" || isUserPrompt(event)
     val clipboard = LocalClipboardManager.current
     Column(
         modifier = Modifier
@@ -1547,11 +1726,11 @@ private fun TimelineOperationRow(event: TimelineItem, expanded: Boolean, onExpan
                 )
             }
         }
-        if (event.summary.isNotBlank()) {
-            if (expanded) {
-                Text(event.summary, color = SecondaryText, style = MaterialTheme.typography.bodySmall)
+        if (bodyText.isNotBlank()) {
+            if (expanded || forceExpanded) {
+                Text(bodyText, color = SecondaryText, style = MaterialTheme.typography.bodySmall)
             } else {
-                Text(event.summary, color = SecondaryText, style = MaterialTheme.typography.bodySmall, maxLines = 4, overflow = TextOverflow.Ellipsis)
+                Text(bodyText, color = SecondaryText, style = MaterialTheme.typography.bodySmall, maxLines = 4, overflow = TextOverflow.Ellipsis)
             }
         }
         Text("${event.type} · ${formatMetaTime(event.createdAt)}", color = TertiaryText, style = MaterialTheme.typography.labelSmall)
@@ -1581,6 +1760,7 @@ private fun RichChatComposer(
     selectedSession: CodexSession?,
     timeline: List<TimelineItem>,
     queueState: PromptQueueState?,
+    relayRequestState: RelayRequestState,
     online: Boolean,
     onPromptSend: (PromptDraft) -> Unit,
     onPromptEdit: (PromptDraft) -> Unit,
@@ -1633,6 +1813,10 @@ private fun RichChatComposer(
         border = BorderStroke(1.dp, HairlineDark)
     ) {
         Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (relayRequestState.phase.isNotBlank()) {
+                RelayRequestStatusStrip(relayRequestState, compact = true)
+            }
+
             if (editingEvent != null) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -3401,6 +3585,12 @@ private fun looksCompletedOperation(event: TimelineItem): Boolean {
 }
 
 private fun timelineWorkKey(event: TimelineItem): String {
+    event.turnId?.takeIf { it.isNotBlank() }?.let { return "${event.sessionId}:turn:$it" }
+    payloadString(event, "turn_id")?.let { return "${event.sessionId}:turn:$it" }
+    payloadString(event, "active_turn_id")?.let { return "${event.sessionId}:turn:$it" }
+    payloadString(event, "request_id")?.let { return "${event.sessionId}:request:$it" }
+    event.clientRequestId?.takeIf { it.isNotBlank() }?.let { return "${event.sessionId}:client:$it" }
+
     val parts = event.eventId.split(":")
     return if (parts.size >= 4) {
         "${parts[0]}:${parts[1]}"
@@ -3428,7 +3618,13 @@ private fun copyableTimelineText(event: TimelineItem): String? {
         return null
     }
 
-    return event.summary.ifBlank { event.title }.takeIf { it.isNotBlank() }
+    return displayTimelineText(event).ifBlank { event.title }.takeIf { it.isNotBlank() }
+}
+
+private fun displayTimelineText(event: TimelineItem): String {
+    return payloadString(event, "full_text")
+        ?.takeIf { it.isNotBlank() }
+        ?: event.summary
 }
 
 private fun isSessionActivelyRunning(session: CodexSession, events: List<TimelineItem>): Boolean {
@@ -3441,8 +3637,22 @@ private fun isSessionActivelyRunning(session: CodexSession, events: List<Timelin
 }
 
 private fun timelineTurnId(event: TimelineItem): String? {
+    event.turnId?.takeIf { it.isNotBlank() }?.let { return it }
+    payloadString(event, "turn_id")?.let { return it }
+    payloadString(event, "active_turn_id")?.let { return it }
+
     val parts = event.eventId.split(":")
     return parts.getOrNull(1)?.takeIf { it.isNotBlank() && it != "thread" }
+}
+
+private fun payloadString(event: TimelineItem, key: String): String? {
+    if (event.payloadJson.isBlank()) {
+        return null
+    }
+
+    return runCatching {
+        JSONObject(event.payloadJson).optString(key, "").takeIf { it.isNotBlank() }
+    }.getOrNull()
 }
 
 private fun promptAttachmentFromUri(context: Context, uri: Uri): PromptAttachment {
