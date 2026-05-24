@@ -213,6 +213,9 @@ data class RelayUiState(
     val relayRequestState: RelayRequestState = RelayRequestState(),
     val relayRequestHistory: List<RelayRequestState> = emptyList(),
     val syncState: SyncState = SyncState(),
+    val pendingApprovalIds: Set<String> = emptySet(),
+    val confirmedSessionIds: Set<String> = emptySet(),
+    val pendingTimelineSyncIds: Set<String> = emptySet(),
     val lastConnectedAt: String? = null,
     val lastHealthCheck: String? = null,
     val lastError: String? = null

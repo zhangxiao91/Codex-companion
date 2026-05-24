@@ -45,8 +45,12 @@ class RelayClient(
     private val pendingAcks = mutableMapOf<String, PendingAck>()
     private val ackTimer = Timer("relay-client-ack-timer", true)
 
-    fun connect(url: String = DEFAULT_RELAY_URL, token: String = "") {
-        close()
+    fun connect(
+        url: String = DEFAULT_RELAY_URL,
+        token: String = "",
+        preservePendingAcks: Boolean = false
+    ) {
+        close(clearPendingAcks = !preservePendingAcks)
         authToken = token.trim()
         val request = Request.Builder().url(url).build()
         val nextSocket = client.newWebSocket(
@@ -89,10 +93,12 @@ class RelayClient(
         socket = nextSocket
     }
 
-    fun close() {
+    fun close(clearPendingAcks: Boolean = true) {
         socket?.close(1000, "closing")
         socket = null
-        clearPendingAcks("Relay disconnected before request was acknowledged.")
+        if (clearPendingAcks) {
+            clearPendingAcks("Relay disconnected before request was acknowledged.")
+        }
     }
 
     private fun isCurrentSocket(webSocket: WebSocket): Boolean = socket === webSocket
@@ -469,7 +475,7 @@ class RelayClient(
         }
 
         synchronized(pendingAcks) {
-            pendingAcks[messageId] = PendingAck(messageId, type, message.toString(), attempts = 1)
+            pendingAcks[messageId] = PendingAck(messageId, type, message.toString(), attempts = 1, disconnectedPolls = 0)
         }
         listener.onRelayRequestState(
             RelayRequestState(
@@ -498,8 +504,38 @@ class RelayClient(
     private fun handleAckTimeout(messageId: String) {
         val retry = synchronized(pendingAcks) {
             val pending = pendingAcks[messageId] ?: return
+            if (socket == null) {
+                if (pending.disconnectedPolls >= ACK_MAX_DISCONNECTED_POLLS) {
+                    pendingAcks.remove(messageId)
+                    listener.onRelayRequestState(
+                        RelayRequestState(
+                            type = pending.type,
+                            label = requestLabel(pending.type),
+                            phase = "interrupted",
+                            messageId = pending.messageId,
+                            attempts = pending.attempts,
+                            updatedAt = java.time.Instant.now().toString()
+                        )
+                    )
+                    listener.onError("Relay disconnected before ${requestLabel(pending.type).lowercase()} was confirmed.")
+                    return
+                }
+                pendingAcks[messageId] = pending.copy(disconnectedPolls = pending.disconnectedPolls + 1)
+                scheduleAckTimeout(messageId)
+                return
+            }
             if (pending.attempts > ACK_MAX_RETRIES) {
                 pendingAcks.remove(messageId)
+                listener.onRelayRequestState(
+                    RelayRequestState(
+                        type = pending.type,
+                        label = requestLabel(pending.type),
+                        phase = "failed",
+                        messageId = pending.messageId,
+                        attempts = pending.attempts,
+                        updatedAt = java.time.Instant.now().toString()
+                    )
+                )
                 listener.onError("Relay did not acknowledge ${pending.type}. Check connection and retry.")
                 return
             }
@@ -513,6 +549,16 @@ class RelayClient(
             synchronized(pendingAcks) {
                 pendingAcks.remove(messageId)
             }
+            listener.onRelayRequestState(
+                RelayRequestState(
+                    type = retry.type,
+                    label = requestLabel(retry.type),
+                    phase = "failed",
+                    messageId = retry.messageId,
+                    attempts = retry.attempts,
+                    updatedAt = java.time.Instant.now().toString()
+                )
+            )
             listener.onError("Relay retry failed for ${retry.type}. Reconnect and try again.")
             return
         }
@@ -897,7 +943,8 @@ class RelayClient(
         val messageId: String,
         val type: String,
         val rawMessage: String,
-        val attempts: Int
+        val attempts: Int,
+        val disconnectedPolls: Int
     )
 
     companion object {
@@ -906,6 +953,7 @@ class RelayClient(
         private const val WEBSOCKET_PING_SECONDS = 25L
         private const val ACK_TIMEOUT_MS = 2500L
         private const val ACK_MAX_RETRIES = 1
+        private const val ACK_MAX_DISCONNECTED_POLLS = 12
         private val ACK_REQUIRED_TYPES = setOf(
             "approval.decision",
             "git.request",

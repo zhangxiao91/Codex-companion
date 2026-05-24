@@ -3834,3 +3834,35 @@ Known notes:
 
 - Existing Relay/Android processes need a restart to pick up the new stage rules and duplicate-sync guard.
 - If a session still reports `needs attention` after this change, it should now come from a genuinely recent failure or a fresh Git error, not from old retained state.
+
+## 2026-05-24: Android state sync and request lifecycle repair
+
+Completed:
+
+- Android no longer treats cached session ids as live-confirmed sessions. Actions like prompt send, Git, history pagination, and approval decisions now wait for a fresh `session.snapshot` on the current connection.
+- Android now restores pending timeline-sync markers from local cache, but tracks in-flight timeline requests separately so reconnects do not block future refreshes forever.
+- Android WebSocket reconnects now preserve in-flight request ack state only for same-endpoint reconnects; fresh pairing / new relay connections still clear stale pending requests.
+- Android manual reconnect controls now also preserve same-endpoint pending ack state, matching automatic reconnect behavior.
+- Android request ack state now degrades stale `waiting_ack` / `retrying` entries to `interrupted` on cold restore instead of pretending the request is still live.
+- Android UI now renders `interrupted` relay-request state as a warning instead of a terminal failure.
+- Android connection recovery now clears stale local approval rows on connect and relies on live relay replay for pending approvals.
+
+Verification:
+
+```powershell
+npm run verify:state-sync-regressions
+cd android
+.\gradlew.bat :app:assembleDebug --no-daemon
+```
+
+Result:
+
+```text
+[verify] State sync stale timeline and restored stage regressions verified.
+BUILD SUCCESSFUL
+```
+
+Known notes:
+
+- Cached sessions still remain visible in the inbox after reconnect, but they are intentionally read-only until the new Relay connection replays their live snapshot.
+- Reconnects to the same relay preserve pending ack retries; changing relay URL or pairing identity still resets them.

@@ -92,6 +92,36 @@ class RelayCacheStore(context: Context) {
         dao.upsertPromptQueues(queues.values.map { CachedPromptQueue.fromModel(it) })
     }
 
+    fun approvals(): List<ApprovalItem> {
+        val raw = dao.appState(APP_STATE_APPROVALS)?.value.orEmpty()
+        return runCatching {
+            if (raw.isBlank()) {
+                emptyList()
+            } else {
+                val array = JSONArray(raw)
+                List(array.length()) { index -> approvalFromJson(array.getJSONObject(index)) }
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    fun saveApprovals(approvals: List<ApprovalItem>) {
+        val array = JSONArray()
+        approvals.forEach { array.put(approvalToJson(it)) }
+        saveAppState(APP_STATE_APPROVALS, array.toString())
+    }
+
+    fun confirmedSessionIds(): Set<String> = appStateStringSet(APP_STATE_CONFIRMED_SESSIONS)
+
+    fun saveConfirmedSessionIds(sessionIds: Set<String>) {
+        saveStringSet(APP_STATE_CONFIRMED_SESSIONS, sessionIds)
+    }
+
+    fun pendingTimelineSyncIds(): Set<String> = appStateStringSet(APP_STATE_PENDING_TIMELINE_SYNC)
+
+    fun savePendingTimelineSyncIds(sessionIds: Set<String>) {
+        saveStringSet(APP_STATE_PENDING_TIMELINE_SYNC, sessionIds)
+    }
+
     fun relayRequestState(): RelayRequestState {
         val raw = dao.appState(APP_STATE_RELAY_REQUEST_STATE)?.value.orEmpty()
         return runCatching {
@@ -149,11 +179,11 @@ class RelayCacheStore(context: Context) {
     }
 
     private fun relayRequestStateFromJson(json: JSONObject): RelayRequestState {
-        val phase = json.optString("phase", "")
-        val restoredPhase = if (phase == "waiting_ack" || phase == "retrying") {
-            "failed"
+        val rawPhase = json.optString("phase", "")
+        val restoredPhase = if (rawPhase in setOf("waiting_ack", "retrying")) {
+            "interrupted"
         } else {
-            phase
+            rawPhase
         }
         return RelayRequestState(
             type = json.optString("type", ""),
@@ -202,6 +232,49 @@ class RelayCacheStore(context: Context) {
         dao.upsertAppState(CachedAppState(key = key, value = value))
     }
 
+    private fun appStateStringSet(key: String): Set<String> {
+        val raw = dao.appState(key)?.value.orEmpty()
+        return runCatching {
+            val array = JSONArray(raw)
+            buildSet {
+                for (index in 0 until array.length()) {
+                    val value = array.optString(index, "").trim()
+                    if (value.isNotBlank()) {
+                        add(value)
+                    }
+                }
+            }
+        }.getOrDefault(emptySet())
+    }
+
+    private fun saveStringSet(key: String, values: Set<String>) {
+        saveAppState(key, JSONArray(values.sorted()).toString())
+    }
+
+    private fun approvalFromJson(json: JSONObject): ApprovalItem = ApprovalItem(
+        approvalId = json.optString("approval_id", ""),
+        sessionId = json.optString("session_id", ""),
+        kind = json.optString("kind", "action"),
+        title = json.optString("title", "Approval requested"),
+        summary = json.optString("summary", ""),
+        command = json.optString("command", ""),
+        riskLevel = json.optString("risk_level", "unknown"),
+        status = json.optString("status", "pending"),
+        requestedAt = json.optString("requested_at", "")
+    )
+
+    private fun approvalToJson(approval: ApprovalItem): JSONObject =
+        JSONObject()
+            .put("approval_id", approval.approvalId)
+            .put("session_id", approval.sessionId)
+            .put("kind", approval.kind)
+            .put("title", approval.title)
+            .put("summary", approval.summary)
+            .put("command", approval.command)
+            .put("risk_level", approval.riskLevel)
+            .put("status", approval.status)
+            .put("requested_at", approval.requestedAt)
+
     private fun updateSyncStateFromTimeline(timeline: List<TimelineItem>) {
         val grouped = timeline.groupBy { it.sessionId }
         for ((sessionId, events) in grouped) {
@@ -223,6 +296,9 @@ class RelayCacheStore(context: Context) {
         const val APP_STATE_PINNED_SESSIONS = "pinned_session_ids"
         const val APP_STATE_RELAY_REQUEST_STATE = "relay_request_state"
         const val APP_STATE_RELAY_REQUEST_HISTORY = "relay_request_history"
+        const val APP_STATE_APPROVALS = "approvals"
+        const val APP_STATE_CONFIRMED_SESSIONS = "confirmed_session_ids"
+        const val APP_STATE_PENDING_TIMELINE_SYNC = "pending_timeline_sync_ids"
     }
 }
 

@@ -110,7 +110,7 @@ class MainActivity : ComponentActivity() {
 
             CompanionApp(
                 uiState = uiState,
-                onReconnect = viewModel::connect,
+                onReconnect = { viewModel.connect(preservePendingAcks = true) },
                 onRelaySettingsSave = viewModel::saveRelaySettings,
                 onPairingCodeApply = viewModel::applyPairingCode,
                 onPairDevice = viewModel::pairDevice,
@@ -703,13 +703,14 @@ private fun RelayRequestStatusStrip(
 ) {
     val tone = when (state.phase) {
         "acknowledged", "duplicate" -> NoticeTone.Positive
-        "retrying", "waiting_ack" -> NoticeTone.Warning
+        "retrying", "waiting_ack", "interrupted" -> NoticeTone.Warning
         "failed" -> NoticeTone.Critical
         else -> NoticeTone.Neutral
     }
     val phaseText = when (state.phase) {
         "waiting_ack" -> "Waiting for Relay"
         "retrying" -> "Retrying"
+        "interrupted" -> "Interrupted"
         "acknowledged" -> "Relay confirmed"
         "duplicate" -> "Already accepted"
         "failed" -> "Not confirmed"
@@ -802,7 +803,7 @@ private fun RelayRequestHistoryList(history: List<RelayRequestState>) {
 private fun RelayRequestHistoryRow(state: RelayRequestState) {
     val tone = when (state.phase) {
         "acknowledged", "duplicate" -> NoticeTone.Positive
-        "retrying", "waiting_ack" -> NoticeTone.Warning
+        "retrying", "waiting_ack", "interrupted" -> NoticeTone.Warning
         "failed" -> NoticeTone.Critical
         else -> NoticeTone.Neutral
     }
@@ -836,6 +837,7 @@ private fun RelayRequestHistoryRow(state: RelayRequestState) {
 private fun relayRequestPhaseLabel(phase: String): String = when (phase) {
     "waiting_ack" -> "Waiting for Relay"
     "retrying" -> "Retrying"
+    "interrupted" -> "Interrupted"
     "acknowledged" -> "Relay confirmed"
     "duplicate" -> "Already accepted"
     "failed" -> "Not confirmed"
