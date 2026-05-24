@@ -28,7 +28,8 @@ export const MessageType = Object.freeze({
   SessionTurnInterrupt: 'session.turn.interrupt',
   SessionTimelineRequest: 'session.timeline.request',
   TimelineEvent: 'timeline.event',
-  TimelinePage: 'timeline.page'
+  TimelinePage: 'timeline.page',
+  NotificationEvent: 'notification.event'
 });
 
 export const SenderRole = Object.freeze({

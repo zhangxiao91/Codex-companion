@@ -42,6 +42,16 @@ data class TimelineItem(
     val cursor: String?
 )
 
+data class NotificationEvent(
+    val notificationId: String,
+    val kind: String,
+    val sessionId: String?,
+    val hostId: String?,
+    val title: String,
+    val summary: String,
+    val createdAt: String
+)
+
 data class PromptDraft(
     val text: String,
     val attachments: List<PromptAttachment> = emptyList(),
@@ -195,6 +205,7 @@ data class RelayUiState(
     val timelineLoadingEarlier: Boolean = false,
     val timelineHasMoreEarlier: Map<String, Boolean> = emptyMap(),
     val promptQueues: Map<String, PromptQueueState> = emptyMap(),
+    val notifications: List<NotificationEvent> = emptyList(),
     val lastConnectedAt: String? = null,
     val lastHealthCheck: String? = null,
     val lastError: String? = null

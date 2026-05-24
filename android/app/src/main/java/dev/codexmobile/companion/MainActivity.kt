@@ -138,6 +138,7 @@ class MainActivity : ComponentActivity() {
                 onNotificationsEnabled = { localNotifier.notificationsAllowed() },
                 onSessionNotify = localNotifier::notifySessionStage,
                 onApprovalNotify = localNotifier::notifyApproval,
+                onRelayNotification = localNotifier::notifyRelayEvent,
                 scanNotice = scanNotice
             )
         }
@@ -205,6 +206,7 @@ private fun CompanionApp(
     onNotificationsEnabled: () -> Boolean,
     onSessionNotify: (CodexSession) -> Unit,
     onApprovalNotify: (ApprovalItem) -> Unit,
+    onRelayNotification: (NotificationEvent) -> Unit,
     scanNotice: String?
 ) {
     var detailOpen by remember { mutableStateOf(false) }
@@ -283,6 +285,7 @@ private fun CompanionApp(
                     onNotificationsEnabled = onNotificationsEnabled,
                     onSessionNotify = onSessionNotify,
                     onApprovalNotify = onApprovalNotify,
+                    onRelayNotification = onRelayNotification,
                     onHealthCheck = onHealthCheck
                 )
             }
@@ -445,6 +448,7 @@ private fun InboxScreen(
     onNotificationsEnabled: () -> Boolean,
     onSessionNotify: (CodexSession) -> Unit,
     onApprovalNotify: (ApprovalItem) -> Unit,
+    onRelayNotification: (NotificationEvent) -> Unit,
     onHealthCheck: () -> Unit
 ) {
     var hostsOpen by remember { mutableStateOf(false) }
@@ -458,13 +462,14 @@ private fun InboxScreen(
         sortInboxSessions(uiState.sessions, uiState.pinnedSessionIds)
     }
 
-    LaunchedEffect(uiState.sessions, uiState.approvals) {
+    LaunchedEffect(uiState.sessions, uiState.approvals, uiState.notifications) {
         if (!notificationBaselineReady) {
             notificationBaselineReady = true
             return@LaunchedEffect
         }
         uiState.sessions.forEach(onSessionNotify)
         uiState.pendingApprovals.forEach(onApprovalNotify)
+        uiState.notifications.forEach(onRelayNotification)
     }
 
     Column(

@@ -512,6 +512,14 @@ class RelayViewModel(
         persistCachedState()
     }
 
+    override fun onNotificationEvent(notification: NotificationEvent) {
+        _uiState.update { state ->
+            val notifications = (listOf(notification) + state.notifications.filter { it.notificationId != notification.notificationId })
+                .take(MAX_NOTIFICATION_ITEMS)
+            state.copy(notifications = notifications)
+        }
+    }
+
     override fun onHealthCheck(summary: String) {
         _uiState.update { it.copy(lastHealthCheck = summary, lastError = null) }
     }
@@ -545,6 +553,7 @@ class RelayViewModel(
     private companion object {
         const val MAX_TIMELINE_ITEMS = 2000
         const val MAX_APPROVAL_ITEMS = 50
+        const val MAX_NOTIFICATION_ITEMS = 200
         const val TIMELINE_PAGE_SIZE = 80
 
         fun isValidRelayUrl(url: String): Boolean =

@@ -29,6 +29,7 @@ class RelayClient(
         fun onPowerResult(result: PowerResult)
         fun onTimelineEvent(event: TimelineItem)
         fun onTimelinePage(sessionId: String, events: List<TimelineItem>, hasMoreBefore: Boolean, source: String)
+        fun onNotificationEvent(notification: NotificationEvent)
         fun onHealthCheck(summary: String)
         fun onPairingComplete(deviceId: String, deviceToken: String)
         fun onError(message: String)
@@ -393,6 +394,10 @@ class RelayClient(
                     )
                 }
 
+                "notification.event" -> listener.onNotificationEvent(
+                    parseNotificationEvent(message.getJSONObject("payload").getJSONObject("notification"))
+                )
+
                 "error" -> listener.onError(
                     message.getJSONObject("payload").optString("detail", "Relay error")
                 )
@@ -493,6 +498,16 @@ class RelayClient(
         resultOk = json.takeIf { it.has("result_ok") && !it.isNull("result_ok") }?.optBoolean("result_ok"),
         resultMessage = json.optString("result_message", ""),
         changedFileCount = json.takeIf { it.has("changed_file_count") && !it.isNull("changed_file_count") }?.optInt("changed_file_count"),
+        createdAt = json.optString("created_at", "")
+    )
+
+    private fun parseNotificationEvent(json: JSONObject): NotificationEvent = NotificationEvent(
+        notificationId = json.optString("notification_id", UUID.randomUUID().toString()),
+        kind = json.optString("kind", "update"),
+        sessionId = json.optString("session_id", "").takeIf { it.isNotBlank() },
+        hostId = json.optString("host_id", "").takeIf { it.isNotBlank() },
+        title = json.optString("title", "Codex update"),
+        summary = json.optString("summary", ""),
         createdAt = json.optString("created_at", "")
     )
 

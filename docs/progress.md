@@ -3518,3 +3518,41 @@ Known notes:
 - AGP 9 built-in Kotlin blocks `kapt`; this pass temporarily sets `android.builtInKotlin=false` and `android.newDsl=false` to support Room annotation processing. A later build-system cleanup should migrate to AGP 9 built-in Kotlin plus a compatible Room/KSP setup.
 - Notifications are still local notifications only. This pass makes local notification de-dupe durable, but does not add FCM or true background push wakeup.
 - Relay persists queue depth/state and Host Bridge persists pending prompt text locally; full cross-device queue inspection/editing is still future work.
+
+## 2026-05-24: Relay notification events v1
+
+Status: completed.
+
+Changes:
+
+- Added a shared `notification.event` protocol message.
+- Relay now emits durable notification events for four high-value cases:
+  - `approval_pending`
+  - `session_completed`
+  - `needs_input`
+  - `host_offline`
+- Relay persists notification events in SQLite and reloads them on restart.
+- Android now receives `notification.event` and renders it through the existing local notification channel.
+- Notification de-dupe now runs through the persisted ledger instead of only process memory.
+- Added `npm run verify:notification-events` to verify the four notification types end to end.
+
+Verification:
+
+```powershell
+npm run verify:notification-events
+cd android
+.\gradlew.bat :app:assembleDebug --no-daemon
+```
+
+Result:
+
+```text
+[verify] Relay notification events for approval, completion, needs-input, and host-offline verified.
+BUILD SUCCESSFUL
+```
+
+Known notes:
+
+- This is still WebSocket-delivered notification fanout, not FCM/APNs-style background push.
+- Host offline notification is emitted when Relay observes the host connection close event.
+- Future FCM work can reuse the Relay notification event model without redoing the decision logic.

@@ -63,6 +63,29 @@ class LocalNotifier(private val context: Context) {
         )
     }
 
+    fun notifyRelayEvent(notification: NotificationEvent) {
+        if (!notificationsAllowed()) {
+            return
+        }
+        if (notification.kind !in NOTIFIABLE_RELAY_KINDS) {
+            return
+        }
+        if (!cacheStore.markNotificationSeen(notification.notificationId, notification.kind)) {
+            return
+        }
+        show(
+            notificationId = notification.notificationId.hashCode().absoluteValue,
+            title = when (notification.kind) {
+                "approval_pending" -> "Approval requested"
+                "session_completed" -> "Codex task completed"
+                "needs_input" -> "Codex needs input"
+                "host_offline" -> "Host offline"
+                else -> notification.title
+            },
+            body = notification.summary.ifBlank { notification.title }
+        )
+    }
+
     fun notificationsAllowed(): Boolean {
         return Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
@@ -108,5 +131,6 @@ class LocalNotifier(private val context: Context) {
     private companion object {
         const val CHANNEL_ID = "codex_updates"
         val NOTIFIABLE_STAGES = setOf("waiting_approval", "tests_failed", "needs_user", "completed")
+        val NOTIFIABLE_RELAY_KINDS = setOf("approval_pending", "session_completed", "needs_input", "host_offline")
     }
 }

@@ -65,6 +65,15 @@ export function createRelaySqliteStore(options = {}) {
       updated_at TEXT NOT NULL,
       payload_json TEXT NOT NULL DEFAULT '{}'
     );
+    CREATE TABLE IF NOT EXISTS notification_events (
+      notification_id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      session_id TEXT,
+      host_id TEXT,
+      created_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_notification_events_created ON notification_events(created_at);
     CREATE TABLE IF NOT EXISTS git_audit_events (
       event_id TEXT PRIMARY KEY,
       audit_id TEXT NOT NULL,
@@ -333,6 +342,41 @@ export function createRelaySqliteStore(options = {}) {
     deletePromptQueueState(sessionId) {
       db.prepare('DELETE FROM prompt_queue_states WHERE session_id = ?').run(sessionId);
     },
+    loadNotificationEvents(limit) {
+      return db.prepare(`
+        SELECT payload_json
+        FROM notification_events
+        ORDER BY created_at DESC
+        LIMIT ?
+      `).all(limit).reverse().map((row) => parseJson(row.payload_json, null)).filter(Boolean);
+    },
+    saveNotificationEvent(event) {
+      db.prepare(`
+        INSERT INTO notification_events (notification_id, kind, session_id, host_id, created_at, payload_json)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(notification_id) DO UPDATE SET
+          kind = excluded.kind,
+          session_id = excluded.session_id,
+          host_id = excluded.host_id,
+          created_at = excluded.created_at,
+          payload_json = excluded.payload_json
+      `).run(
+        event.notification_id,
+        event.kind,
+        event.session_id ?? null,
+        event.host_id ?? null,
+        event.created_at ?? new Date().toISOString(),
+        JSON.stringify(event)
+      );
+    },
+    trimNotificationEvents(limit) {
+      db.prepare(`
+        DELETE FROM notification_events
+        WHERE notification_id NOT IN (
+          SELECT notification_id FROM notification_events ORDER BY created_at DESC LIMIT ?
+        )
+      `).run(limit);
+    },
     trimTimelineEvents(limitPerSession) {
       db.prepare(`
         DELETE FROM timeline_events
@@ -488,6 +532,7 @@ export function createRelaySqliteStore(options = {}) {
         sessions: count('sessions'),
         timeline_events: count('timeline_events'),
         prompt_queue_states: count('prompt_queue_states'),
+        notification_events: count('notification_events'),
         git_audit_events: count('git_audit_events'),
         host_devices: count('host_devices'),
         power_control_trusts: count('power_control_trusts'),

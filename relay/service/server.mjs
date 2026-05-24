@@ -26,6 +26,7 @@ const maxPromptLength = Number.parseInt(process.env.RELAY_MAX_PROMPT_LENGTH ?? '
 const maxPromptImages = Number.parseInt(process.env.RELAY_MAX_PROMPT_IMAGES ?? '4', 10);
 const maxPromptImageDataUrlBytes = Number.parseInt(process.env.RELAY_MAX_PROMPT_IMAGE_DATA_URL_BYTES ?? '1500000', 10);
 const auditLogLimit = Number.parseInt(process.env.RELAY_AUDIT_LOG_LIMIT ?? '500', 10);
+const notificationLogLimit = Number.parseInt(process.env.RELAY_NOTIFICATION_LOG_LIMIT ?? '200', 10);
 const gitAuditLogPath = resolve(process.env.RELAY_GIT_AUDIT_LOG_PATH ?? '.relay/git-audit.ndjson');
 const publicHttpUrl = trimTrailingSlash(process.env.RELAY_PUBLIC_HTTP_URL ?? '');
 const publicWsUrl = trimTrailingSlash(process.env.RELAY_PUBLIC_WS_URL ?? '');
@@ -48,6 +49,7 @@ const state = {
   gitAuditEvents: [],
   gitSnapshots: new Map(),
   promptQueueStates: new Map(),
+  notificationEvents: [],
   deviceTokens: new Map(),
   nextTimelineCursor: 1
 };
@@ -254,7 +256,8 @@ function createHealthPayload(request) {
       git_audit_events: state.gitAuditEvents.length,
       cached_timeline_sessions: state.timelineEvents.size,
       cached_timeline_events: cachedTimelineEvents,
-      prompt_queue_states: state.promptQueueStates.size
+      prompt_queue_states: state.promptQueueStates.size,
+      notification_events: state.notificationEvents.length
     },
     cache: {
       timeline_cache_limit: timelineCacheLimit,
@@ -626,16 +629,17 @@ function loadSqliteState() {
   }
 
   state.gitAuditEvents = relayStore.loadGitAuditEvents(auditLogLimit);
+  state.notificationEvents = relayStore.loadNotificationEvents(notificationLogLimit);
   for (const queueState of relayStore.loadPromptQueueStates()) {
     state.promptQueueStates.set(queueState.session_id, queueState);
   }
 
   const counts = relayStore.counts();
-  if (counts.devices || counts.hosts || counts.sessions || counts.timeline_events || counts.git_audit_events || counts.prompt_queue_states) {
+  if (counts.devices || counts.hosts || counts.sessions || counts.timeline_events || counts.git_audit_events || counts.prompt_queue_states || counts.notification_events) {
     if (counts.devices || counts.hosts) {
       console.log(`[relay] loaded ${counts.devices} device(s) and ${counts.hosts} host(s) from ${relayStore.path}`);
     }
-    console.log(`[relay] loaded sqlite state from ${relayStore.path}: devices=${counts.devices}, hosts=${counts.hosts}, sessions=${counts.sessions}, timeline_events=${counts.timeline_events}, prompt_queue_states=${counts.prompt_queue_states}, git_audit_events=${counts.git_audit_events}`);
+    console.log(`[relay] loaded sqlite state from ${relayStore.path}: devices=${counts.devices}, hosts=${counts.hosts}, sessions=${counts.sessions}, timeline_events=${counts.timeline_events}, prompt_queue_states=${counts.prompt_queue_states}, notification_events=${counts.notification_events}, git_audit_events=${counts.git_audit_events}`);
   }
 }
 
@@ -863,6 +867,14 @@ function handleApprovalRequest(connection, message) {
   });
 
   console.log(`[relay] approval requested: ${approval.approval_id}`);
+  emitNotification({
+    kind: 'approval_pending',
+    session_id: approval.session_id,
+    host_id: state.sessions.get(approval.session_id)?.host_id ?? null,
+    title: 'Approval requested',
+    summary: approval.summary || approval.title,
+    payload: { approval_id: approval.approval_id }
+  });
   broadcastToClients(createMessage(MessageType.ApprovalRequest, {
     approval: state.approvals.get(approval.approval_id)
   }));
@@ -1166,6 +1178,7 @@ function handleSessionSnapshot(connection, message) {
 
   console.log(`[relay] session snapshot: ${session.session_id}`);
   broadcastToClients(createMessage(MessageType.SessionSnapshot, { session }));
+  emitNotificationForSessionStage(session);
 }
 
 function handleSessionSubscribe(connection, message) {
@@ -1448,6 +1461,7 @@ function handleClose(connection) {
       host.last_seen_at = new Date().toISOString();
     }
 
+    emitHostOfflineNotifications(connection.hostId);
     state.hostConnections.delete(connection.hostId);
     clearSessionsForHost(connection.hostId);
     persistIdentityState();
@@ -1490,11 +1504,14 @@ function broadcastToClients(message) {
     const snapshotSessionId = message.payload?.session?.session_id;
     const gitSessionId = message.payload?.snapshot?.session_id;
     const pageSessionId = message.payload?.session_id;
+    const notificationSessionId = message.payload?.notification?.session_id;
+    const notificationHostId = message.payload?.notification?.host_id;
     const hostId = message.payload?.host?.host_id;
-    const sessionId = eventSessionId ?? snapshotSessionId ?? gitSessionId ?? pageSessionId;
+    const sessionId = eventSessionId ?? snapshotSessionId ?? gitSessionId ?? pageSessionId ?? notificationSessionId;
+    const effectiveHostId = hostId ?? notificationHostId;
     const subscriptions = state.subscriptions.get(client);
 
-    if (hostId && subscriptions?.has('*')) {
+    if (effectiveHostId && subscriptions?.has('*')) {
       send(client, message);
       continue;
     }
@@ -1637,6 +1654,88 @@ function refreshSessionStage(sessionId) {
   state.sessions.set(sessionId, stagedSession);
   relayStore.saveSession(stagedSession);
   broadcastToClients(createMessage(MessageType.SessionSnapshot, { session: stagedSession }));
+  emitNotificationForSessionStage(stagedSession);
+}
+
+function emitNotificationForSessionStage(session) {
+  if (!session?.stage) {
+    return;
+  }
+
+  if (session.stage.type === 'needs_user' || session.stage.type === 'waiting_for_input') {
+    emitNotification({
+      kind: 'needs_input',
+      session_id: session.session_id,
+      host_id: session.host_id,
+      title: session.stage.label,
+      summary: session.stage.summary,
+      payload: { stage_type: session.stage.type }
+    });
+  }
+  if (session.stage.type === 'completed') {
+    emitNotification({
+      kind: 'session_completed',
+      session_id: session.session_id,
+      host_id: session.host_id,
+      title: session.stage.label,
+      summary: session.stage.summary,
+      payload: { stage_type: session.stage.type }
+    });
+  }
+}
+
+function emitHostOfflineNotifications(hostId) {
+  for (const session of state.sessions.values()) {
+    if (session.host_id !== hostId) {
+      continue;
+    }
+    emitNotification({
+      kind: 'host_offline',
+      session_id: session.session_id,
+      host_id: hostId,
+      title: 'Host offline',
+      summary: `${session.project_name || session.session_id} is offline.`,
+      payload: { session_id: session.session_id, host_id: hostId }
+    });
+  }
+}
+
+function emitNotification(notification) {
+  if (!notification?.kind) {
+    return;
+  }
+
+  const dedupeKey = [
+    notification.kind,
+    notification.session_id ?? '',
+    notification.host_id ?? '',
+    notification.payload?.approval_id ?? '',
+    notification.payload?.stage_type ?? '',
+    notification.payload?.action ?? ''
+  ].join(':');
+
+  if (state.notificationEvents.some((event) => event.dedupe_key === dedupeKey)) {
+    return;
+  }
+
+  const event = {
+    notification_id: randomUUID(),
+    dedupe_key: dedupeKey,
+    kind: notification.kind,
+    session_id: notification.session_id ?? null,
+    host_id: notification.host_id ?? null,
+    created_at: new Date().toISOString(),
+    title: notification.title,
+    summary: notification.summary,
+    payload: notification.payload ?? {}
+  };
+  state.notificationEvents.push(event);
+  while (state.notificationEvents.length > notificationLogLimit) {
+    state.notificationEvents.shift();
+  }
+  relayStore.saveNotificationEvent(event);
+  relayStore.trimNotificationEvents(notificationLogLimit);
+  broadcastToClients(createMessage(MessageType.NotificationEvent, { notification: event }));
 }
 
 function withDerivedSessionStage(session) {

@@ -44,6 +44,7 @@
     "verify:power-control-flow": "node tools/verify-power-control-flow.mjs",
     "verify:rich-prompt-flow": "node tools/verify-rich-prompt-flow.mjs",
     "verify:prompt-queue-adapter": "node tools/verify-prompt-queue-adapter.mjs",
+    "verify:notification-events": "node tools/verify-notification-events.mjs",
     "verify:pairing-qr": "node tools/verify-pairing-qr.mjs",
     "verify:relay-health": "node tools/verify-relay-health.mjs",
     "verify:relay-identity-storage": "node tools/verify-relay-identity-storage.mjs",
