@@ -212,6 +212,7 @@ data class RelayUiState(
     val notifications: List<NotificationEvent> = emptyList(),
     val relayRequestState: RelayRequestState = RelayRequestState(),
     val relayRequestHistory: List<RelayRequestState> = emptyList(),
+    val syncState: SyncState = SyncState(),
     val lastConnectedAt: String? = null,
     val lastHealthCheck: String? = null,
     val lastError: String? = null
@@ -253,4 +254,12 @@ data class RelayRequestState(
     val messageId: String? = null,
     val attempts: Int = 0,
     val updatedAt: String? = null
+)
+
+data class SyncState(
+    val active: Boolean = false,
+    val pendingSessionCount: Int = 0,
+    val confirmedSessionCount: Int = 0,
+    val totalSessionCount: Int = 0,
+    val summary: String = ""
 )

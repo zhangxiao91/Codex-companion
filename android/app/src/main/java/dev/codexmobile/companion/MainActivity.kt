@@ -147,7 +147,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        viewModel.refreshAllSessions()
+        viewModel.recoverConnectionIfNeeded()
     }
 
     private fun scanPairingCode() {
@@ -624,11 +624,15 @@ private fun MainStatusNotice(uiState: RelayUiState) {
     val message = uiState.lastError ?: uiState.lastHealthCheck
     val requestState = uiState.relayRequestState
     val requestHistory = uiState.relayRequestHistory
+    val syncState = uiState.syncState
     var historyOpen by remember { mutableStateOf(false) }
-    if (message.isNullOrBlank() && requestState.phase.isBlank() && requestHistory.isEmpty()) {
+    if (message.isNullOrBlank() && requestState.phase.isBlank() && requestHistory.isEmpty() && !syncState.active) {
         return
     }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (syncState.active) {
+            SyncStatusStrip(syncState)
+        }
         if (requestState.phase.isNotBlank()) {
             RelayRequestStatusStrip(
                 state = requestState,
@@ -651,6 +655,40 @@ private fun MainStatusNotice(uiState: RelayUiState) {
                 text = message,
                 tone = if (uiState.lastError.isNullOrBlank()) NoticeTone.Neutral else NoticeTone.Critical
             )
+        }
+    }
+}
+
+@Composable
+private fun SyncStatusStrip(syncState: SyncState) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = NoticeTone.Warning.background.copy(alpha = 0.62f),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, NoticeTone.Warning.foreground.copy(alpha = 0.24f))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = syncState.summary.ifBlank { "Syncing sessions" },
+                    color = NoticeTone.Warning.foreground,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "Confirmed ${syncState.confirmedSessionCount}/${syncState.totalSessionCount} / pending ${syncState.pendingSessionCount}",
+                    color = NoticeTone.Warning.foreground.copy(alpha = 0.72f),
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Text("Syncing", color = NoticeTone.Warning.foreground, style = MaterialTheme.typography.labelSmall)
         }
     }
 }

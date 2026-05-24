@@ -17,7 +17,7 @@ import { handleWebSocketUpgrade } from './ws-server.mjs';
 
 const port = Number.parseInt(process.env.RELAY_PORT ?? '8787', 10);
 const host = process.env.RELAY_HOST ?? '127.0.0.1';
-const timelineCacheLimit = Number.parseInt(process.env.RELAY_TIMELINE_CACHE_LIMIT ?? '2000', 10);
+const timelineCacheLimit = Number.parseInt(process.env.RELAY_TIMELINE_CACHE_LIMIT ?? '20000', 10);
 const devToken = process.env.RELAY_DEV_TOKEN ?? '';
 const pairingToken = process.env.RELAY_PAIRING_TOKEN ?? devToken;
 const hostToken = process.env.RELAY_HOST_TOKEN ?? devToken;

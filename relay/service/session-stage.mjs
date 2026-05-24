@@ -21,6 +21,8 @@ export function deriveSessionStage(session, timelineEvents = [], approvals = [],
     .filter((snapshot) => snapshot.session_id === session.session_id)
     .sort((a, b) => parseIsoMillis(b.updated_at) - parseIsoMillis(a.updated_at))[0];
   const latestEvent = recentEvents[0];
+  const isRunningSession = session.status === 'running';
+  const sessionUpdatedAt = parseIsoMillis(session.updated_at);
   const completedTurns = recentEvents.filter((event) => event.type === 'turn_completed');
   const latestCompletedTurn = completedTurns[0];
   const latestCompletedAt = parseIsoMillis(latestCompletedTurn?.created_at);
@@ -33,8 +35,11 @@ export function deriveSessionStage(session, timelineEvents = [], approvals = [],
     completedTurnTimes.set(turnId, Math.max(completedTurnTimes.get(turnId) ?? 0, parseIsoMillis(event.created_at)));
   }
   const failedEvent = recentEvents.find((event) => isFailureEvent(event));
+  const failedEventIsCurrent = failedEvent
+    && isFailureCurrentForSession(failedEvent, session.status, sessionUpdatedAt);
+  const latestGitFailureIsCurrent = isGitFailureCurrentForSession(latestGitSnapshot, sessionUpdatedAt, parseIsoMillis(latestEvent?.created_at));
 
-  if ((failedEvent && isEventOpen(failedEvent, completedTurnTimes, latestCompletedAt)) || latestGitSnapshot?.result?.ok === false || latestGitSnapshot?.error) {
+  if ((failedEventIsCurrent && isEventOpen(failedEvent, completedTurnTimes, latestCompletedAt)) || latestGitFailureIsCurrent) {
     return createSessionStage(
       'tests_failed',
       'Needs attention',
@@ -44,7 +49,9 @@ export function deriveSessionStage(session, timelineEvents = [], approvals = [],
     );
   }
 
-  const runningCommand = recentEvents.find((event) => event.type === 'command_execution' && isActiveTimelineEvent(event) && isEventOpen(event, completedTurnTimes, latestCompletedAt));
+  const runningCommand = isRunningSession
+    ? recentEvents.find((event) => event.type === 'command_execution' && isActiveTimelineEvent(event) && isEventOpen(event, completedTurnTimes, latestCompletedAt))
+    : undefined;
   if (runningCommand) {
     return createSessionStage(
       'running_command',
@@ -55,7 +62,9 @@ export function deriveSessionStage(session, timelineEvents = [], approvals = [],
     );
   }
 
-  const editingFiles = recentEvents.find((event) => (event.type === 'file_changed' || event.type === 'diff_update') && isEventOpen(event, completedTurnTimes, latestCompletedAt));
+  const editingFiles = isRunningSession
+    ? recentEvents.find((event) => (event.type === 'file_changed' || event.type === 'diff_update') && isEventOpen(event, completedTurnTimes, latestCompletedAt))
+    : undefined;
   if (editingFiles) {
     return createSessionStage(
       'editing_files',
@@ -66,7 +75,9 @@ export function deriveSessionStage(session, timelineEvents = [], approvals = [],
     );
   }
 
-  const thinking = recentEvents.find((event) => isThinkingEvent(event) && isEventOpen(event, completedTurnTimes, latestCompletedAt));
+  const thinking = isRunningSession
+    ? recentEvents.find((event) => isThinkingEvent(event) && isEventOpen(event, completedTurnTimes, latestCompletedAt))
+    : undefined;
   if (thinking) {
     return createSessionStage(
       'thinking',
@@ -158,6 +169,32 @@ function isFailureEvent(event) {
     || text.includes('exit code 1')
     || text.includes('result=false')
     || text.includes('result=blocked');
+}
+
+function isFailureCurrentForSession(event, sessionStatus, sessionUpdatedAt) {
+  if (sessionStatus === 'running' || sessionStatus === 'failed') {
+    return true;
+  }
+
+  if (sessionUpdatedAt <= 0) {
+    return true;
+  }
+
+  return parseIsoMillis(event.created_at) >= sessionUpdatedAt - 2000;
+}
+
+function isGitFailureCurrentForSession(snapshot, sessionUpdatedAt, latestEventAt) {
+  if (!snapshot || (snapshot.result?.ok !== false && !snapshot.error)) {
+    return false;
+  }
+
+  const snapshotUpdatedAt = parseIsoMillis(snapshot.updated_at);
+  const latestActivityAt = Math.max(sessionUpdatedAt, latestEventAt);
+  if (snapshotUpdatedAt <= 0 || latestActivityAt <= 0) {
+    return true;
+  }
+
+  return snapshotUpdatedAt >= latestActivityAt - 2000;
 }
 
 function cleanStageSummary(summary) {

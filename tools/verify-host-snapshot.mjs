@@ -62,10 +62,10 @@ try {
 
   host.close();
   const offlineSnapshot = await waitForMessage(client, (message) => (
-    message.type === MessageType.HostSnapshot
+      message.type === MessageType.HostSnapshot
       && message.payload?.host?.host_id === 'snapshot-host'
       && message.payload?.host?.status === 'offline'
-      && message.payload?.session_count === 0
+      && message.payload?.session_count === 1
   ), 5000);
 
   if (!offlineSnapshot.payload.host.last_seen_at) {

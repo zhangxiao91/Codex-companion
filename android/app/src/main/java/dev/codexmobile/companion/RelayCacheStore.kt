@@ -217,7 +217,7 @@ class RelayCacheStore(context: Context) {
         runCatching { java.time.Instant.parse(raw.orEmpty()).toEpochMilli() }.getOrDefault(0L)
 
     companion object {
-        const val MAX_TIMELINE_ITEMS_PER_SESSION = 2000
+        const val MAX_TIMELINE_ITEMS_PER_SESSION = 10000
         const val MAX_RELAY_REQUEST_HISTORY = 20
         const val APP_STATE_SELECTED_SESSION = "selected_session_id"
         const val APP_STATE_PINNED_SESSIONS = "pinned_session_ids"

@@ -3737,3 +3737,100 @@ Known notes:
 
 - Room still warns that schema export is not configured. This is pre-existing project hygiene, not a runtime failure.
 - Legacy `RelaySettings` JSON timeline helpers still have a global 2000-event cap, but the active Room cache path now uses per-session retention.
+
+## 2026-05-24: Raise timeline retention for long sessions
+
+Completed:
+
+- Raised Relay default timeline retention from 2000 to 20000 events per session.
+- Raised Android Room timeline retention from 2000 to 10000 events per session.
+- Raised Android in-memory timeline retention from 2000 to 10000 events per session.
+- Raised legacy Android `RelaySettings` JSON timeline retention to 10000 events for compatibility with older fallback paths.
+- Kept timeline paging behavior unchanged; the app should still load/render by page instead of eagerly showing every retained event.
+
+Verification:
+
+```powershell
+node --check relay/service/server.mjs
+npm run verify:relay-timeline-cache
+cd android
+.\gradlew.bat :app:assembleDebug
+```
+
+Result:
+
+```text
+[verify] Relay timeline cache cursor replay verified.
+BUILD SUCCESSFUL
+```
+
+Known notes:
+
+- Existing running Relay processes must be restarted to pick up the new default `RELAY_TIMELINE_CACHE_LIMIT=20000`.
+- If `RELAY_TIMELINE_CACHE_LIMIT` is explicitly set in a server environment, that configured value still wins over the new default.
+- Kotlin incremental compilation emitted an EOF warning and fell back to non-incremental compilation; the final Android build succeeded.
+
+## 2026-05-24: Mobile and host reconnect stability
+
+Completed:
+
+- Android RelayClient now uses OkHttp WebSocket ping intervals to keep idle connections alive across NAT/proxy timeouts.
+- Android RelayClient ignores stale callbacks from superseded sockets, so delayed close/failure events no longer clobber a fresh connection.
+- Android RelayViewModel now auto-reconnects with backoff after unexpected disconnects, and recovers the relay connection when the app returns to the foreground.
+- Host Bridge now reconnects to the server Relay after disconnects, with heartbeat restart and backoff, instead of stopping the Codex adapter process on the first relay close.
+- Server bridge startup now only reuses saved host trust when it matches the current relay URL, avoiding cross-relay identity confusion.
+- Bumped Relay/Android timeline retention defaults that were already in progress to keep long sessions replayable across reconnects.
+- Updated the host snapshot verification to match the current offline-host/session-retention behavior.
+
+Verification:
+
+```powershell
+cd android
+.\gradlew.bat :app:assembleDebug --no-daemon
+npm run verify:server-bridge-start
+npm run verify:host-snapshot
+node --check bridge/host-bridge/index.mjs
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL
+[verify] Server Host Bridge startup helper verified.
+[verify] Host snapshot routing verified.
+```
+
+Known notes:
+
+- Existing running Android and bridge processes need to be restarted to pick up the new reconnect behavior.
+- If the server Relay still sits behind an aggressive proxy or firewall, reconnects will help, but a stable public WSS endpoint is still the real fix.
+- The long-session retention increase is already on disk in the working tree; it is not yet committed in this turn.
+
+## 2026-05-24: Session stage stabilization after reconnect
+
+Completed:
+
+- Android now skips duplicate timeline sync requests for the same session while a previous sync is still pending.
+- Relay session-stage derivation now only treats `editing_files`, `running_command`, and `thinking` as active when the session itself is still `running`.
+- Relay session-stage derivation now treats stale failure snapshots more conservatively so old `tests_failed` / `needs attention` states do not pin finished sessions forever.
+- Added a regression check that completed or idle sessions no longer inherit stale active file-editing stage from older events.
+
+Verification:
+
+```powershell
+npm run verify:session-stage
+cd android
+.\gradlew.bat :app:assembleDebug --no-daemon
+```
+
+Result:
+
+```text
+[verify] Session stage derivation verified.
+BUILD SUCCESSFUL
+```
+
+Known notes:
+
+- Existing Relay/Android processes need a restart to pick up the new stage rules and duplicate-sync guard.
+- If a session still reports `needs attention` after this change, it should now come from a genuinely recent failure or a fresh Git error, not from old retained state.

@@ -24,22 +24,43 @@ const hostId = process.env.HOST_ID ?? 'local-dev-host';
 const displayName = process.env.HOST_NAME ?? 'Local Development Host';
 const bridgeVersion = '0.0.1';
 const powerController = createPowerController(hostId, displayName);
+let socket;
+let heartbeatTimer;
+let reconnectTimer;
+let reconnectAttempt = 0;
 const adapter = createCodexAdapter(hostId, {
   onTimelineEvent: (event) => {
-    if (socket.readyState === WebSocket.OPEN) {
-      socket.send(encodeMessage(createRelayMessage(MessageType.TimelineEvent, { event })));
-    }
+    send(MessageType.TimelineEvent, { event });
   },
   onApprovalRequest: (approval) => {
-    if (socket.readyState === WebSocket.OPEN) {
-      socket.send(encodeMessage(createRelayMessage(MessageType.ApprovalRequest, { approval })));
-    }
+    send(MessageType.ApprovalRequest, { approval });
   }
 });
 
-const socket = new WebSocket(relayUrl);
+connectRelay();
 
-socket.addEventListener('open', async () => {
+function connectRelay() {
+  if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) {
+    return;
+  }
+
+  const nextSocket = new WebSocket(relayUrl);
+  socket = nextSocket;
+
+  nextSocket.addEventListener('open', () => handleOpen(nextSocket));
+  nextSocket.addEventListener('message', (event) => handleMessage(nextSocket, event));
+  nextSocket.addEventListener('close', (event) => handleClose(nextSocket, event));
+  nextSocket.addEventListener('error', (event) => handleError(nextSocket, event));
+}
+
+async function handleOpen(currentSocket) {
+  if (currentSocket !== socket) {
+    currentSocket.close(1000, 'stale connection');
+    return;
+  }
+
+  reconnectAttempt = 0;
+  clearReconnectTimer();
   console.log(`[bridge] connected to ${relayUrl}`);
 
   if (typeof adapter.start === 'function') {
@@ -68,16 +89,14 @@ socket.addEventListener('open', async () => {
     }
   }
 
-  setInterval(() => {
-    send(MessageType.HostHeartbeat, {
-      host_id: hostId,
-      bridge_version: bridgeVersion
-    });
-    send(MessageType.PowerStatus, powerController.status());
-  }, 5000);
-});
+  startHeartbeat();
+}
 
-socket.addEventListener('message', async (event) => {
+async function handleMessage(currentSocket, event) {
+  if (currentSocket !== socket) {
+    return;
+  }
+
   let message;
   try {
     message = decodeMessage(event.data);
@@ -86,7 +105,7 @@ socket.addEventListener('message', async (event) => {
       const { session_id: sessionId } = message.payload;
       console.log(`[bridge] received prompt for ${sessionId}`);
       const response = await adapter.sendPrompt(sessionId, message.payload);
-      socket.send(encodeMessage(withAuth(response)));
+      sendMessage(withAuth(response));
       return;
     }
 
@@ -94,7 +113,7 @@ socket.addEventListener('message', async (event) => {
       const { session_id: sessionId } = message.payload;
       console.log(`[bridge] received queued prompt for ${sessionId}`);
       const response = await adapter.queuePrompt(sessionId, message.payload);
-      socket.send(encodeMessage(withAuth(response)));
+      sendMessage(withAuth(response));
       return;
     }
 
@@ -102,7 +121,7 @@ socket.addEventListener('message', async (event) => {
       const { session_id: sessionId } = message.payload;
       console.log(`[bridge] received prompt edit for ${sessionId}`);
       const response = await adapter.editPrompt(sessionId, message.payload);
-      socket.send(encodeMessage(withAuth(response)));
+      sendMessage(withAuth(response));
       return;
     }
 
@@ -110,7 +129,7 @@ socket.addEventListener('message', async (event) => {
       const { session_id: sessionId } = message.payload;
       console.log(`[bridge] received turn interrupt for ${sessionId}`);
       const response = await adapter.interruptTurn(sessionId, message.payload);
-      socket.send(encodeMessage(withAuth(response)));
+      sendMessage(withAuth(response));
       return;
     }
 
@@ -145,7 +164,7 @@ socket.addEventListener('message', async (event) => {
         page: message.payload.page === true
       });
       for (const response of responses) {
-        socket.send(encodeMessage(withAuth(response)));
+        sendMessage(withAuth(response));
       }
       return;
     }
@@ -157,7 +176,7 @@ socket.addEventListener('message', async (event) => {
 
       console.log(`[bridge] received approval decision for ${message.payload.approval_id}: ${message.payload.decision}`);
       const response = await adapter.resolveApproval(message.payload);
-      socket.send(encodeMessage(withAuth(response)));
+      sendMessage(withAuth(response));
       return;
     }
 
@@ -172,7 +191,7 @@ socket.addEventListener('message', async (event) => {
 
       console.log(`[bridge] received git ${message.payload.action} for ${message.payload.session_id}`);
       const snapshot = await handleGitRequest(session, message.payload);
-      socket.send(encodeMessage(createRelayMessage(MessageType.GitSnapshot, { snapshot })));
+      send(MessageType.GitSnapshot, { snapshot });
       return;
     }
 
@@ -245,24 +264,87 @@ socket.addEventListener('message', async (event) => {
       });
     }
   }
-});
+}
 
-socket.addEventListener('close', (event) => {
+function handleClose(currentSocket, event) {
+  if (currentSocket !== socket) {
+    return;
+  }
+
+  stopHeartbeat();
+  socket = undefined;
   const reason = event.reason ? ` reason=${event.reason}` : '';
   console.log(`[bridge] disconnected from relay code=${event.code} was_clean=${event.wasClean}${reason}`);
-  if (typeof adapter.stop === 'function') {
-    adapter.stop();
-  }
-});
+  scheduleReconnect();
+}
 
-socket.addEventListener('error', (event) => {
+function handleError(currentSocket, event) {
+  if (currentSocket !== socket) {
+    return;
+  }
+
   const message = event.message ? `: ${event.message}` : '';
   const errorCause = event.error?.message ? ` (${event.error.message})` : '';
   console.error(`[bridge] websocket error${message}${errorCause}`);
-});
+}
+
+function startHeartbeat() {
+  stopHeartbeat();
+  heartbeatTimer = setInterval(() => {
+    send(MessageType.HostHeartbeat, {
+      host_id: hostId,
+      bridge_version: bridgeVersion
+    });
+    send(MessageType.PowerStatus, powerController.status());
+  }, 5000);
+}
+
+function stopHeartbeat() {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = undefined;
+  }
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) {
+    return;
+  }
+
+  reconnectAttempt += 1;
+  const delayMs = reconnectAttempt === 1
+    ? 1000
+    : reconnectAttempt === 2
+      ? 2000
+      : reconnectAttempt === 3
+        ? 5000
+        : 30000;
+
+  console.log(`[bridge] reconnecting in ${delayMs}ms`);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = undefined;
+    connectRelay();
+  }, delayMs);
+}
+
+function clearReconnectTimer() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = undefined;
+  }
+}
 
 function send(type, payload) {
-  socket.send(encodeMessage(createRelayMessage(type, payload)));
+  return sendMessage(createRelayMessage(type, payload));
+}
+
+function sendMessage(message) {
+  if (socket?.readyState !== WebSocket.OPEN) {
+    return false;
+  }
+
+  socket.send(encodeMessage(message));
+  return true;
 }
 
 function createRelayMessage(type, payload) {

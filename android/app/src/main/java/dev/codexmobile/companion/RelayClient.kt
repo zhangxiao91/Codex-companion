@@ -12,10 +12,11 @@ import org.json.JSONObject
 import org.json.JSONArray
 import java.util.Timer
 import java.util.TimerTask
+import java.util.concurrent.TimeUnit
 
 class RelayClient(
     private val listener: Listener,
-    private val client: OkHttpClient = OkHttpClient()
+    private val client: OkHttpClient = defaultHttpClient()
 ) {
     interface Listener {
         fun onConnected()
@@ -38,6 +39,7 @@ class RelayClient(
         fun onError(message: String)
     }
 
+    @Volatile
     private var socket: WebSocket? = null
     private var authToken: String = ""
     private val pendingAcks = mutableMapOf<String, PendingAck>()
@@ -47,28 +49,44 @@ class RelayClient(
         close()
         authToken = token.trim()
         val request = Request.Builder().url(url).build()
-        socket = client.newWebSocket(
+        val nextSocket = client.newWebSocket(
             request,
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
+                    if (!isCurrentSocket(webSocket)) {
+                        webSocket.close(1000, "stale connection")
+                        return
+                    }
                     socket = webSocket
                     subscribeAll()
                     listener.onConnected()
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
+                    if (!isCurrentSocket(webSocket)) {
+                        return
+                    }
                     handleMessage(text)
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    if (!isCurrentSocket(webSocket)) {
+                        return
+                    }
+                    socket = null
                     listener.onDisconnected(reason.ifBlank { "Closed" })
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    if (!isCurrentSocket(webSocket)) {
+                        return
+                    }
+                    socket = null
                     listener.onDisconnected(t.message ?: "WebSocket failed")
                 }
             }
         )
+        socket = nextSocket
     }
 
     fun close() {
@@ -76,6 +94,8 @@ class RelayClient(
         socket = null
         clearPendingAcks("Relay disconnected before request was acknowledged.")
     }
+
+    private fun isCurrentSocket(webSocket: WebSocket): Boolean = socket === webSocket
 
     fun subscribeAll(): Boolean {
         return send("session.subscribe", JSONObject().put("session_id", "*"))
@@ -883,6 +903,7 @@ class RelayClient(
     companion object {
         const val DEFAULT_RELAY_URL = "ws://10.0.2.2:8787"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+        private const val WEBSOCKET_PING_SECONDS = 25L
         private const val ACK_TIMEOUT_MS = 2500L
         private const val ACK_MAX_RETRIES = 1
         private val ACK_REQUIRED_TYPES = setOf(
@@ -903,5 +924,10 @@ class RelayClient(
 
         private fun firstNonBlank(vararg values: String): String? =
             values.firstOrNull { it.isNotBlank() }
+
+        private fun defaultHttpClient(): OkHttpClient =
+            OkHttpClient.Builder()
+                .pingInterval(WEBSOCKET_PING_SECONDS, TimeUnit.SECONDS)
+                .build()
     }
 }

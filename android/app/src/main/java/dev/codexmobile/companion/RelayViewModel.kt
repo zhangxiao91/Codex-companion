@@ -6,6 +6,10 @@ import java.util.Base64
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 
 class RelayViewModel(
@@ -31,10 +35,32 @@ class RelayViewModel(
     val uiState: StateFlow<RelayUiState> = _uiState
     private var pendingNewChatHostId: String? = null
     private val confirmedSessionIds = mutableSetOf<String>()
+    private val pendingTimelineSyncIds = mutableSetOf<String>()
+    private var reconnectJob: Job? = null
+    private var reconnectAttempt = 0
 
     fun connect() {
-        _uiState.update { it.copy(connectionStatus = "Connecting", lastError = null) }
+        reconnectJob?.cancel()
+        _uiState.update {
+            it.copy(
+                connectionStatus = "Connecting",
+                syncState = buildSyncState(active = true, summary = "Connecting and syncing sessions"),
+                lastError = null
+            )
+        }
         relayClient.connect(_uiState.value.relayUrl, _uiState.value.activeAuthToken)
+    }
+
+    fun recoverConnectionIfNeeded() {
+        val state = _uiState.value
+        if (state.connectionStatus == "Online" || state.connectionStatus == "Connecting") {
+            refreshAllSessions()
+            return
+        }
+        if (state.deviceToken.isBlank()) {
+            return
+        }
+        connect()
     }
 
     fun saveRelayUrl(url: String) {
@@ -416,19 +442,33 @@ class RelayViewModel(
     }
 
     override fun onConnected() {
+        reconnectJob?.cancel()
+        reconnectAttempt = 0
         confirmedSessionIds.clear()
+        pendingTimelineSyncIds.clear()
         _uiState.update {
             it.copy(
                 connectionStatus = "Online",
                 lastConnectedAt = Instant.now().toString(),
                 approvals = emptyList(),
+                syncState = buildSyncState(
+                    active = it.sessions.isNotEmpty(),
+                    summary = if (it.sessions.isEmpty()) "" else "Relay connected, syncing sessions"
+                ),
                 lastError = null
             )
         }
     }
 
     override fun onDisconnected(reason: String) {
-        _uiState.update { it.copy(connectionStatus = "Disconnected", lastError = reason) }
+        _uiState.update {
+            it.copy(
+                connectionStatus = "Disconnected",
+                syncState = buildSyncState(active = false),
+                lastError = reason.ifBlank { "Relay disconnected" }
+            )
+        }
+        scheduleReconnect(reason)
     }
 
     override fun onHostSnapshot(host: HostNode) {
@@ -442,7 +482,7 @@ class RelayViewModel(
     }
 
     override fun onSessionSnapshot(session: CodexSession) {
-        confirmedSessionIds.add(session.sessionId)
+        val isNewlyConfirmed = confirmedSessionIds.add(session.sessionId)
         val shouldSelectNewChat = pendingNewChatHostId == session.hostId
         _uiState.update { state ->
             val sessions = listOf(session) + state.sessions.filter { it.sessionId != session.sessionId }
@@ -459,7 +499,10 @@ class RelayViewModel(
         val state = _uiState.value
         cacheStore.saveSessions(state.sessions)
         cacheStore.saveSelectedSessionId(state.selectedSessionId)
-        syncSession(session.sessionId)
+        updateSyncState()
+        if (isNewlyConfirmed) {
+            syncSession(session.sessionId)
+        }
     }
 
     override fun onApprovalRequest(approval: ApprovalItem) {
@@ -532,6 +575,7 @@ class RelayViewModel(
     }
 
     override fun onTimelineEvent(event: TimelineItem) {
+        pendingTimelineSyncIds.remove(event.sessionId)
         _uiState.update { state ->
             val timeline = mergeTimelineEvents(state.timeline, listOf(event))
             state.copy(
@@ -540,9 +584,11 @@ class RelayViewModel(
             )
         }
         persistCachedState()
+        updateSyncState()
     }
 
     override fun onTimelinePage(sessionId: String, events: List<TimelineItem>, hasMoreBefore: Boolean, source: String) {
+        pendingTimelineSyncIds.remove(sessionId)
         _uiState.update { state ->
             val timeline = mergeTimelineEvents(state.timeline, events)
             val waitingForHostPage = source == "cache" && state.timelineLoadingEarlier
@@ -598,7 +644,7 @@ class RelayViewModel(
     }
 
     override fun onError(message: String) {
-        _uiState.update { it.copy(timelineLoadingEarlier = false, lastError = message) }
+        _uiState.update { it.copy(timelineLoadingEarlier = false, syncState = buildSyncState(active = false), lastError = message) }
     }
 
     fun refreshAllSessions() {
@@ -606,15 +652,17 @@ class RelayViewModel(
     }
 
     override fun onCleared() {
+        reconnectJob?.cancel()
         relayClient.close()
         super.onCleared()
     }
 
     private companion object {
-        const val MAX_TIMELINE_ITEMS_PER_SESSION = 2000
+        const val MAX_TIMELINE_ITEMS_PER_SESSION = 10000
         const val MAX_APPROVAL_ITEMS = 50
         const val MAX_NOTIFICATION_ITEMS = 200
         const val TIMELINE_PAGE_SIZE = 80
+        const val MAX_RECONNECT_DELAY_MS = 30_000L
 
         fun isValidRelayUrl(url: String): Boolean =
             url.startsWith("ws://") || url.startsWith("wss://")
@@ -655,8 +703,17 @@ class RelayViewModel(
         if (sessionId !in confirmedSessionIds) {
             return
         }
+        if (sessionId in pendingTimelineSyncIds) {
+            return
+        }
         val latestCursor = latestCursorFor(sessionId) ?: cacheStore.syncState(sessionId)?.latestCursor
-        relayClient.requestTimeline(sessionId, latestCursor)
+        pendingTimelineSyncIds.add(sessionId)
+        updateSyncState()
+        val sent = relayClient.requestTimeline(sessionId, latestCursor)
+        if (!sent) {
+            pendingTimelineSyncIds.remove(sessionId)
+            updateSyncState()
+        }
     }
 
     private fun syncAllKnownSessions() {
@@ -665,6 +722,51 @@ class RelayViewModel(
             .filter { it.sessionId in confirmed }
             .forEach { session ->
                 syncSession(session.sessionId)
+        }
+        updateSyncState()
+    }
+
+    private fun scheduleReconnect(reason: String) {
+        val state = _uiState.value
+        if (state.deviceToken.isBlank()) {
+            return
+        }
+        if (state.relayUrl.isBlank()) {
+            return
+        }
+        if (reason.equals("closing", ignoreCase = true)) {
+            return
+        }
+        if (reconnectJob?.isActive == true) {
+            return
+        }
+
+        val delayMs = reconnectDelayMs()
+        reconnectJob = viewModelScope.launch {
+            delay(delayMs)
+            val current = _uiState.value
+            if (current.connectionStatus == "Online" || current.connectionStatus == "Connecting" || current.deviceToken.isBlank()) {
+                return@launch
+            }
+            _uiState.update {
+                it.copy(
+                    connectionStatus = "Connecting",
+                    syncState = buildSyncState(active = true, summary = "Reconnecting to Relay"),
+                    lastHealthCheck = "Reconnecting to Relay",
+                    lastError = null
+                )
+            }
+            relayClient.connect(current.relayUrl, current.activeAuthToken)
+        }
+    }
+
+    private fun reconnectDelayMs(): Long {
+        reconnectAttempt += 1
+        return when (reconnectAttempt) {
+            1 -> 1_000L
+            2 -> 2_000L
+            3 -> 5_000L
+            else -> MAX_RECONNECT_DELAY_MS
         }
     }
 
@@ -679,6 +781,41 @@ class RelayViewModel(
             cacheStore.saveSyncState(sessionId, latest, earliest)
         }
     }
+
+    private fun updateSyncState() {
+        _uiState.update { state ->
+            val pendingSessions = state.sessions.count { it.sessionId !in confirmedSessionIds }
+            val pendingTimeline = pendingTimelineSyncIds.size
+            val active = state.connectionStatus == "Connecting" || pendingSessions > 0 || pendingTimeline > 0 || state.timelineLoadingEarlier
+            state.copy(
+                syncState = buildSyncState(
+                    active = active,
+                    summary = when {
+                        state.connectionStatus == "Connecting" -> "Connecting and syncing sessions"
+                        pendingSessions > 0 -> "Confirming ${pendingSessions} session${if (pendingSessions == 1) "" else "s"}"
+                        pendingTimeline > 0 -> "Syncing timeline for ${pendingTimeline} session${if (pendingTimeline == 1) "" else "s"}"
+                        state.timelineLoadingEarlier -> "Loading earlier history"
+                        else -> ""
+                    },
+                    pendingSessionCount = pendingSessions + pendingTimeline,
+                    totalSessionCount = state.sessions.size
+                )
+            )
+        }
+    }
+
+    private fun buildSyncState(
+        active: Boolean,
+        summary: String = "",
+        pendingSessionCount: Int = _uiState.value.sessions.count { it.sessionId !in confirmedSessionIds } + pendingTimelineSyncIds.size,
+        totalSessionCount: Int = _uiState.value.sessions.size
+    ): SyncState = SyncState(
+        active = active,
+        pendingSessionCount = pendingSessionCount,
+        confirmedSessionCount = confirmedSessionIds.size,
+        totalSessionCount = totalSessionCount,
+        summary = summary
+    )
 
     private fun mergeTimelineEvents(current: List<TimelineItem>, incoming: List<TimelineItem>): List<TimelineItem> {
         if (incoming.isEmpty()) {
