@@ -9,7 +9,8 @@ import kotlinx.coroutines.flow.update
 import org.json.JSONObject
 
 class RelayViewModel(
-    private val settings: RelaySettings
+    private val settings: RelaySettings,
+    private val cacheStore: RelayCacheStore
 ) : ViewModel(), RelayClient.Listener {
     private val relayClient = RelayClient(this)
     private val _uiState = MutableStateFlow(
@@ -18,10 +19,11 @@ class RelayViewModel(
             pairingToken = settings.pairingToken(),
             deviceToken = settings.deviceToken(),
             deviceId = settings.deviceId(),
-            sessions = settings.sessions(),
-            selectedSessionId = settings.selectedSessionId(),
-            pinnedSessionIds = settings.pinnedSessionIds(),
-            timeline = settings.timeline()
+            sessions = cacheStore.sessions(),
+            selectedSessionId = cacheStore.selectedSessionId(),
+            pinnedSessionIds = cacheStore.pinnedSessionIds(),
+            timeline = cacheStore.timeline(),
+            promptQueues = cacheStore.promptQueues()
         )
     )
     val uiState: StateFlow<RelayUiState> = _uiState
@@ -40,7 +42,7 @@ class RelayViewModel(
         }
 
         settings.saveRelayUrl(normalizedUrl)
-        settings.clearSessionCache()
+        cacheStore.clearSessionCache()
         _uiState.update {
             it.copy(
                 relayUrl = normalizedUrl,
@@ -52,6 +54,7 @@ class RelayViewModel(
                 approvals = emptyList(),
                 gitSnapshots = emptyMap(),
                 gitAudit = emptyMap(),
+                promptQueues = emptyMap(),
                 lastConnectedAt = null,
                 lastError = null
             )
@@ -70,7 +73,7 @@ class RelayViewModel(
         settings.saveRelayUrl(normalizedUrl)
         settings.savePairingToken(normalizedToken)
         settings.clearDevicePairing()
-        settings.clearSessionCache()
+        cacheStore.clearSessionCache()
         _uiState.update {
             it.copy(
                 relayUrl = normalizedUrl,
@@ -85,6 +88,7 @@ class RelayViewModel(
                 approvals = emptyList(),
                 gitSnapshots = emptyMap(),
                 gitAudit = emptyMap(),
+                promptQueues = emptyMap(),
                 lastConnectedAt = null,
                 lastHealthCheck = null,
                 lastError = null
@@ -109,7 +113,7 @@ class RelayViewModel(
         settings.saveRelayUrl(relayUrl)
         settings.savePairingToken(pairingToken)
         settings.clearDevicePairing()
-        settings.clearSessionCache()
+        cacheStore.clearSessionCache()
         _uiState.update {
             it.copy(
                 relayUrl = relayUrl,
@@ -124,6 +128,7 @@ class RelayViewModel(
                 approvals = emptyList(),
                 gitSnapshots = emptyMap(),
                 gitAudit = emptyMap(),
+                promptQueues = emptyMap(),
                 lastConnectedAt = null,
                 lastHealthCheck = "Pairing from code",
                 lastError = null
@@ -150,7 +155,7 @@ class RelayViewModel(
             .maxOrNull()
             ?.toString()
         _uiState.update { it.copy(selectedSessionId = sessionId) }
-        settings.saveSelectedSessionId(sessionId)
+        cacheStore.saveSelectedSessionId(sessionId)
         relayClient.requestTimeline(sessionId, afterCursor)
         requestGitAudit()
     }
@@ -163,7 +168,7 @@ class RelayViewModel(
             } else {
                 state.pinnedSessionIds + sessionId
             }
-            settings.savePinnedSessionIds(pinned)
+            cacheStore.savePinnedSessionIds(pinned)
             state.copy(
                 pinnedSessionIds = pinned,
                 lastHealthCheck = if (wasPinned) "Session unpinned" else "Session pinned",
@@ -214,6 +219,25 @@ class RelayViewModel(
         }
         _uiState.update { it.copy(lastHealthCheck = "Edited prompt sent to Codex", lastError = null) }
         relayClient.editPrompt(sessionId, draft.copy(text = draft.text.trim()))
+    }
+
+    fun queuePrompt(text: String) {
+        val sessionId = _uiState.value.selectedSessionId
+        if (sessionId == null) {
+            _uiState.update { it.copy(lastError = "Select a session before queueing a prompt") }
+            return
+        }
+        val queue = _uiState.value.promptQueues[sessionId]
+        if (queue != null && queue.depth >= queue.maxDepth) {
+            _uiState.update { it.copy(lastError = "Prompt queue is full") }
+            return
+        }
+        if (text.isBlank()) {
+            _uiState.update { it.copy(lastError = "Queued prompt cannot be empty") }
+            return
+        }
+        _uiState.update { it.copy(lastHealthCheck = "Prompt queued", lastError = null) }
+        relayClient.queuePrompt(sessionId, text.trim())
     }
 
     fun interruptTurn() {
@@ -351,9 +375,7 @@ class RelayViewModel(
                 lastError = null
             )
         }
-        _uiState.value.selectedSessionId?.let { sessionId ->
-            relayClient.requestTimeline(sessionId, latestCursorFor(sessionId))
-        }
+        syncAllKnownSessions()
     }
 
     override fun onDisconnected(reason: String) {
@@ -385,11 +407,9 @@ class RelayViewModel(
             pendingNewChatHostId = null
         }
         val state = _uiState.value
-        settings.saveSessions(state.sessions)
-        settings.saveSelectedSessionId(state.selectedSessionId)
-        if (_uiState.value.selectedSessionId == session.sessionId) {
-            relayClient.requestTimeline(session.sessionId, latestCursorFor(session.sessionId))
-        }
+        cacheStore.saveSessions(state.sessions)
+        cacheStore.saveSelectedSessionId(state.selectedSessionId)
+        syncSession(session.sessionId)
     }
 
     override fun onApprovalRequest(approval: ApprovalItem) {
@@ -464,9 +484,12 @@ class RelayViewModel(
     override fun onTimelineEvent(event: TimelineItem) {
         _uiState.update { state ->
             val timeline = mergeTimelineEvents(state.timeline, listOf(event))
-            state.copy(timeline = timeline)
+            state.copy(
+                timeline = timeline,
+                promptQueues = updatePromptQueueState(state.promptQueues, event)
+            )
         }
-        settings.saveTimeline(_uiState.value.timeline)
+        persistCachedState()
     }
 
     override fun onTimelinePage(sessionId: String, events: List<TimelineItem>, hasMoreBefore: Boolean, source: String) {
@@ -486,7 +509,7 @@ class RelayViewModel(
                 lastError = null
             )
         }
-        settings.saveTimeline(_uiState.value.timeline)
+        persistCachedState()
     }
 
     override fun onHealthCheck(summary: String) {
@@ -508,6 +531,10 @@ class RelayViewModel(
 
     override fun onError(message: String) {
         _uiState.update { it.copy(timelineLoadingEarlier = false, lastError = message) }
+    }
+
+    fun refreshAllSessions() {
+        syncAllKnownSessions()
     }
 
     override fun onCleared() {
@@ -555,6 +582,29 @@ class RelayViewModel(
         .minOrNull()
         ?.toString()
 
+    private fun syncSession(sessionId: String) {
+        val latestCursor = latestCursorFor(sessionId) ?: cacheStore.syncState(sessionId)?.latestCursor
+        relayClient.requestTimeline(sessionId, latestCursor)
+    }
+
+    private fun syncAllKnownSessions() {
+        _uiState.value.sessions.forEach { session ->
+            syncSession(session.sessionId)
+        }
+    }
+
+    private fun persistCachedState() {
+        val state = _uiState.value
+        cacheStore.saveTimeline(state.timeline)
+        cacheStore.savePromptQueues(state.promptQueues)
+        state.timeline.map { it.sessionId }.distinct().forEach { sessionId ->
+            val sessionTimeline = state.timeline.filter { it.sessionId == sessionId }
+            val latest = sessionTimeline.mapNotNull { it.cursor?.toLongOrNull() }.maxOrNull()?.toString()
+            val earliest = sessionTimeline.mapNotNull { it.cursor?.toLongOrNull() }.minOrNull()?.toString()
+            cacheStore.saveSyncState(sessionId, latest, earliest)
+        }
+    }
+
     private fun mergeTimelineEvents(current: List<TimelineItem>, incoming: List<TimelineItem>): List<TimelineItem> {
         if (incoming.isEmpty()) {
             return current
@@ -563,8 +613,48 @@ class RelayViewModel(
         val incomingIds = incoming.map { it.eventId }.toSet()
         return (incoming + current.filter { it.eventId !in incomingIds })
             .sortedWith(compareByDescending<TimelineItem> { it.cursor?.toLongOrNull() ?: Long.MIN_VALUE }
-                .thenByDescending { it.createdAt })
+            .thenByDescending { it.createdAt })
             .take(MAX_TIMELINE_ITEMS)
+    }
+
+    private fun updatePromptQueueState(current: Map<String, PromptQueueState>, event: TimelineItem): Map<String, PromptQueueState> {
+        val queueState = current[event.sessionId]
+        return when (event.type) {
+            "prompt_queued" -> {
+                val depth = event.summary
+                    .substringAfter("Queued prompt ")
+                    .substringBefore("/")
+                    .toIntOrNull()
+                    ?: queueState?.depth
+                    ?: 1
+                val maxDepth = event.summary
+                    .substringAfter("/")
+                    .substringBefore(".")
+                    .toIntOrNull()
+                    ?: queueState?.maxDepth
+                    ?: 5
+                current + (event.sessionId to PromptQueueState(event.sessionId, depth, maxDepth))
+            }
+            "prompt_queue_started" -> {
+                val depth = event.summary
+                    .substringAfter("Started queued prompt. ")
+                    .substringBefore("/")
+                    .toIntOrNull()
+                    ?: ((queueState?.depth ?: 1) - 1).coerceAtLeast(0)
+                val maxDepth = event.summary
+                    .substringAfter("/")
+                    .substringBefore(" queued")
+                    .toIntOrNull()
+                    ?: queueState?.maxDepth
+                    ?: 5
+                if (depth <= 0) {
+                    current - event.sessionId
+                } else {
+                    current + (event.sessionId to PromptQueueState(event.sessionId, depth, maxDepth))
+                }
+            }
+            else -> current
+        }
     }
 
     private fun requestGit(

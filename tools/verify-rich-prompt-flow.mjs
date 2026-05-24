@@ -93,6 +93,14 @@ try {
   const routedInterrupt = await waitForMessage(host, (message) => message.type === MessageType.SessionTurnInterrupt, 5000);
   assertEqual(routedInterrupt.payload.session_id, sessionId, 'interrupt session');
 
+  send(client, MessageType.SessionPromptQueue, {
+    session_id: sessionId,
+    text: 'Run this after the current turn.',
+    client_request_id: 'rich-queue-1'
+  }, { device_token: pair.device_token });
+  const routedQueue = await waitForMessage(host, (message) => message.type === MessageType.SessionPromptQueue, 5000);
+  assertEqual(routedQueue.payload.text, 'Run this after the current turn.', 'queued prompt text');
+
   host.close();
   client.close();
   console.log('[verify] Rich prompt, edit, interrupt, options, and image routing verified.');

@@ -125,6 +125,7 @@ class MainActivity : ComponentActivity() {
                 onPromptSend = viewModel::sendPrompt,
                 onPromptDraftSend = { draft -> viewModel.sendPrompt(draft) },
                 onPromptEdit = viewModel::editPrompt,
+                onPromptQueue = viewModel::queuePrompt,
                 onInterruptTurn = viewModel::interruptTurn,
                 onNewChat = viewModel::createNewChat,
                 onPinnedSessionToggle = viewModel::togglePinnedSession,
@@ -140,6 +141,11 @@ class MainActivity : ComponentActivity() {
                 scanNotice = scanNotice
             )
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        viewModel.refreshAllSessions()
     }
 
     private fun scanPairingCode() {
@@ -186,6 +192,7 @@ private fun CompanionApp(
     onPromptSend: (String) -> Unit,
     onPromptDraftSend: (PromptDraft) -> Unit,
     onPromptEdit: (PromptDraft) -> Unit,
+    onPromptQueue: (String) -> Unit,
     onInterruptTurn: () -> Unit,
     onNewChat: () -> Unit,
     onPinnedSessionToggle: (String) -> Unit,
@@ -251,6 +258,7 @@ private fun CompanionApp(
                     onPromptSend = onPromptSend,
                     onPromptDraftSend = onPromptDraftSend,
                     onPromptEdit = onPromptEdit,
+                    onPromptQueue = onPromptQueue,
                     onInterruptTurn = onInterruptTurn,
                     onNewChat = onNewChat,
                     onPinnedSessionToggle = onPinnedSessionToggle,
@@ -934,6 +942,7 @@ private fun MainSessionScreen(
     onPromptSend: (String) -> Unit,
     onPromptDraftSend: (PromptDraft) -> Unit,
     onPromptEdit: (PromptDraft) -> Unit,
+    onPromptQueue: (String) -> Unit,
     onInterruptTurn: () -> Unit,
     onNewChat: () -> Unit,
     onPinnedSessionToggle: (String) -> Unit,
@@ -989,9 +998,11 @@ private fun MainSessionScreen(
             RichChatComposer(
                 selectedSession = uiState.selectedSession,
                 timeline = uiState.timeline.filter { it.sessionId == uiState.selectedSessionId },
+                queueState = uiState.selectedPromptQueue,
                 online = uiState.connectionStatus == "Online",
                 onPromptSend = onPromptDraftSend,
                 onPromptEdit = onPromptEdit,
+                onPromptQueue = onPromptQueue,
                 onInterruptTurn = onInterruptTurn
             )
         }
@@ -1564,9 +1575,11 @@ private fun CopyMessageButton(label: String, foreground: Color, onCopy: () -> Un
 private fun RichChatComposer(
     selectedSession: CodexSession?,
     timeline: List<TimelineItem>,
+    queueState: PromptQueueState?,
     online: Boolean,
     onPromptSend: (PromptDraft) -> Unit,
     onPromptEdit: (PromptDraft) -> Unit,
+    onPromptQueue: (String) -> Unit,
     onInterruptTurn: () -> Unit
 ) {
     val context = LocalContext.current
@@ -1584,6 +1597,15 @@ private fun RichChatComposer(
     val active = selectedSession?.let { isSessionActivelyRunning(it, timeline) } == true
     val enabled = selectedSession != null && online
     val canSend = enabled && (prompt.isNotBlank() || attachments.isNotEmpty()) && (!goalMode || goalObjective.isNotBlank())
+    val canQueue = enabled
+        && active
+        && prompt.isNotBlank()
+        && attachments.isEmpty()
+        && reasoningEffort == "auto"
+        && !planMode
+        && !goalMode
+        && editingEvent == null
+        && ((queueState?.depth ?: 0) < (queueState?.maxDepth ?: MAX_PROMPT_QUEUE_DEPTH))
     val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
             val result = runCatching { promptAttachmentFromUri(context, uri) }
@@ -1637,6 +1659,14 @@ private fun RichChatComposer(
                 }
             }
 
+            if (queueState != null && queueState.depth > 0) {
+                Text(
+                    text = "Queued ${queueState.depth}/${queueState.maxDepth}",
+                    color = TertiaryText,
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
+
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 item {
                     ComposerToolChip(text = "Add image", enabled = enabled, onClick = { attachOpen = true })
@@ -1652,6 +1682,18 @@ private fun RichChatComposer(
                             onClick = {
                                 editingEvent = latestUserPrompt
                                 prompt = latestUserPrompt.summary
+                            }
+                        )
+                    }
+                }
+                if (canQueue) {
+                    item {
+                        ComposerToolChip(
+                            text = "Queue",
+                            enabled = true,
+                            onClick = {
+                                onPromptQueue(prompt)
+                                prompt = ""
                             }
                         )
                     }
@@ -3620,6 +3662,7 @@ private val AmberPanel = Color(0xFF261D0D)
 private val AmberStroke = Color(0xFF5E4316)
 private const val MAX_PROMPT_ATTACHMENTS = 4
 private const val MAX_PROMPT_IMAGE_BYTES = 1_100_000
+private const val MAX_PROMPT_QUEUE_DEPTH = 5
 
 private fun stageAccent(stage: SessionStage): Color {
     return when (stage.severity.lowercase()) {

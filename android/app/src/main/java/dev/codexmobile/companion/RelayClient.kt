@@ -122,6 +122,16 @@ class RelayClient(
         )
     }
 
+    fun queuePrompt(sessionId: String, text: String) {
+        send(
+            "session.prompt.queue",
+            JSONObject()
+                .put("session_id", sessionId)
+                .put("text", text)
+                .put("client_request_id", java.util.UUID.randomUUID().toString())
+        )
+    }
+
     fun interruptTurn(sessionId: String) {
         send(
             "session.turn.interrupt",

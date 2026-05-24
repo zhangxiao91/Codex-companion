@@ -54,6 +54,12 @@ data class PromptDraft(
     val clientRequestId: String = java.util.UUID.randomUUID().toString()
 )
 
+data class PromptQueueState(
+    val sessionId: String,
+    val depth: Int,
+    val maxDepth: Int
+)
+
 data class PromptAttachment(
     val attachmentId: String = java.util.UUID.randomUUID().toString(),
     val displayName: String,
@@ -188,6 +194,7 @@ data class RelayUiState(
     val gitAudit: Map<String, List<GitAuditItem>> = emptyMap(),
     val timelineLoadingEarlier: Boolean = false,
     val timelineHasMoreEarlier: Map<String, Boolean> = emptyMap(),
+    val promptQueues: Map<String, PromptQueueState> = emptyMap(),
     val lastConnectedAt: String? = null,
     val lastHealthCheck: String? = null,
     val lastError: String? = null
@@ -214,6 +221,9 @@ data class RelayUiState(
 
     val selectedPowerTrust: PowerTrust?
         get() = selectedHost?.hostId?.let { powerTrusts[it] }
+
+    val selectedPromptQueue: PromptQueueState?
+        get() = selectedSessionId?.let { promptQueues[it] }
 
     val activeAuthToken: String
         get() = deviceToken.ifBlank { pairingToken }

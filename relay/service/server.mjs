@@ -47,6 +47,7 @@ const state = {
   timelineEvents: new Map(),
   gitAuditEvents: [],
   gitSnapshots: new Map(),
+  promptQueueStates: new Map(),
   deviceTokens: new Map(),
   nextTimelineCursor: 1
 };
@@ -252,7 +253,8 @@ function createHealthPayload(request) {
       paired_devices: state.deviceTokens.size,
       git_audit_events: state.gitAuditEvents.length,
       cached_timeline_sessions: state.timelineEvents.size,
-      cached_timeline_events: cachedTimelineEvents
+      cached_timeline_events: cachedTimelineEvents,
+      prompt_queue_states: state.promptQueueStates.size
     },
     cache: {
       timeline_cache_limit: timelineCacheLimit,
@@ -624,13 +626,16 @@ function loadSqliteState() {
   }
 
   state.gitAuditEvents = relayStore.loadGitAuditEvents(auditLogLimit);
+  for (const queueState of relayStore.loadPromptQueueStates()) {
+    state.promptQueueStates.set(queueState.session_id, queueState);
+  }
 
   const counts = relayStore.counts();
-  if (counts.devices || counts.hosts || counts.sessions || counts.timeline_events || counts.git_audit_events) {
+  if (counts.devices || counts.hosts || counts.sessions || counts.timeline_events || counts.git_audit_events || counts.prompt_queue_states) {
     if (counts.devices || counts.hosts) {
       console.log(`[relay] loaded ${counts.devices} device(s) and ${counts.hosts} host(s) from ${relayStore.path}`);
     }
-    console.log(`[relay] loaded sqlite state from ${relayStore.path}: devices=${counts.devices}, hosts=${counts.hosts}, sessions=${counts.sessions}, timeline_events=${counts.timeline_events}, git_audit_events=${counts.git_audit_events}`);
+    console.log(`[relay] loaded sqlite state from ${relayStore.path}: devices=${counts.devices}, hosts=${counts.hosts}, sessions=${counts.sessions}, timeline_events=${counts.timeline_events}, prompt_queue_states=${counts.prompt_queue_states}, git_audit_events=${counts.git_audit_events}`);
   }
 }
 
@@ -1183,6 +1188,7 @@ function handleSessionSubscribe(connection, message) {
         continue;
       }
       send(connection, createMessage(MessageType.SessionSnapshot, { session }));
+      sendPromptQueueStateReplay(connection, session.session_id);
     }
     for (const approval of state.approvals.values()) {
       if (approval.status === 'pending') {
@@ -1195,6 +1201,7 @@ function handleSessionSubscribe(connection, message) {
   const session = state.sessions.get(sessionId);
   if (session && state.hostConnections.has(session.host_id)) {
     send(connection, createMessage(MessageType.SessionSnapshot, { session }));
+    sendPromptQueueStateReplay(connection, sessionId);
     for (const approval of state.approvals.values()) {
       if (approval.session_id === sessionId && approval.status === 'pending') {
         send(connection, createMessage(MessageType.ApprovalRequest, { approval }));
@@ -1207,6 +1214,32 @@ function handleSessionSubscribe(connection, message) {
       page: message.payload.page === true
     });
   }
+}
+
+function sendPromptQueueStateReplay(connection, sessionId) {
+  const queueState = state.promptQueueStates.get(sessionId);
+  if (!queueState || queueState.depth <= 0) {
+    return;
+  }
+
+  send(connection, createMessage(MessageType.TimelineEvent, {
+    event: {
+      event_id: `${sessionId}:prompt_queue_state:${queueState.updated_at}`,
+      session_id: sessionId,
+      created_at: queueState.updated_at,
+      type: 'prompt_queued',
+      title: 'Prompt queue restored',
+      summary: `Queued prompt ${queueState.depth}/${queueState.max_depth}.`,
+      cursor: null,
+      payload: {
+        queue_depth: queueState.depth,
+        max_queue_depth: queueState.max_depth,
+        active_turn_id: queueState.active_turn_id ?? null,
+        replayed_from_state: true
+      },
+      redaction_level: 'metadata'
+    }
+  }));
 }
 
 function handleSessionPrompt(connection, message) {
@@ -1495,7 +1528,53 @@ function cacheTimelineEvent(event) {
   state.timelineEvents.set(cachedEvent.session_id, events);
   relayStore.saveTimelineEvent(cachedEvent);
   relayStore.trimTimelineEvents(timelineCacheLimit);
+  updatePromptQueueStateFromTimelineEvent(cachedEvent);
   return cachedEvent;
+}
+
+function updatePromptQueueStateFromTimelineEvent(event) {
+  if (event.type !== 'prompt_queued' && event.type !== 'prompt_queue_started') {
+    return;
+  }
+
+  const payload = event.payload && typeof event.payload === 'object' ? event.payload : {};
+  const depth = Number.parseInt(payload.queue_depth ?? extractQueueDepth(event.summary), 10);
+  const maxDepth = Number.parseInt(payload.max_queue_depth ?? extractMaxQueueDepth(event.summary), 10);
+  const session = state.sessions.get(event.session_id);
+  const queueState = {
+    session_id: event.session_id,
+    host_id: session?.host_id ?? payload.host_id ?? null,
+    depth: Number.isFinite(depth) && depth > 0 ? depth : 0,
+    max_depth: Number.isFinite(maxDepth) && maxDepth > 0 ? maxDepth : 5,
+    active_turn_id: payload.active_turn_id ?? null,
+    updated_at: event.created_at ?? new Date().toISOString(),
+    latest_event_id: event.event_id
+  };
+
+  if (queueState.depth <= 0) {
+    state.promptQueueStates.delete(event.session_id);
+    relayStore.deletePromptQueueState(event.session_id);
+    return;
+  }
+
+  state.promptQueueStates.set(event.session_id, queueState);
+  relayStore.savePromptQueueState(queueState);
+}
+
+function extractQueueDepth(summary) {
+  if (typeof summary !== 'string') {
+    return 0;
+  }
+  const queued = summary.match(/(?:Queued prompt|Started queued prompt\.)\s+(\d+)\//);
+  return queued ? Number.parseInt(queued[1], 10) : 0;
+}
+
+function extractMaxQueueDepth(summary) {
+  if (typeof summary !== 'string') {
+    return 5;
+  }
+  const queued = summary.match(/\/(\d+)/);
+  return queued ? Number.parseInt(queued[1], 10) : 5;
 }
 
 function appendGitAuditEvent(event) {

@@ -51,7 +51,7 @@ socket.addEventListener('open', async () => {
     display_name: displayName,
     kind: 'local_pc',
     bridge_version: bridgeVersion,
-    capabilities: ['session.list', 'session.prompt', 'session.prompt.edit', 'session.turn.interrupt', 'timeline.event', 'git.status', 'git.diff', ...powerController.capabilities()]
+    capabilities: ['session.list', 'session.prompt', 'session.prompt.queue', 'session.prompt.edit', 'session.turn.interrupt', 'timeline.event', 'git.status', 'git.diff', ...powerController.capabilities()]
   });
 
   console.log('[bridge] registered host capabilities: session.list, session.prompt, timeline.event, git.status, git.diff');
@@ -86,6 +86,14 @@ socket.addEventListener('message', async (event) => {
       const { session_id: sessionId } = message.payload;
       console.log(`[bridge] received prompt for ${sessionId}`);
       const response = await adapter.sendPrompt(sessionId, message.payload);
+      socket.send(encodeMessage(withAuth(response)));
+      return;
+    }
+
+    if (message.type === MessageType.SessionPromptQueue) {
+      const { session_id: sessionId } = message.payload;
+      console.log(`[bridge] received queued prompt for ${sessionId}`);
+      const response = await adapter.queuePrompt(sessionId, message.payload);
       socket.send(encodeMessage(withAuth(response)));
       return;
     }

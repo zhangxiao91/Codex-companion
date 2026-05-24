@@ -1,5 +1,7 @@
 import { existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { readdirSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
@@ -14,6 +16,8 @@ import {
   mapThreadToTimelineEvents,
   mapThreadToTimelinePage
 } from './timeline-mapper.mjs';
+
+const MAX_PROMPT_QUEUE_LENGTH = 5;
 
 export class MockCodexAdapter {
   constructor(hostId) {
@@ -97,6 +101,27 @@ export class MockCodexAdapter {
         options: normalized.options
       }
     );
+
+    return createMessage(MessageType.TimelineEvent, { event });
+  }
+
+  async queuePrompt(sessionId, draft) {
+    if (sessionId !== this.session.session_id) {
+      throw new Error(`Unknown mock session: ${sessionId}`);
+    }
+
+    const normalized = normalizePromptDraft(draft);
+    const event = createTimelineEvent(
+      sessionId,
+      'Prompt queued',
+      `Queued prompt: ${summarizePromptDraft(normalized)}`,
+      {
+        adapter: 'mock',
+        queued_prompt: normalized.text,
+        queue_depth: 1
+      }
+    );
+    event.type = 'prompt_queued';
 
     return createMessage(MessageType.TimelineEvent, { event });
   }
@@ -187,6 +212,9 @@ export class AppServerCodexAdapter {
     this.nextId = 1;
     this.cachedSessions = [];
     this.activeTurnsByThread = new Map();
+    this.promptQueuesByThread = new Map();
+    this.queueStorePath = resolve(process.env.CMC_PROMPT_QUEUE_STORE_PATH ?? '.relay/prompt-queue-state.json');
+    this.loadPromptQueueStore();
     this.onTimelineEvent = options.onTimelineEvent;
     this.onApprovalRequest = options.onApprovalRequest;
     this.approvalPolicy = process.env.CODEX_APPROVAL_POLICY ?? 'on-request';
@@ -229,6 +257,7 @@ export class AppServerCodexAdapter {
 
     console.log(`[bridge] app-server initialized: ${initialize.userAgent}`);
     await this.refreshSessions();
+    this.persistPromptQueueStore();
   }
 
   async stop() {
@@ -342,6 +371,68 @@ export class AppServerCodexAdapter {
         }
       });
     }
+  }
+
+  async queuePrompt(sessionId, draft) {
+    const normalized = normalizePromptDraft({
+      text: draft.text,
+      input: [{ type: 'text', text: draft.text }],
+      client_request_id: draft.client_request_id
+    });
+
+    if (!normalized.text.trim()) {
+      throw new Error('Queued prompt cannot be empty.');
+    }
+
+    await this.ensureThreadLoaded(sessionId);
+    const activeTurnId = this.activeTurnsByThread.get(sessionId);
+    if (!activeTurnId) {
+      return this.sendPrompt(sessionId, normalized);
+    }
+
+    const queue = this.promptQueuesByThread.get(sessionId) ?? [];
+    if (queue.length >= MAX_PROMPT_QUEUE_LENGTH) {
+      return createMessage(MessageType.TimelineEvent, {
+        event: {
+          event_id: `${sessionId}:prompt_queue_full:${Date.now()}`,
+          session_id: sessionId,
+          created_at: new Date().toISOString(),
+          type: 'error',
+          title: 'Prompt queue full',
+          summary: `Prompt queue can hold up to ${MAX_PROMPT_QUEUE_LENGTH} items.`,
+          payload: {
+            queue_depth: queue.length,
+            max_queue_depth: MAX_PROMPT_QUEUE_LENGTH
+          },
+          redaction_level: 'none'
+        }
+      });
+    }
+
+    queue.push({
+      ...normalized,
+      queued_at: new Date().toISOString()
+    });
+    this.promptQueuesByThread.set(sessionId, queue);
+    this.persistPromptQueueStore();
+
+    return createMessage(MessageType.TimelineEvent, {
+      event: {
+        event_id: `${sessionId}:prompt_queued:${Date.now()}`,
+        session_id: sessionId,
+        created_at: new Date().toISOString(),
+        type: 'prompt_queued',
+        title: 'Prompt queued',
+        summary: `Queued prompt ${queue.length}/${MAX_PROMPT_QUEUE_LENGTH}.`,
+        payload: {
+          prompt: normalized.text,
+          queue_depth: queue.length,
+          max_queue_depth: MAX_PROMPT_QUEUE_LENGTH,
+          active_turn_id: activeTurnId
+        },
+        redaction_level: 'none'
+      }
+    });
   }
 
   async editPrompt(sessionId, draft) {
@@ -688,7 +779,82 @@ export class AppServerCodexAdapter {
       const activeTurnId = this.activeTurnsByThread.get(message.params.threadId);
       if (activeTurnId === message.params.turn.id) {
         this.activeTurnsByThread.delete(message.params.threadId);
+        this.drainPromptQueue(message.params.threadId).catch((error) => {
+          console.error(`[bridge] failed to drain prompt queue: ${error.message}`);
+        });
       }
+    }
+  }
+
+  async drainPromptQueue(sessionId) {
+    const queue = this.promptQueuesByThread.get(sessionId);
+    if (!queue || queue.length === 0) {
+      return;
+    }
+
+    await this.ensureThreadLoaded(sessionId);
+    const activeTurnId = this.activeTurnsByThread.get(sessionId);
+    if (activeTurnId) {
+      return;
+    }
+
+    const next = queue.shift();
+    if (queue.length > 0) {
+      this.promptQueuesByThread.set(sessionId, queue);
+    } else {
+      this.promptQueuesByThread.delete(sessionId);
+    }
+    this.persistPromptQueueStore();
+
+    this.onTimelineEvent?.({
+      event_id: `${sessionId}:prompt_queue_started:${Date.now()}`,
+      session_id: sessionId,
+      created_at: new Date().toISOString(),
+      type: 'prompt_queue_started',
+      title: 'Queued prompt started',
+      summary: `Started queued prompt. ${queue.length}/${MAX_PROMPT_QUEUE_LENGTH} queued.`,
+      payload: {
+        prompt: next.text,
+        queue_depth: queue.length,
+        max_queue_depth: MAX_PROMPT_QUEUE_LENGTH
+      },
+      redaction_level: 'none'
+    });
+
+    const response = await this.sendPrompt(sessionId, next);
+    if (response?.type === MessageType.TimelineEvent) {
+      this.onTimelineEvent?.(response.payload.event);
+    }
+  }
+
+  loadPromptQueueStore() {
+    try {
+      if (!existsSync(this.queueStorePath)) {
+        return;
+      }
+      const raw = readFileSync(this.queueStorePath, 'utf8');
+      const parsed = JSON.parse(raw);
+      const queues = parsed?.queues ?? {};
+      for (const [sessionId, queue] of Object.entries(queues)) {
+        if (Array.isArray(queue) && queue.length > 0) {
+          this.promptQueuesByThread.set(sessionId, queue);
+        }
+      }
+    } catch (error) {
+      console.warn(`[bridge] failed to load prompt queue store: ${error.message}`);
+    }
+  }
+
+  persistPromptQueueStore() {
+    try {
+      mkdirSync(dirname(this.queueStorePath), { recursive: true });
+      const payload = {
+        updated_at: new Date().toISOString(),
+        queues: Object.fromEntries(this.promptQueuesByThread.entries())
+      };
+      writeFileSync(this.queueStorePath, JSON.stringify(payload, null, 2));
+    } catch (error) {
+      console.warn(`[bridge] failed to persist prompt queue store: ${error.message}`);
     }
   }
 }

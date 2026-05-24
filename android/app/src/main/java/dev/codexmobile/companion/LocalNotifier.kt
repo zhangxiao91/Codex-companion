@@ -14,8 +14,7 @@ import androidx.core.content.ContextCompat
 import kotlin.math.absoluteValue
 
 class LocalNotifier(private val context: Context) {
-    private val notifiedSessionStages = mutableSetOf<String>()
-    private val notifiedApprovals = mutableSetOf<String>()
+    private val cacheStore = RelayCacheStore(context.applicationContext)
 
     init {
         ensureChannel()
@@ -32,7 +31,7 @@ class LocalNotifier(private val context: Context) {
         }
 
         val key = "${session.sessionId}:$stageType"
-        if (!notifiedSessionStages.add(key)) {
+        if (!cacheStore.markNotificationSeen(key, "session_stage")) {
             return
         }
 
@@ -54,7 +53,7 @@ class LocalNotifier(private val context: Context) {
         if (!notificationsAllowed() || approval.status != "pending") {
             return
         }
-        if (!notifiedApprovals.add(approval.approvalId)) {
+        if (!cacheStore.markNotificationSeen(approval.approvalId, "approval")) {
             return
         }
         show(

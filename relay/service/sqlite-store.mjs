@@ -56,6 +56,15 @@ export function createRelaySqliteStore(options = {}) {
       PRIMARY KEY (session_id, event_id)
     );
     CREATE INDEX IF NOT EXISTS idx_timeline_session_cursor ON timeline_events(session_id, cursor);
+    CREATE TABLE IF NOT EXISTS prompt_queue_states (
+      session_id TEXT PRIMARY KEY,
+      host_id TEXT,
+      depth INTEGER NOT NULL DEFAULT 0,
+      max_depth INTEGER NOT NULL DEFAULT 5,
+      active_turn_id TEXT,
+      updated_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL DEFAULT '{}'
+    );
     CREATE TABLE IF NOT EXISTS git_audit_events (
       event_id TEXT PRIMARY KEY,
       audit_id TEXT NOT NULL,
@@ -295,6 +304,35 @@ export function createRelaySqliteStore(options = {}) {
         JSON.stringify(event)
       );
     },
+    loadPromptQueueStates() {
+      return db.prepare('SELECT payload_json FROM prompt_queue_states ORDER BY updated_at DESC').all()
+        .map((row) => parseJson(row.payload_json, null))
+        .filter(Boolean);
+    },
+    savePromptQueueState(state) {
+      db.prepare(`
+        INSERT INTO prompt_queue_states (session_id, host_id, depth, max_depth, active_turn_id, updated_at, payload_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(session_id) DO UPDATE SET
+          host_id = excluded.host_id,
+          depth = excluded.depth,
+          max_depth = excluded.max_depth,
+          active_turn_id = excluded.active_turn_id,
+          updated_at = excluded.updated_at,
+          payload_json = excluded.payload_json
+      `).run(
+        state.session_id,
+        state.host_id ?? null,
+        Number.parseInt(state.depth ?? 0, 10) || 0,
+        Number.parseInt(state.max_depth ?? 5, 10) || 5,
+        state.active_turn_id ?? null,
+        state.updated_at ?? new Date().toISOString(),
+        JSON.stringify(state)
+      );
+    },
+    deletePromptQueueState(sessionId) {
+      db.prepare('DELETE FROM prompt_queue_states WHERE session_id = ?').run(sessionId);
+    },
     trimTimelineEvents(limitPerSession) {
       db.prepare(`
         DELETE FROM timeline_events
@@ -449,6 +487,7 @@ export function createRelaySqliteStore(options = {}) {
         hosts: count('hosts'),
         sessions: count('sessions'),
         timeline_events: count('timeline_events'),
+        prompt_queue_states: count('prompt_queue_states'),
         git_audit_events: count('git_audit_events'),
         host_devices: count('host_devices'),
         power_control_trusts: count('power_control_trusts'),

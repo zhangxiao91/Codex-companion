@@ -3418,3 +3418,103 @@ Result:
 ```text
 BUILD SUCCESSFUL
 ```
+
+## 2026-05-24: Prompt queue MVP
+
+Status: completed.
+
+Changes:
+
+- Added `session.prompt.queue` to the shared protocol.
+- Relay validates queued prompt text and routes it to the owning Host Bridge.
+- Host Bridge advertises `session.prompt.queue`.
+- Mock adapter supports queued prompt acknowledgements.
+- App Server adapter now maintains a per-session prompt queue:
+  - text-only MVP;
+  - max depth 5;
+  - returns a `prompt_queued` timeline event on enqueue;
+  - returns an error timeline event when full;
+  - drains one queued prompt after `turn/completed`;
+  - emits `prompt_queue_started` before starting the next queued turn.
+- Android shows a `Queue` composer tool only when:
+  - selected session is active;
+  - text is non-empty;
+  - no image/Plan/Goal/reasoning/edit mode is active;
+  - queue depth is below 5.
+- Android displays `Queued n/5` while queued prompts are pending.
+- Added `npm run verify:prompt-queue-adapter`.
+- Extended `npm run verify:rich-prompt-flow` to cover `session.prompt.queue` Relay routing.
+
+Verification:
+
+```powershell
+node --check packages/protocol/index.mjs
+node --check relay/service/server.mjs
+node --check bridge/host-bridge/index.mjs
+node --check bridge/host-bridge/codex-adapter.mjs
+node --check tools/verify-rich-prompt-flow.mjs
+node --check tools/verify-prompt-queue-adapter.mjs
+npm run verify:rich-prompt-flow
+npm run verify:prompt-queue-adapter
+.\gradlew.bat :app:assembleDebug --no-daemon
+```
+
+Result:
+
+```text
+[verify] Rich prompt, edit, interrupt, options, and image routing verified.
+[verify] Prompt queue adapter enqueue, max length, and drain verified.
+BUILD SUCCESSFUL
+```
+
+## 2026-05-24: Progress sync persistence v1
+
+Status: completed.
+
+Changes:
+
+- Added Android Room cache for non-secret app state:
+  - sessions;
+  - timeline events;
+  - selected session;
+  - pinned sessions;
+  - per-session sync cursors;
+  - prompt queue badges;
+  - notification de-dupe ledger.
+- Kept sensitive Relay pairing/device tokens in `SecureTokenStore`.
+- Switched `RelayViewModel` startup state from `SharedPreferences` JSON cache to Room-backed cache.
+- Changed reconnect and foreground resume behavior to refresh all known sessions, not only the selected session.
+- Persisted timeline cursor state whenever timeline events/pages are merged.
+- Moved local notification de-dupe from process-memory sets to the Room notification ledger, so app restarts do not repeat already-seen completion/approval notifications.
+- Added Relay SQLite `prompt_queue_states` table and health count.
+- Relay now derives queue state from `prompt_queued` / `prompt_queue_started` timeline events, stores it, reloads it on restart, and replays a lightweight queue-state event to subscribed clients.
+- Host Bridge App Server adapter now persists the actual pending prompt queue to `.relay/prompt-queue-state.json`, so queued text can survive bridge process restart.
+
+Verification:
+
+```powershell
+node --check relay/service/server.mjs
+node --check relay/service/sqlite-store.mjs
+node --check bridge/host-bridge/codex-adapter.mjs
+npm run verify:relay-sqlite-persistence
+npm run verify:prompt-queue-adapter
+npm run verify:rich-prompt-flow
+cd android
+.\gradlew.bat :app:assembleDebug --no-daemon
+```
+
+Result:
+
+```text
+[verify] Relay SQLite persistence verified.
+[verify] Prompt queue adapter enqueue, max length, and drain verified.
+[verify] Rich prompt, edit, interrupt, options, and image routing verified.
+BUILD SUCCESSFUL
+```
+
+Known notes:
+
+- Android Room currently uses `allowMainThreadQueries()` for a small v1 cache surface. This keeps the migration low-risk for the current prototype, but a later pass should move cache I/O behind coroutines/repository methods.
+- AGP 9 built-in Kotlin blocks `kapt`; this pass temporarily sets `android.builtInKotlin=false` and `android.newDsl=false` to support Room annotation processing. A later build-system cleanup should migrate to AGP 9 built-in Kotlin plus a compatible Room/KSP setup.
+- Notifications are still local notifications only. This pass makes local notification de-dupe durable, but does not add FCM or true background push wakeup.
+- Relay persists queue depth/state and Host Bridge persists pending prompt text locally; full cross-device queue inspection/editing is still future work.
