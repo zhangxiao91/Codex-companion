@@ -22,7 +22,8 @@ try {
     RELAY_PORT: relayPort,
     RELAY_DEV_TOKEN: devToken,
     RELAY_IDENTITY_STORE_PATH: join(tempDir, 'identity-store.json'),
-    RELAY_GIT_AUDIT_LOG_PATH: join(tempDir, 'git-audit.ndjson')
+    RELAY_GIT_AUDIT_LOG_PATH: join(tempDir, 'git-audit.ndjson'),
+    RELAY_SQLITE_PATH: join(tempDir, 'relay.sqlite')
   });
   processes.push(relay);
   await waitForOutput(relay, '[relay] listening', 5000);
@@ -33,7 +34,7 @@ try {
     host_id: 'offline-host',
     display_name: 'Offline Host',
     bridge_version: 'verify',
-    capabilities: ['session.list', 'session.prompt']
+    capabilities: ['session.list', 'session.prompt', 'timeline.event']
   }, devToken);
   send(host, MessageType.SessionSnapshot, {
     session: {
@@ -43,18 +44,52 @@ try {
       repo_path: process.cwd(),
       branch: 'verify',
       status: 'waiting_for_input',
-      summary: 'Session should disappear after host disconnect.',
+      summary: 'Session should remain visible after host disconnect.',
       updated_at: new Date().toISOString()
     }
   }, devToken);
+  send(host, MessageType.TimelineEvent, {
+    event: {
+      event_id: 'offline-session:event-1',
+      session_id: 'offline-session',
+      created_at: new Date().toISOString(),
+      type: 'assistant_message',
+      title: 'Cached offline event',
+      summary: 'Cached offline event',
+      payload: { source: 'verify-relay-offline-host-sessions' },
+      redaction_level: 'none'
+    }
+  }, devToken);
+
   await waitForOutput(relay, 'session snapshot: offline-session', 5000);
+  await waitForOutput(relay, 'timeline event: Cached offline event', 5000);
 
   host.close();
   await waitForOutput(relay, 'host disconnected: offline-host', 5000);
 
   const client = await connect(relayUrl);
   send(client, MessageType.SessionSubscribe, { session_id: '*' }, pair.device_token);
-  await assertNoSessionSnapshot(client, 750);
+
+  const snapshot = await waitForSessionSnapshot(client, 5000);
+  if (snapshot.session.session_id !== 'offline-session') {
+    throw new Error(`Expected offline-session snapshot, received ${snapshot.session.session_id}`);
+  }
+
+  send(client, MessageType.SessionTimelineRequest, {
+    session_id: 'offline-session',
+    after_cursor: '0',
+    cache_only: true,
+    page: true
+  }, pair.device_token);
+
+  const page = await waitForTimelinePage(client, 5000);
+  if (page.session_id !== 'offline-session') {
+    throw new Error(`Expected offline-session timeline page, received ${page.session_id}`);
+  }
+
+  if (!Array.isArray(page.events) || page.events.length === 0) {
+    throw new Error('Expected cached timeline events for offline session.');
+  }
 
   const healthResponse = await fetch(`http://127.0.0.1:${relayPort}/health`, {
     headers: {
@@ -62,12 +97,12 @@ try {
     }
   });
   const health = await healthResponse.json();
-  if (health.counts.sessions !== 0) {
-    throw new Error(`Expected zero live sessions after host disconnect, received ${health.counts.sessions}`);
+  if (health.counts.sessions !== 1) {
+    throw new Error(`Expected one retained session after host disconnect, received ${health.counts.sessions}`);
   }
 
   client.close();
-  console.log('[verify] Relay offline host session cleanup verified.');
+  console.log('[verify] Relay offline host sessions remain visible and replayable.');
 } finally {
   for (const child of processes.reverse()) {
     if (!child.killed) {
@@ -97,14 +132,45 @@ async function pairDevice() {
   return response.json();
 }
 
-function assertNoSessionSnapshot(socket, timeoutMs) {
+function waitForSessionSnapshot(socket, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, timeoutMs);
+    const timer = setTimeout(() => {
+      reject(new Error(`Timed out waiting for session snapshot after ${timeoutMs}ms`));
+    }, timeoutMs);
+
     socket.addEventListener('message', (event) => {
       const message = decodeMessage(event.data);
+      if (message.type === MessageType.Error) {
+        clearTimeout(timer);
+        reject(new Error(message.payload.detail));
+        return;
+      }
+
       if (message.type === MessageType.SessionSnapshot) {
         clearTimeout(timer);
-        reject(new Error(`Received stale session snapshot: ${message.payload.session?.session_id}`));
+        resolve(message.payload);
+      }
+    });
+  });
+}
+
+function waitForTimelinePage(socket, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Timed out waiting for timeline page after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    socket.addEventListener('message', (event) => {
+      const message = decodeMessage(event.data);
+      if (message.type === MessageType.Error) {
+        clearTimeout(timer);
+        reject(new Error(message.payload.detail));
+        return;
+      }
+
+      if (message.type === MessageType.TimelinePage) {
+        clearTimeout(timer);
+        resolve(message.payload);
       }
     });
   });

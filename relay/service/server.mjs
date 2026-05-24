@@ -1197,9 +1197,6 @@ function handleSessionSubscribe(connection, message) {
       send(connection, createMessage(MessageType.HostSnapshot, createHostSnapshotPayload(host.host_id)));
     }
     for (const session of state.sessions.values()) {
-      if (!state.hostConnections.has(session.host_id)) {
-        continue;
-      }
       send(connection, createMessage(MessageType.SessionSnapshot, { session }));
       sendPromptQueueStateReplay(connection, session.session_id);
     }
@@ -1212,7 +1209,7 @@ function handleSessionSubscribe(connection, message) {
   }
 
   const session = state.sessions.get(sessionId);
-  if (session && state.hostConnections.has(session.host_id)) {
+  if (session) {
     send(connection, createMessage(MessageType.SessionSnapshot, { session }));
     sendPromptQueueStateReplay(connection, sessionId);
     for (const approval of state.approvals.values()) {
@@ -1421,7 +1418,7 @@ function handleSessionTimelineRequest(connection, message) {
 
   const hostConnection = state.hostConnections.get(session.host_id);
   if (!hostConnection) {
-    sendError(connection, `Host is offline: ${session.host_id}`);
+    console.log(`[relay] timeline request satisfied from cache; host offline: ${session.host_id}`);
     return;
   }
 
@@ -1463,7 +1460,6 @@ function handleClose(connection) {
 
     emitHostOfflineNotifications(connection.hostId);
     state.hostConnections.delete(connection.hostId);
-    clearSessionsForHost(connection.hostId);
     persistIdentityState();
     broadcastHostSnapshot(connection.hostId);
     console.log(`[relay] host disconnected: ${connection.hostId}`);
@@ -1488,14 +1484,6 @@ function createHostSnapshotPayload(hostId) {
     },
     session_count: sessionCount
   };
-}
-
-function clearSessionsForHost(hostId) {
-  for (const [sessionId, session] of state.sessions.entries()) {
-    if (session.host_id === hostId) {
-      state.sessions.delete(sessionId);
-    }
-  }
 }
 
 function broadcastToClients(message) {

@@ -3556,3 +3556,37 @@ Known notes:
 - This is still WebSocket-delivered notification fanout, not FCM/APNs-style background push.
 - Host offline notification is emitted when Relay observes the host connection close event.
 - Future FCM work can reuse the Relay notification event model without redoing the decision logic.
+
+## 2026-05-24: Retain offline host history
+
+Status: completed.
+
+Changes:
+
+- Changed Relay offline-host behavior so host disconnect no longer removes that host's session snapshots from memory.
+- `session.subscribe "*" ` now replays all retained session snapshots, including sessions whose host is currently offline.
+- Direct `session.subscribe` now returns retained snapshots for offline sessions.
+- `session.timeline.request` now serves cached timeline pages while the host is offline instead of returning `Host is offline`.
+- Removed the stale in-memory session cleanup helper to keep offline archive semantics explicit.
+- Updated `npm run verify:relay-offline-host-sessions` to validate the new behavior: offline sessions stay visible and cached timeline remains replayable.
+
+Verification:
+
+```powershell
+node --check relay/service/server.mjs
+node --check tools/verify-relay-offline-host-sessions.mjs
+npm run verify:relay-offline-host-sessions
+npm run verify:relay-sqlite-persistence
+```
+
+Result:
+
+```text
+[verify] Relay offline host sessions remain visible and replayable.
+[verify] Relay SQLite persistence verified.
+```
+
+Known notes:
+
+- Sending a new prompt still requires the owning Host Bridge to be online; only session archive visibility and cached timeline replay work offline.
+- `session.subscribe "*" ` replays retained session snapshots, while timeline history should be requested with `session.timeline.request`.

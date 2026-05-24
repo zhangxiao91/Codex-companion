@@ -1,360 +1,123 @@
 # Codex Mobile Companion
 
-Codex Mobile Companion 是一个 Android 优先的 Codex 移动协作入口。它不是手机 IDE，而是一个面向通勤、外出和碎片时间的 **信息流转窗口**：用户可以在手机上查看 Codex 会话进度、处理阻塞点、批准操作、发送轻量命令，并完成常见 Git 收尾动作。
+Android-first control plane for Codex sessions.
 
-项目初期聚焦 Android 平台，支持连接两类运行环境：
+This project is not a mobile IDE. It is a phone-first information relay for commute-time and away-from-keyboard work:
+- view active and historical Codex sessions
+- send lightweight prompts
+- handle approvals
+- inspect Git status and diffs
+- receive high-value notifications
+- keep the local PC or server host as the only place that actually touches repos, shell, and Codex runtime state
 
-- 本地电脑上的 Codex：代码、工具链、凭据和本地服务仍在电脑上，手机通过安全桥接查看和控制会话。
-- 云端开发机上的 Codex：Codex 运行在 VPS、开发机、CI runner 或团队服务器上，手机连接受控的服务端入口。
+## Current shape
 
-## Product Positioning
+The system now has three main pieces:
 
-一句话定位：
+- Android app: session inbox, timeline, prompt composer, tools, notifications, pairing UI
+- Relay: auth, pairing, host registry, routing, session archive, timeline cache, notification fanout, Git audit, queue state, SQLite persistence
+- Host Bridge: connects a PC or server host to Relay and talks to Codex/App Server/Git on the host side
 
-> Android-native control plane for Codex sessions.
+## What it can do now
 
-核心原则：
+- Pair Android to a local PC or a server Relay
+- Keep session history visible even when a host is offline
+- Replay cached timeline pages with cursor-based pagination
+- Send prompts to an online host
+- Queue simple follow-up prompts
+- Show approval requests and completion / needs-input / host-offline notifications
+- Show Git status, diff summary, file diffs, commit confirmation, and push confirmation
+- Persist devices, hosts, sessions, timeline cache, queue state, notifications, and Git audit metadata in SQLite
+- Keep a trusted host/device identity model instead of re-pairing every time
 
-- 手机端负责观察、确认、轻量指挥、Git 审阅和通知。
-- 实际代码执行、构建、测试和文件访问发生在本地电脑或云端开发机。
-- 不在手机上保存长期敏感凭据。
-- 不把移动端做成完整 IDE。
-- 不要求用户把本地电脑暴露到公网。
+## Recommended topology
 
-## Core Scenarios
+### Local dev
 
-- 离开电脑后继续跟踪 Codex 当前在做什么。
-- 收到“需要确认/任务完成/测试失败/PR ready”等通知。
-- 在手机上批准或拒绝 Codex 请求的 shell、文件、网络或 Git 操作。
-- 发送简短指令，例如“继续”“总结进度”“只修复测试失败”“运行测试”“准备提交”。
-- 查看 Git status、diff 摘要、文件 diff，并执行 commit/push。
-- 同时管理本地电脑和云端开发机上的多个 Codex session。
-
-## Planned Architecture
-
-### Server Relay Direction
-
-The next architecture direction is **server-first Relay**:
-
-- Android connects to one stable server Relay URL instead of directly reaching a laptop on LAN, campus Wi-Fi, or Tailscale.
-- Local PC, remote devbox, and the server itself all run Host Bridge as execution nodes.
-- Host Bridge keeps outbound WebSocket connectivity to the server Relay and remains the only component allowed to touch repos, shell, Git credentials, and Codex runtime state.
-- The server Relay owns device pairing, host registry, routing, timeline cursor/cache, approval routing, Git audit metadata, and eventually push notification fanout.
-- The server Relay should not store source code, raw terminal logs, OpenAI tokens, GitHub tokens, SSH keys, or other long-lived execution secrets.
-
-This replaces the previous LAN-first real-device path as the main product route. `npm run dev:pair` remains useful for local development and protocol testing, but the production path should be Android -> server Relay -> Host Bridge -> Codex.
-
-项目采用四层结构：
-
-- Android App：Kotlin + Jetpack Compose，负责移动端 UI、通知、离线缓存、设备密钥和深链。
-- Relay Service：云端或自托管中继，负责认证、配对、会话路由、事件游标、WebSocket/SSE 转发和推送通知。
-- Host Bridge：运行在本地电脑或云端开发机，连接 Codex CLI/App Server/SDK，采集事件并执行受控命令。
-- Codex Runtime：现有 Codex、Git、shell、仓库、测试工具和本地开发环境。
-
-详细设计见 [docs/architecture.md](docs/architecture.md)。
-
-## MVP Scope
-
-第一版只做一条闭环：
-
-1. 用户在本地电脑或云端开发机启动 Host Bridge。
-2. Android App 扫码或通过配对码绑定 host。
-3. 手机能看到 active sessions、状态、timeline 和最近摘要。
-4. 手机能发送 prompt 到现有 session。
-5. 手机能处理 approval request。
-6. 手机能接收需要确认和任务完成通知。
-7. 手机能查看 Git status/diff，并在确认后 commit/push。
-
-不在 MVP 中处理：
-
-- 完整移动 IDE。
-- 手机本地执行构建或测试。
-- 多人团队权限。
-- 复杂 PR 管理。
-- 完整 Codex Cloud 深度集成。
-- hunk-level stage。
-
-## Repository Documents
-
-- [codex-mobile-android-analysis.md](codex-mobile-android-analysis.md)：竞品调研、产品定位和总体分析。
-- [docs/architecture.md](docs/architecture.md)：系统架构、组件职责、协议边界和安全模型。
-- [docs/implementation-plan.md](docs/implementation-plan.md)：分阶段施工计划、里程碑和验收标准。
-- [docs/android-toolchain.md](docs/android-toolchain.md)：Android 构建工具链安装和验证说明。
-- [docs/manual-app-server-approval-test.md](docs/manual-app-server-approval-test.md)：真实 App Server approval 手测流程。
-- [docs/manual-android-git-workflow-test.md](docs/manual-android-git-workflow-test.md)：Android Git status/diff/commit/push/audit disposable repo 手测流程。
-- [docs/official-codex-mobile-competitive-strategy.md](docs/official-codex-mobile-competitive-strategy.md): official Codex mobile support research and third-party differentiation strategy.
-- [docs/mobile-input-composer-plan.md](docs/mobile-input-composer-plan.md): rich mobile composer plan for edit, pause, image input, reasoning depth, one-shot Plan mode, and one-shot Goal mode.
-
-## Current Status
-
-Current serverization target:
-
-- Keep the existing JSON-over-WebSocket protocol for the first server Relay milestone.
-- Move the Relay process from local development to a server with a stable URL.
-- Point Android pairing and WebSocket connection at the server URL.
-- Point local PC Host Bridge at the server Relay through an outbound connection.
-- Later, run another Host Bridge on the server itself so server-side Codex appears as a normal host beside the local PC.
-- Persist paired devices, registered host metadata, session snapshots, timeline cache, and Git audit metadata in SQLite. Use `RELAY_SQLITE_PATH` to choose the database path; the default is `.relay/relay.sqlite`.
-- Android is now shaped as a Codex Console: paired devices land on a unified session inbox first, then open an individual session detail only when needed.
-- Relay standardizes each session's current `stage` in `session.snapshot`, so Android can show progress states consistently across local PC, server, and cloud/devbox hosts.
-- Android includes low-friction quick prompts for common interventions, a read-only Hosts workbench, and local in-app-process notifications for completion, failures, approvals, and blockers.
-
-Server Relay helper commands:
-
-Local one-click pairing for development:
+Use this when the host bridge runs on your PC:
 
 ```powershell
-npm run start:companion
+npm run dev:pair
 ```
 
-This starts the local Relay and Host Bridge, generates a QR pairing page, and opens it in your browser. Set `CMC_PAIRING_OPEN=0` to skip opening the browser.
+This starts a local Relay, a local Host Bridge, and prints:
+- a copyable `cmc1...` pairing code
+- a terminal QR code
+- a local HTML pairing page under `.relay/pairing/`
 
-First-time server Relay setup:
+### Server Relay
+
+Use this when Android should connect over the internet or campus/public network:
 
 ```powershell
-$env:RELAY_PUBLIC_WS_URL='wss://relay.example.com'
-$env:RELAY_PUBLIC_HTTP_URL='https://relay.example.com'
-$env:RELAY_SQLITE_PATH='.relay/relay.sqlite'
 npm run server:relay:init
-```
-
-This saves `.relay/server-relay-config.json`, including generated pairing and host tokens when they are not provided. Later starts can use the saved config:
-
-```powershell
 npm run server:relay
 ```
 
-```powershell
-$env:RELAY_PUBLIC_WS_URL='wss://relay.example.com'
-$env:RELAY_PUBLIC_HTTP_URL='https://relay.example.com'
-$env:RELAY_PAIRING_TOKEN='choose-a-long-random-pairing-token'
-$env:RELAY_HOST_TOKEN='choose-a-different-long-random-host-token'
-$env:RELAY_SQLITE_PATH='.relay/relay.sqlite'
-npm run server:relay
-```
-
-Host Bridge from a local PC to the server Relay:
+Then start a host bridge from the PC:
 
 ```powershell
 $env:RELAY_URL='wss://relay.example.com'
 $env:RELAY_HOST_TOKEN='choose-a-long-random-token'
-$env:HOST_ID='local-pc'
-$env:HOST_NAME='Local PC'
 npm run server:bridge
 ```
 
-The first successful Host Bridge registration stores a trusted host identity at `.relay/host-identity.json` by default. Later starts can omit `RELAY_HOST_TOKEN` and use the saved host device token. Set `HOST_IDENTITY_PATH` to choose another identity file.
-
-Windows Host Bridge auto-start:
+For one-step Windows host startup:
 
 ```powershell
-$env:RELAY_URL='wss://relay.example.com'
-$env:HOST_ID='local-pc'
-$env:HOST_NAME='Local PC'
 npm run bridge:windows:install
 npm run bridge:windows:start
 ```
 
-The installer saves `.relay/windows-host-bridge-config.json` and tries to create a Windows Task Scheduler entry named `CodexMobileCompanionHostBridge`. If local Windows policy denies scheduled-task creation, it falls back to a current-user Startup folder launcher. By default it does not store `RELAY_HOST_TOKEN`; it expects the Host Bridge trust file at `.relay/host-identity.json` to already exist. For a first-time setup, run `npm run server:bridge` once with `RELAY_HOST_TOKEN` so the trust file is created, then install auto-start. If you explicitly accept storing the host bootstrap token in the local config, set `CMC_BRIDGE_STORE_HOST_TOKEN=1` during install.
+## Pairing
 
-Useful commands:
+The current pairing flow supports:
+- QR code
+- pasted `cmc1...` pairing code
+- manual Relay URL + pairing token entry
 
-```powershell
-npm run bridge:windows:status
-npm run bridge:windows:start
-npm run bridge:windows:uninstall
-```
+The pairing code currently contains the Relay URL and pairing token. That is still a development-friendly model, not a final security design.
 
-PC power controls:
+## Security model
 
-Host Bridge creates `.relay/host-policy.json` with power control disabled by default. To allow trusted phones to request Keep Awake and Lock PC, edit the policy on the PC:
+Current baseline:
+- pairing token and host token are separate in server mode
+- device tokens are minted through `/pair`
+- Host Bridge tokens are scoped to host registration and host-side messages
+- Relay stores metadata, not source code or long-lived execution secrets
+- dangerous actions stay gated on the host side
 
-```json
-{
-  "power_control": {
-    "enabled": true,
-    "allow_keep_awake": true,
-    "allow_lock": true,
-    "max_keep_awake_seconds": 3600,
-    "allow_on_battery": false,
-    "trust_ttl_seconds": 2592000,
-    "challenge_ttl_seconds": 300,
-    "max_challenge_attempts": 5
-  }
-}
-```
+Still to improve:
+- one-time pairing nonce
+- stronger public-network hardening
+- true push wakeup
+- tighter rate limiting and secret redaction
 
-Then restart Host Bridge. In Android, open Session tools, tap `Enable PC controls`, enter the 6-digit code printed by Host Bridge, then use `Keep 30m`, `Keep 1h`, or `Lock PC`. The verification challenge is kept only in Host Bridge memory; Relay stores only the granted device/host trust and power-control audit metadata in SQLite.
+## Docs
 
-Server device management:
+- [docs/architecture.md](docs/architecture.md)
+- [docs/implementation-plan.md](docs/implementation-plan.md)
+- [docs/server-relay-plan.md](docs/server-relay-plan.md)
+- [docs/progress.md](docs/progress.md)
+- [codex-mobile-android-analysis.md](codex-mobile-android-analysis.md)
 
-```powershell
-$env:RELAY_PUBLIC_HTTP_URL='https://relay.example.com'
-$env:RELAY_ADMIN_TOKEN='<relay-host-token-or-pairing-token>'
-npm run server:devices -- list
-npm run server:devices -- list --all
-npm run server:devices -- revoke android <device_id>
-npm run server:devices -- revoke host <host_device_id>
-```
+## Validation
 
-`list` shows currently trusted Android devices and Host Bridge devices. `list --all` also shows revoked devices. Revoking an Android device invalidates its device token, so it must pair again. Revoking a host device invalidates the saved `.relay/host-identity.json` trust token for that Host Bridge; the bridge can be trusted again by starting it once with `RELAY_HOST_TOKEN`.
-
-For public or campus-network access, run the Node Relay behind an HTTPS/WSS reverse proxy and bind Relay itself to `127.0.0.1`. Only expose public `443` and SSH on the server firewall; do not expose `8787` directly. Concrete Caddy and Nginx examples are in [docs/server-relay-plan.md](docs/server-relay-plan.md).
-
-Server Relay smoke test:
-
-```powershell
-$env:RELAY_PUBLIC_HTTP_URL='https://relay.example.com'
-$env:RELAY_PUBLIC_WS_URL='wss://relay.example.com'
-$env:RELAY_PAIRING_TOKEN='choose-a-long-random-pairing-token'
-$env:RELAY_HOST_TOKEN='choose-a-different-long-random-host-token'
-npm run server:smoke
-```
-
-当前仓库已完成 Node 原型主链路验证，并已创建 Android MVP Shell 骨架。
-
-已验证：
-
-- 最小 Relay、Host Bridge、MockCodexAdapter 和测试客户端。
-- Codex App Server adapter 的 `thread/list`、`thread/read`、`turn/start`、`turn/steer`。
-- App Server live notifications 到移动端 timeline events 的映射。
-- 专用 ephemeral test thread，避免污染真实历史会话。
-- prompt 后等待真实 `assistant_delta` 或 `turn_completed`。
-- Relay 内存 timeline cache 和 `after_cursor` 补发。
-
-Android 骨架位于 [android/](android/)，使用 Kotlin + Jetpack Compose。当前机器已安装命令行 Android SDK，并已通过 `.\gradlew.bat :app:assembleDebug`。工具链说明见 [docs/android-toolchain.md](docs/android-toolchain.md)。
-
-Android 当前已接入本地 Relay WebSocket。模拟器默认连接 `ws://10.0.2.2:8787`，能接收 `session.snapshot` / `timeline.event`，并通过 Send 发送 `session.prompt`。Relay URL 可以在 App 内编辑保存；真机调试请改为电脑局域网 IP，例如 `ws://192.168.1.20:8787`。
-App 会本地保存最近 session、timeline events、selected session 和每个 session 的最新 cursor；重启后会先显示本地缓存，再用 `after_cursor` 向 Relay 补齐新事件。
-
-真机局域网调试时 Relay 需要监听非 localhost 地址：
-
-```powershell
-npm run dev:pair
-```
-
-Pairing output now includes the existing copyable `cmc1...` code, a terminal QR code, and a local HTML pairing page at `.relay/pairing/pairing.html`. Until Android scanning is implemented, paste the printed code into the Android Pairing code field as before. QR output can be controlled with `CMC_PAIRING_QR=both` (default), `terminal`, `html`, or `none`.
-
-脚本会生成高强度随机 token，启动 Relay 和 Host Bridge，并打印一条 `cmc1...` pairing code。把这条 code 粘贴到 Android 的 Pairing code 输入框，点击 Use code 即可自动保存 Relay URL、保存 pairing token，并换取 device token。
-
-如果默认 `8787` 端口被占用，脚本会自动选择后续可用端口，并把正确端口写入 pairing code。
-
-`npm run dev:pair` 默认使用真实 `CODEX_ADAPTER=app-server`，手机端会看到真实 Codex threads。需要回退到 mock 数据时可显式运行：
-
-```powershell
-$env:CODEX_ADAPTER='mock'
-npm run dev:pair
-```
-
-如果需要手动启动，Host Bridge 仍可以使用同一个临时 dev token 连接 Relay：
-
-```powershell
-$env:RELAY_HOST='0.0.0.0'
-$env:RELAY_DEV_TOKEN='choose-a-random-dev-token'
-npm run relay
-
-$env:RELAY_URL='ws://127.0.0.1:8787'
-$env:RELAY_DEV_TOKEN='choose-a-random-dev-token'
-npm run bridge
-```
-
-App 内 Relay 面板需要填写：
-
-- Relay URL: `ws://<电脑局域网 IP>:8787`
-- Pairing token: 与 Relay/Bridge 的 `RELAY_DEV_TOKEN` 相同
-
-点击 Save 后点击 Pair，App 会调用 Relay `/pair` 换取随机 device token；后续 WebSocket、Test Connection 和 prompt 都使用 device token。
-
-App 内 Relay 面板的 Test 按钮会请求 `<Relay HTTP URL>/health`。例如 `ws://192.168.1.20:8787` 会检查 `http://192.168.1.20:8787/health`，用于确认手机是否能访问电脑上的 Relay。
-
-常用验证命令：
+Common checks:
 
 ```powershell
 npm run verify:delivery-strategy
-npm run verify:relay-dev-token
-npm run verify:relay-health
-npm run verify:relay-timeline-cache
-npm run verify:app-server-prompt
-npm run check:android-toolchain
+npm run verify:relay-offline-host-sessions
+npm run verify:relay-sqlite-persistence
+npm run verify:notification-events
+npm run verify:rich-prompt-flow
+cd android
+.\gradlew.bat :app:assembleDebug --no-daemon
 ```
 
-## Development Security
+## Notes
 
-Server Relay security baseline:
+- Offline host history is retained and replayable.
+- New prompts still require the owning Host Bridge to be online.
+- The current product direction is server Relay first, not direct LAN-only phone-to-PC coupling.
 
-- Use TLS/WSS before treating the server Relay as internet-accessible.
-- Bind Node Relay to `127.0.0.1` in server mode and expose only the reverse proxy on public `443`.
-- Use separate `RELAY_PAIRING_TOKEN` and `RELAY_HOST_TOKEN`; keep `RELAY_DEV_TOKEN` as local development compatibility only.
-- Keep pairing separate from device authorization: pairing token/code should only mint a device token.
-- Store device tokens in Android Keystore and allow revocation from Relay storage.
-- Keep Host Bridge tokens scoped to host registration and host-side messages.
-- Rate-limit pairing, WebSocket auth failures, prompt sends, approval decisions, and Git actions.
-- Log metadata-only audit events for prompt, approval, commit, and push requests.
-- Keep dangerous actions gated at Host Bridge even if Relay authentication succeeds.
-
-当前安全边界仍是开发原型，但已经加入临时 dev token：
-
-- Relay 配置 `RELAY_DEV_TOKEN` 后，Host Bridge 消息必须携带 pairing token。
-- Android/Node client 不能直接用 pairing token 发 prompt，必须先通过 `/pair` 换取 device token。
-- 客户端 WebSocket 消息使用 `auth.token` 携带 device token。
-- Relay 监听 `0.0.0.0` 时必须设置 `RELAY_DEV_TOKEN`，否则拒绝启动。
-- `/health` 在启用 token 后只对带 device token 或 pairing token 的请求返回详细诊断；未认证请求只显示可达和认证要求。
-- Android 用 Android Keystore 加密保存 pairing token 和 device token。
-- Relay 限制单条 WebSocket 消息大小和 prompt 长度。
-- Relay/Bridge 日志不再打印 prompt 正文，减少本地日志泄露。
-
-后续还需要补强：
-
-- 正式 pairing flow：一次性配对码 + 设备密钥，替代手填共享 token。
-- WSS/TLS：离开本机或受信任局域网时必须加密传输。
-- Host-side policy：高风险 shell/Git/文件操作必须继续由 Host Bridge 做能力限制和审批。
-- 审计日志：记录谁在何时向哪个 session 发送了什么类型的控制动作。
-- 速率限制和连接限制：避免局域网内错误客户端刷爆 Relay。
-- Secret redaction：timeline、health、日志和通知都要做敏感字段过滤。
-
-## MVP Gaps Before Broader Use
-
-真机测试前主链路已经够用：Relay/Bridge 启动、App 配对、看 session/timeline、发 prompt、断线后用 cursor 补事件。
-
-还没完成但属于 MVP 应补能力：
-
-- Approval request/decision：协议壳、Relay 路由、Android 卡片和真实 Codex App Server request/response 映射已完成；真实危险操作端到端触发仍建议单独手测。
-- Git status/diff/commit/push：已完成移动端 Status/Diff summary、file diff preview、Git action audit 和 commit confirmation UI；commit/push 执行仍默认禁用，等待写操作策略。
-- Android foreground/background 通知：当前需要打开 App 看 timeline，还没有系统通知。
-- Relay/Bridge 重连策略：断线后基础重连能手动触发，自动退避重连还不完整。
-- 真机端到端手册：需要补一份从电脑 IP、防火墙、Relay、Bridge、App 安装到故障排查的测试清单。
-
-## Git MVP Status
-
-The current prototype includes a minimal Git status and file diff path:
-
-- Android can request Git Status or Diff summary for the selected session.
-- Android can tap a changed file and request a compact file-level diff preview.
-- Android can enter a commit message and pass a confirmation dialog before sending a commit request.
-- Android can request push after a confirmation dialog when the latest Git snapshot is clean.
-- Android and Host Bridge distinguish tracked vs untracked files; Android lets the user choose `tracked_only` or `include_untracked` before confirming a commit.
-- Relay routes `git.request` to the owning Host Bridge.
-- Host Bridge runs local read-only Git commands in the session repository and returns `git.snapshot`.
-- Relay emits metadata-only `git_audit` timeline events for Git request/completion.
-- Relay persists Git audit events as NDJSON and exposes `GET /git/audit` for authenticated queries.
-- Android can refresh and view recent Git audit entries for the selected session from the Git panel.
-- Commit execution is guarded by `GIT_WRITE_ACTIONS_ENABLED=true`; `include_untracked` stages tracked and untracked files with `git add -A` only after that host-side gate is enabled.
-- Push execution is guarded by both `GIT_WRITE_ACTIONS_ENABLED=true` and `GIT_PUSH_ACTIONS_ENABLED=true`; Host Bridge also requires a known branch, upstream tracking branch, and clean worktree.
-
-Verification:
-
-```powershell
-npm run verify:git-flow
-npm run verify:git-push-disposable
-```
-
-Git audit storage:
-
-- Default path: `.relay/git-audit.ndjson`
-- Override with `RELAY_GIT_AUDIT_LOG_PATH`
-- Query: `GET /git/audit?session_id=<session>&action=<action>&limit=100`
-- Auth: same headers as `/health`, for example `X-Relay-Device-Token` or `X-Relay-Dev-Token`
-
-Remaining before Git is truly user-facing:
-
-- run the Android Git workflow checklist on a physical device
