@@ -27,7 +27,7 @@ The system now has three main pieces:
 - Queue simple follow-up prompts
 - Show approval requests and completion / needs-input / host-offline notifications
 - Show Git status, diff summary, file diffs, commit confirmation, and push confirmation
-- Persist devices, hosts, sessions, timeline cache, queue state, notifications, and Git audit metadata in SQLite
+- Persist devices, hosts, sessions, timeline cache, queue state, approvals, notifications, and Git audit metadata in SQLite
 - Keep a trusted host/device identity model instead of re-pairing every time
 
 ## Recommended topology
@@ -93,6 +93,22 @@ Still to improve:
 - true push wakeup
 - tighter rate limiting and secret redaction
 
+## Approval retention
+
+Relay persists active and resolved approvals in SQLite. Defaults:
+
+- pending approvals: retained for 7 days
+- resolved approvals: retained for 24 hours
+- cleanup interval: 1 hour
+
+Override with:
+
+```powershell
+$env:RELAY_APPROVAL_PENDING_TTL_MS='604800000'
+$env:RELAY_APPROVAL_RESOLVED_TTL_MS='86400000'
+$env:RELAY_APPROVAL_CLEANUP_INTERVAL_MS='3600000'
+```
+
 ## Docs
 
 - [docs/architecture.md](docs/architecture.md)
@@ -120,4 +136,3 @@ cd android
 - Offline host history is retained and replayable.
 - New prompts still require the owning Host Bridge to be online.
 - The current product direction is server Relay first, not direct LAN-only phone-to-PC coupling.
-

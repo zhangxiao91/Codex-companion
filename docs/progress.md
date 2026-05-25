@@ -3866,3 +3866,127 @@ Known notes:
 
 - Cached sessions still remain visible in the inbox after reconnect, but they are intentionally read-only until the new Relay connection replays their live snapshot.
 - Reconnects to the same relay preserve pending ack retries; changing relay URL or pairing identity still resets them.
+
+## 2026-05-24: Relay approval SQLite persistence
+
+Completed:
+
+- Added first-class Relay SQLite storage for approval requests, including `approval_id`, `session_id`, `status`, `requested_at`, `decided_at`, `updated_at`, and full payload JSON.
+- Relay now loads persisted approvals on startup before recomputing session stages, so pending approvals survive Relay restarts.
+- Relay now persists approval state when:
+  - a Host Bridge reports a new `approval.request`;
+  - Android sends an `approval.decision` and Relay marks the approval resolved;
+  - Host timeline replay emits an `approval_resolved` event.
+- Added approval retention cleanup:
+  - `RELAY_APPROVAL_PENDING_TTL_MS`, default 7 days;
+  - `RELAY_APPROVAL_RESOLVED_TTL_MS`, default 24 hours;
+  - `RELAY_APPROVAL_CLEANUP_INTERVAL_MS`, default 1 hour.
+- Health/storage counts now include persisted approval rows.
+- README now documents approval persistence and retention knobs.
+
+Verification:
+
+```powershell
+node --check relay/service/sqlite-store.mjs
+node --check relay/service/server.mjs
+node --check tools/verify-approval-sqlite-persistence.mjs
+npm run verify:approval-sqlite-persistence
+npm run verify:approval-replay-cleanup
+npm run verify:approval-flow
+npm run verify:relay-sqlite-persistence
+```
+
+Result:
+
+```text
+[verify] Approval SQLite persistence and expiry cleanup verified.
+[verify] Approval replay cleanup verified.
+[verify] Approval request/decision flow verified.
+[verify] Relay SQLite persistence verified.
+```
+
+Known notes:
+
+- SQLite still emits Node's experimental `node:sqlite` warning during verification.
+- Cleanup runs at Relay startup and then on the configured interval; setting the interval to `0` disables the periodic timer but startup cleanup still runs.
+
+## 2026-05-24: Android state-layer regression tests
+
+Completed:
+
+- Added JVM unit-test support for the Android app via `kotlin("test")`.
+- Extracted state-sensitive Android rules into `RelayStateReducers` so regression tests exercise the same code paths used by `RelayViewModel` and `RelayCacheStore`.
+- Covered restored Relay request lifecycle behavior:
+  - stale `waiting_ack` and `retrying` states restore as `interrupted`;
+  - terminal and blank phases stay unchanged.
+- Covered session sync correctness:
+  - cached-only session ids are not treated as live-confirmed;
+  - cached visible sessions remain pending until a fresh snapshot confirms them;
+  - pending timeline sync and earlier-history loading both keep sync state active;
+  - fully confirmed sessions produce an idle synced state.
+- Covered approval state updates:
+  - pending approval upsert / dedupe;
+  - resolved approval removal;
+  - pending approval id derivation.
+- Covered timeline and prompt queue state:
+  - timeline event merge dedupes, sorts by cursor, and trims per session;
+  - prompt queue depth updates on queued / started timeline events and clears when drained.
+
+Verification:
+
+```powershell
+cd android
+.\gradlew.bat :app:testDebugUnitTest --no-daemon
+.\gradlew.bat :app:assembleDebug --no-daemon
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL
+BUILD SUCCESSFUL
+```
+
+Known notes:
+
+- These are pure JVM state-layer tests; they intentionally avoid UI instrumentation and real WebSocket/Room integration.
+- A later pass can add Robolectric or instrumentation tests for `RelayCacheStore` Room migrations and full `RelayViewModel` listener flows if we want broader Android integration coverage.
+
+## 2026-05-25: Approval decision failure persistence guard
+
+Completed:
+
+- Fixed a Relay approval edge case where `approval.decision` was persisted as resolved before the decision had actually been accepted for delivery to the Host Bridge.
+- Relay now only updates in-memory approval state and SQLite after `send(hostConnection, message)` succeeds.
+- If the host is offline or delivery fails, the approval remains pending and can be replayed after reconnect/restart.
+- Added `npm run verify:approval-decision-failure` to cover the failure path:
+  - create pending approval;
+  - disconnect host;
+  - send Android approval decision;
+  - confirm Relay returns a host-offline error;
+  - restart Relay;
+  - confirm the approval still replays as `pending`.
+
+Verification:
+
+```powershell
+node --check relay/service/server.mjs
+node --check tools/verify-approval-decision-failure.mjs
+npm run verify:approval-decision-failure
+npm run verify:approval-flow
+npm run verify:approval-sqlite-persistence
+npm run verify:approval-replay-cleanup
+```
+
+Result:
+
+```text
+[verify] Failed approval decision leaves persisted approval pending.
+[verify] Approval request/decision flow verified.
+[verify] Approval SQLite persistence and expiry cleanup verified.
+[verify] Approval replay cleanup verified.
+```
+
+Known notes:
+
+- The new failure verifier covers the stable offline-host delivery failure path. The lower-level WebSocket send-throw branch now shares the same state ordering, so it also cannot persist a resolved approval before send succeeds.

@@ -28,6 +28,9 @@ const maxPromptImageDataUrlBytes = Number.parseInt(process.env.RELAY_MAX_PROMPT_
 const auditLogLimit = Number.parseInt(process.env.RELAY_AUDIT_LOG_LIMIT ?? '500', 10);
 const notificationLogLimit = Number.parseInt(process.env.RELAY_NOTIFICATION_LOG_LIMIT ?? '200', 10);
 const processedMessageTtlMs = Number.parseInt(process.env.RELAY_PROCESSED_MESSAGE_TTL_MS ?? '120000', 10);
+const approvalPendingTtlMs = Number.parseInt(process.env.RELAY_APPROVAL_PENDING_TTL_MS ?? String(7 * 24 * 60 * 60 * 1000), 10);
+const approvalResolvedTtlMs = Number.parseInt(process.env.RELAY_APPROVAL_RESOLVED_TTL_MS ?? String(24 * 60 * 60 * 1000), 10);
+const approvalCleanupIntervalMs = Number.parseInt(process.env.RELAY_APPROVAL_CLEANUP_INTERVAL_MS ?? String(60 * 60 * 1000), 10);
 const gitAuditLogPath = resolve(process.env.RELAY_GIT_AUDIT_LOG_PATH ?? '.relay/git-audit.ndjson');
 const publicHttpUrl = trimTrailingSlash(process.env.RELAY_PUBLIC_HTTP_URL ?? '');
 const publicWsUrl = trimTrailingSlash(process.env.RELAY_PUBLIC_WS_URL ?? '');
@@ -121,6 +124,7 @@ server.on('upgrade', (request, socket, head) => {
 });
 
 await loadPersistentState();
+startApprovalCleanupTimer();
 
 server.listen(port, host, () => {
   console.log(`[relay] listening on ws://${host}:${port}`);
@@ -662,6 +666,12 @@ function loadSqliteState() {
     state.sessions.set(session.session_id, session);
   }
 
+  cleanupExpiredApprovals();
+  const approvals = relayStore.loadApprovals();
+  for (const approval of approvals) {
+    state.approvals.set(approval.approval_id, approval);
+  }
+
   const timelineEvents = relayStore.loadTimelineEvents(timelineCacheLimit);
   for (const event of timelineEvents) {
     const events = state.timelineEvents.get(event.session_id) ?? [];
@@ -684,11 +694,11 @@ function loadSqliteState() {
   }
 
   const counts = relayStore.counts();
-  if (counts.devices || counts.hosts || counts.sessions || counts.timeline_events || counts.git_audit_events || counts.prompt_queue_states || counts.notification_events) {
+  if (counts.devices || counts.hosts || counts.sessions || counts.timeline_events || counts.git_audit_events || counts.prompt_queue_states || counts.approvals || counts.notification_events) {
     if (counts.devices || counts.hosts) {
       console.log(`[relay] loaded ${counts.devices} device(s) and ${counts.hosts} host(s) from ${relayStore.path}`);
     }
-    console.log(`[relay] loaded sqlite state from ${relayStore.path}: devices=${counts.devices}, hosts=${counts.hosts}, sessions=${counts.sessions}, timeline_events=${counts.timeline_events}, prompt_queue_states=${counts.prompt_queue_states}, notification_events=${counts.notification_events}, git_audit_events=${counts.git_audit_events}`);
+    console.log(`[relay] loaded sqlite state from ${relayStore.path}: devices=${counts.devices}, hosts=${counts.hosts}, sessions=${counts.sessions}, timeline_events=${counts.timeline_events}, prompt_queue_states=${counts.prompt_queue_states}, approvals=${counts.approvals}, notification_events=${counts.notification_events}, git_audit_events=${counts.git_audit_events}`);
   }
 }
 
@@ -724,6 +734,63 @@ function persistGitAuditEvent(event) {
   } catch (error) {
     console.error(`[relay] failed to persist git audit event: ${error.message}`);
   }
+}
+
+function persistApproval(approval) {
+  try {
+    relayStore.saveApproval(approval);
+  } catch (error) {
+    console.error(`[relay] failed to persist approval ${approval?.approval_id ?? ''}: ${error.message}`);
+  }
+}
+
+function cleanupExpiredApprovals() {
+  try {
+    const removed = relayStore.cleanupExpiredApprovals({
+      pendingTtlMs: approvalPendingTtlMs,
+      resolvedTtlMs: approvalResolvedTtlMs
+    });
+    if (removed > 0) {
+      for (const [approvalId, approval] of state.approvals.entries()) {
+        if (isApprovalExpired(approval)) {
+          state.approvals.delete(approvalId);
+        }
+      }
+      console.log(`[relay] cleaned ${removed} expired approval(s) from ${relayStore.path}`);
+    }
+    return removed;
+  } catch (error) {
+    console.error(`[relay] failed to clean expired approvals: ${error.message}`);
+    return 0;
+  }
+}
+
+function startApprovalCleanupTimer() {
+  if (!Number.isFinite(approvalCleanupIntervalMs) || approvalCleanupIntervalMs <= 0) {
+    return;
+  }
+  const timer = setInterval(cleanupExpiredApprovals, approvalCleanupIntervalMs);
+  timer.unref?.();
+}
+
+function isApprovalExpired(approval) {
+  const now = Date.now();
+  const status = approval?.status ?? 'pending';
+  if (status === 'pending') {
+    return isOlderThan(approval.requested_at ?? approval.updated_at, approvalPendingTtlMs, now);
+  }
+  return isOlderThan(approval.decided_at ?? approval.updated_at, approvalResolvedTtlMs, now);
+}
+
+function isOlderThan(isoTimestamp, ttlMs, nowMs) {
+  if (!Number.isFinite(ttlMs) || ttlMs < 0) {
+    return false;
+  }
+  const timestamp = Date.parse(isoTimestamp ?? '');
+  if (!Number.isFinite(timestamp)) {
+    return false;
+  }
+  return timestamp < nowMs - ttlMs;
 }
 
 async function migrateLegacyIdentityState() {
@@ -913,11 +980,13 @@ function handleApprovalRequest(connection, message) {
   requireApprovalField(approval, 'approval_id');
   requireApprovalField(approval, 'session_id');
 
-  state.approvals.set(approval.approval_id, {
+  const storedApproval = {
     ...approval,
     status: approval.status ?? 'pending',
     updated_at: new Date().toISOString()
-  });
+  };
+  state.approvals.set(approval.approval_id, storedApproval);
+  persistApproval(storedApproval);
 
   console.log(`[relay] approval requested: ${approval.approval_id}`);
   emitNotification({
@@ -964,15 +1033,16 @@ function handleApprovalDecision(connection, message) {
     return;
   }
 
-  const resolvedApproval = {
-    ...approval,
-    status: message.payload.decision,
-    decided_at: new Date().toISOString()
-  };
-  state.approvals.set(approval.approval_id, resolvedApproval);
-
   console.log(`[relay] routing approval decision to host ${session.host_id}: ${approval.approval_id}`);
   if (send(hostConnection, message)) {
+    const resolvedApproval = {
+      ...approval,
+      status: message.payload.decision,
+      decided_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+    state.approvals.set(approval.approval_id, resolvedApproval);
+    persistApproval(resolvedApproval);
     sendAck(connection, message, 'accepted');
     broadcastToClients(createMessage(MessageType.ApprovalRequest, { approval: resolvedApproval }));
     refreshSessionStage(approval.session_id);
@@ -1575,6 +1645,7 @@ function maybeResolveApprovalFromTimelineEvent(event) {
     updated_at: event.created_at ?? new Date().toISOString()
   };
   state.approvals.set(approvalId, resolvedApproval);
+  persistApproval(resolvedApproval);
   broadcastToClients(createMessage(MessageType.ApprovalRequest, { approval: resolvedApproval }));
 }
 

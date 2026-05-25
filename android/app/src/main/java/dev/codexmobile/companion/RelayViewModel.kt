@@ -37,7 +37,7 @@ class RelayViewModel(
             promptQueues = cacheStore.promptQueues(),
             relayRequestState = cacheStore.relayRequestState(),
             relayRequestHistory = cacheStore.relayRequestHistory(),
-            pendingApprovalIds = pendingApprovalIds(initialApprovals),
+            pendingApprovalIds = RelayStateReducers.pendingApprovalIds(initialApprovals),
             confirmedSessionIds = confirmedSessionIds.toSet(),
             pendingTimelineSyncIds = pendingTimelineSyncIds.toSet()
         )
@@ -460,7 +460,7 @@ class RelayViewModel(
                 cacheStore.saveApprovals(approvals)
                 state.copy(
                     approvals = approvals,
-                    pendingApprovalIds = pendingApprovalIds(approvals),
+                    pendingApprovalIds = RelayStateReducers.pendingApprovalIds(approvals),
                     lastHealthCheck = "Approval decision sent",
                     lastError = null
                 )
@@ -549,16 +549,11 @@ class RelayViewModel(
 
     override fun onApprovalRequest(approval: ApprovalItem) {
         _uiState.update { state ->
-            val approvals = if (approval.status == "pending") {
-                (listOf(approval) + state.approvals.filter { it.approvalId != approval.approvalId })
-                    .take(MAX_APPROVAL_ITEMS)
-            } else {
-                state.approvals.filter { it.approvalId != approval.approvalId }
-            }
+            val approvals = RelayStateReducers.mergeApproval(state.approvals, approval, MAX_APPROVAL_ITEMS)
             cacheStore.saveApprovals(approvals)
             state.copy(
                 approvals = approvals,
-                pendingApprovalIds = pendingApprovalIds(approvals)
+                pendingApprovalIds = RelayStateReducers.pendingApprovalIds(approvals)
             )
         }
     }
@@ -632,7 +627,7 @@ class RelayViewModel(
             val timeline = mergeTimelineEvents(state.timeline, listOf(event))
             state.copy(
                 timeline = timeline,
-                promptQueues = updatePromptQueueState(state.promptQueues, event),
+                promptQueues = RelayStateReducers.updatePromptQueueState(state.promptQueues, event),
                 pendingTimelineSyncIds = pendingTimelineSyncIds.toSet()
             )
         }
@@ -742,9 +737,6 @@ class RelayViewModel(
                 }
             }.getOrNull()
         }
-
-        fun pendingApprovalIds(approvals: List<ApprovalItem>): Set<String> =
-            approvals.filter { it.status == "pending" }.map { it.approvalId }.toSet()
     }
 
     private fun latestCursorFor(sessionId: String): String? = _uiState.value.timeline
@@ -804,8 +796,7 @@ class RelayViewModel(
     }
 
     private fun liveConfirmedSessionIds(): Set<String> {
-        val visibleSessionIds = _uiState.value.sessions.map { it.sessionId }.toSet()
-        return confirmedSessionIds.intersect(visibleSessionIds)
+        return RelayStateReducers.liveConfirmedSessionIds(_uiState.value.sessions, confirmedSessionIds)
     }
 
     private fun shouldRunForegroundRefresh(): Boolean {
@@ -876,21 +867,13 @@ class RelayViewModel(
     private fun updateSyncState() {
         _uiState.update { state ->
             val confirmed = liveConfirmedSessionIds()
-            val pendingSessions = state.sessions.count { it.sessionId !in confirmed }
-            val pendingTimeline = pendingTimelineSyncIds.size
-            val active = state.connectionStatus == "Connecting" || pendingSessions > 0 || pendingTimeline > 0 || state.timelineLoadingEarlier
             state.copy(
-                syncState = buildSyncState(
-                    active = active,
-                    summary = when {
-                        state.connectionStatus == "Connecting" -> "Connecting and syncing sessions"
-                        pendingSessions > 0 -> "Confirming ${pendingSessions} session${if (pendingSessions == 1) "" else "s"}"
-                        pendingTimeline > 0 -> "Syncing timeline for ${pendingTimeline} session${if (pendingTimeline == 1) "" else "s"}"
-                        state.timelineLoadingEarlier -> "Loading earlier history"
-                        else -> ""
-                    },
-                    pendingSessionCount = pendingSessions + pendingTimeline,
-                    totalSessionCount = state.sessions.size
+                syncState = RelayStateReducers.buildSyncState(
+                    sessions = state.sessions,
+                    confirmedSessionIds = confirmedSessionIds,
+                    pendingTimelineSyncIds = pendingTimelineSyncIds,
+                    connectionStatus = state.connectionStatus,
+                    timelineLoadingEarlier = state.timelineLoadingEarlier
                 ),
                 confirmedSessionIds = confirmed,
                 pendingTimelineSyncIds = pendingTimelineSyncIds.toSet()
@@ -903,68 +886,20 @@ class RelayViewModel(
         summary: String = "",
         pendingSessionCount: Int = _uiState.value.sessions.count { it.sessionId !in liveConfirmedSessionIds() } + pendingTimelineSyncIds.size,
         totalSessionCount: Int = _uiState.value.sessions.size
-    ): SyncState = SyncState(
-        active = active,
-        pendingSessionCount = pendingSessionCount,
-        confirmedSessionCount = _uiState.value.sessions.count { it.sessionId in liveConfirmedSessionIds() },
-        totalSessionCount = totalSessionCount,
-        summary = summary
+    ): SyncState = RelayStateReducers.buildSyncState(
+        sessions = _uiState.value.sessions,
+        confirmedSessionIds = confirmedSessionIds,
+        pendingTimelineSyncIds = pendingTimelineSyncIds,
+        connectionStatus = _uiState.value.connectionStatus,
+        timelineLoadingEarlier = _uiState.value.timelineLoadingEarlier,
+        activeOverride = active,
+        summaryOverride = summary,
+        pendingSessionCountOverride = pendingSessionCount,
+        totalSessionCountOverride = totalSessionCount
     )
 
     private fun mergeTimelineEvents(current: List<TimelineItem>, incoming: List<TimelineItem>): List<TimelineItem> {
-        if (incoming.isEmpty()) {
-            return current
-        }
-
-        val incomingIds = incoming.map { it.eventId }.toSet()
-        return (incoming + current.filter { it.eventId !in incomingIds })
-            .sortedWith(compareByDescending<TimelineItem> { it.cursor?.toLongOrNull() ?: Long.MIN_VALUE }
-            .thenByDescending { it.createdAt })
-            .groupBy { it.sessionId }
-            .values
-            .flatMap { it.take(MAX_TIMELINE_ITEMS_PER_SESSION) }
-            .sortedWith(compareByDescending<TimelineItem> { it.cursor?.toLongOrNull() ?: Long.MIN_VALUE }
-            .thenByDescending { it.createdAt })
-    }
-
-    private fun updatePromptQueueState(current: Map<String, PromptQueueState>, event: TimelineItem): Map<String, PromptQueueState> {
-        val queueState = current[event.sessionId]
-        return when (event.type) {
-            "prompt_queued" -> {
-                val depth = event.summary
-                    .substringAfter("Queued prompt ")
-                    .substringBefore("/")
-                    .toIntOrNull()
-                    ?: queueState?.depth
-                    ?: 1
-                val maxDepth = event.summary
-                    .substringAfter("/")
-                    .substringBefore(".")
-                    .toIntOrNull()
-                    ?: queueState?.maxDepth
-                    ?: 5
-                current + (event.sessionId to PromptQueueState(event.sessionId, depth, maxDepth))
-            }
-            "prompt_queue_started" -> {
-                val depth = event.summary
-                    .substringAfter("Started queued prompt. ")
-                    .substringBefore("/")
-                    .toIntOrNull()
-                    ?: ((queueState?.depth ?: 1) - 1).coerceAtLeast(0)
-                val maxDepth = event.summary
-                    .substringAfter("/")
-                    .substringBefore(" queued")
-                    .toIntOrNull()
-                    ?: queueState?.maxDepth
-                    ?: 5
-                if (depth <= 0) {
-                    current - event.sessionId
-                } else {
-                    current + (event.sessionId to PromptQueueState(event.sessionId, depth, maxDepth))
-                }
-            }
-            else -> current
-        }
+        return RelayStateReducers.mergeTimelineEvents(current, incoming, MAX_TIMELINE_ITEMS_PER_SESSION)
     }
 
     private fun requestGit(

@@ -59,4 +59,5 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:5.3.2")
     kapt("androidx.room:room-compiler:2.8.4")
     debugImplementation("androidx.compose.ui:ui-tooling")
+    testImplementation(kotlin("test"))
 }

@@ -65,6 +65,17 @@ export function createRelaySqliteStore(options = {}) {
       updated_at TEXT NOT NULL,
       payload_json TEXT NOT NULL DEFAULT '{}'
     );
+    CREATE TABLE IF NOT EXISTS approvals (
+      approval_id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      requested_at TEXT,
+      decided_at TEXT,
+      updated_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX IF NOT EXISTS idx_approvals_session ON approvals(session_id);
+    CREATE INDEX IF NOT EXISTS idx_approvals_status_updated ON approvals(status, updated_at);
     CREATE TABLE IF NOT EXISTS notification_events (
       notification_id TEXT PRIMARY KEY,
       kind TEXT NOT NULL,
@@ -112,7 +123,9 @@ export function createRelaySqliteStore(options = {}) {
     CREATE INDEX IF NOT EXISTS idx_power_audit_created ON power_audit_events(created_at);
     CREATE INDEX IF NOT EXISTS idx_power_audit_filters ON power_audit_events(host_id, device_id, action, phase);
   `);
-  ensureColumn(db, 'devices', 'revoked_at', 'TEXT');
+    ensureColumn(db, 'devices', 'revoked_at', 'TEXT');
+    ensureColumn(db, 'approvals', 'requested_at', 'TEXT');
+    ensureColumn(db, 'approvals', 'decided_at', 'TEXT');
 
   return {
     path,
@@ -342,6 +355,69 @@ export function createRelaySqliteStore(options = {}) {
     deletePromptQueueState(sessionId) {
       db.prepare('DELETE FROM prompt_queue_states WHERE session_id = ?').run(sessionId);
     },
+    loadApprovals() {
+      return db.prepare('SELECT payload_json FROM approvals ORDER BY updated_at DESC').all()
+        .map((row) => parseJson(row.payload_json, null))
+        .filter(Boolean);
+    },
+    saveApproval(approval) {
+      const now = new Date().toISOString();
+      const status = approval.status ?? 'pending';
+      const requestedAt = approval.requested_at ?? approval.requestedAt ?? approval.created_at ?? now;
+      const decidedAt = approval.decided_at ?? approval.decidedAt ?? (status === 'pending' ? null : approval.updated_at ?? now);
+      const updatedAt = approval.updated_at ?? approval.updatedAt ?? decidedAt ?? requestedAt ?? now;
+      db.prepare(`
+        INSERT INTO approvals (approval_id, session_id, status, requested_at, decided_at, updated_at, payload_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(approval_id) DO UPDATE SET
+          session_id = excluded.session_id,
+          status = excluded.status,
+          requested_at = excluded.requested_at,
+          decided_at = excluded.decided_at,
+          updated_at = excluded.updated_at,
+          payload_json = excluded.payload_json
+      `).run(
+        approval.approval_id,
+        approval.session_id,
+        status,
+        requestedAt,
+        decidedAt,
+        updatedAt,
+        JSON.stringify({
+          ...approval,
+          status,
+          requested_at: requestedAt,
+          decided_at: decidedAt,
+          updated_at: updatedAt
+        })
+      );
+    },
+    cleanupExpiredApprovals(options = {}) {
+      const nowMs = options.nowMs ?? Date.now();
+      const pendingTtlMs = Number.parseInt(options.pendingTtlMs ?? '', 10);
+      const resolvedTtlMs = Number.parseInt(options.resolvedTtlMs ?? '', 10);
+      let removed = 0;
+
+      if (Number.isFinite(pendingTtlMs) && pendingTtlMs >= 0) {
+        const pendingCutoff = new Date(nowMs - pendingTtlMs).toISOString();
+        removed += (db.prepare(`
+          DELETE FROM approvals
+          WHERE status = 'pending'
+            AND COALESCE(requested_at, updated_at) < ?
+        `).run(pendingCutoff).changes ?? 0);
+      }
+
+      if (Number.isFinite(resolvedTtlMs) && resolvedTtlMs >= 0) {
+        const resolvedCutoff = new Date(nowMs - resolvedTtlMs).toISOString();
+        removed += (db.prepare(`
+          DELETE FROM approvals
+          WHERE status <> 'pending'
+            AND COALESCE(decided_at, updated_at) < ?
+        `).run(resolvedCutoff).changes ?? 0);
+      }
+
+      return removed;
+    },
     loadNotificationEvents(limit) {
       return db.prepare(`
         SELECT payload_json
@@ -532,6 +608,7 @@ export function createRelaySqliteStore(options = {}) {
         sessions: count('sessions'),
         timeline_events: count('timeline_events'),
         prompt_queue_states: count('prompt_queue_states'),
+        approvals: count('approvals'),
         notification_events: count('notification_events'),
         git_audit_events: count('git_audit_events'),
         host_devices: count('host_devices'),

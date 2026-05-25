@@ -180,15 +180,10 @@ class RelayCacheStore(context: Context) {
 
     private fun relayRequestStateFromJson(json: JSONObject): RelayRequestState {
         val rawPhase = json.optString("phase", "")
-        val restoredPhase = if (rawPhase in setOf("waiting_ack", "retrying")) {
-            "interrupted"
-        } else {
-            rawPhase
-        }
         return RelayRequestState(
             type = json.optString("type", ""),
             label = json.optString("label", ""),
-            phase = restoredPhase,
+            phase = RelayStateReducers.restoreRelayRequestPhase(rawPhase),
             messageId = json.optString("message_id", "").takeIf { it.isNotBlank() },
             attempts = json.optInt("attempts", 0),
             updatedAt = json.optString("updated_at", "").takeIf { it.isNotBlank() }
