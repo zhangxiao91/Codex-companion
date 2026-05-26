@@ -2271,7 +2271,8 @@ function sendCachedTimeline(connection, sessionId, options = {}) {
 
 function hostTimelineRequestMessage(message, cacheResult) {
   const afterCursor = cacheResult?.after_cursor ?? parseCursor(message.payload?.after_cursor);
-  if (afterCursor <= 0 || (cacheResult?.selected_count ?? 0) > 0) {
+  const beforeCursor = cacheResult?.before_cursor ?? parseCursor(message.payload?.before_cursor);
+  if (afterCursor <= 0 || beforeCursor > 0) {
     return message;
   }
 

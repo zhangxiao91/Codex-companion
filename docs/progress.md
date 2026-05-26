@@ -4655,3 +4655,39 @@ Known notes:
 
 - This fix touches both server Relay and Android. The server Relay must be updated/restarted before Android can benefit from the cache paging change.
 - If conversations are already archived in Relay cloud state, Android will keep respecting that state until the user restores them. Use Archive -> Restore all to clear accidental bulk archive state.
+
+## 2026-05-27: Latest timeline refresh hardening
+
+Completed:
+
+- Followed up on the remaining issue where long conversations had older history but still missed the newest segment.
+- Changed selected-session behavior:
+  - opening a session now requests a latest timeline page directly instead of relying only on cloud dirty state or incremental `after_cursor`;
+  - detail view now exposes a `Refresh latest` control so the user has a direct recovery path when the newest segment is missing.
+- Hardened Relay -> Host timeline forwarding:
+  - latest refresh requests no longer forward `after_cursor` to Host;
+  - this avoids stale/mixed Relay cursor values causing Host `thread/read` pagination to return an empty page.
+- Kept older-history pagination intact:
+  - `before_cursor` requests still pass through for `Load earlier`.
+
+Verification:
+
+```powershell
+npm run verify:relay-timeline-cache
+npm run verify:session-create-routing
+npm run verify:relay-sync-index
+cd android
+.\gradlew.bat --stop
+.\gradlew.bat :app:assembleDebug --no-daemon --stacktrace
+.\gradlew.bat :app:testDebugUnitTest --no-daemon
+```
+
+Result:
+
+```text
+[verify] Relay timeline cache cursor replay verified.
+[verify] Session create routing preserves persistent mobile New Chat and legacy ephemeral clients.
+[verify] Relay sync index and ack persistence verified.
+BUILD SUCCESSFUL
+BUILD SUCCESSFUL
+```

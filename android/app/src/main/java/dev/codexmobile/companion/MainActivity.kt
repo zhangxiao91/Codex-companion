@@ -134,6 +134,7 @@ class MainActivity : ComponentActivity() {
                 onSessionRestore = viewModel::restoreArchivedSession,
                 onRestoreAllArchived = viewModel::restoreAllArchivedSessions,
                 onLoadEarlierTimeline = viewModel::loadEarlierTimeline,
+                onRefreshTimeline = viewModel::refreshSelectedTimeline,
                 onPowerTrustRequest = viewModel::requestPowerTrust,
                 onPowerTrustVerify = viewModel::verifyPowerTrust,
                 onKeepAwake = viewModel::requestKeepAwake,
@@ -205,6 +206,7 @@ private fun CompanionApp(
     onSessionRestore: (String) -> Unit,
     onRestoreAllArchived: () -> Unit,
     onLoadEarlierTimeline: () -> Unit,
+    onRefreshTimeline: () -> Unit,
     onPowerTrustRequest: () -> Unit,
     onPowerTrustVerify: (String) -> Unit,
     onKeepAwake: (Int) -> Unit,
@@ -274,6 +276,7 @@ private fun CompanionApp(
                     onSessionArchive = onSessionArchive,
                     onSessionRestore = onSessionRestore,
                     onLoadEarlierTimeline = onLoadEarlierTimeline,
+                    onRefreshTimeline = onRefreshTimeline,
                     onPowerTrustRequest = onPowerTrustRequest,
                     onPowerTrustVerify = onPowerTrustVerify,
                     onKeepAwake = onKeepAwake,
@@ -1224,6 +1227,7 @@ private fun MainSessionScreen(
     onSessionArchive: (String) -> Unit,
     onSessionRestore: (String) -> Unit,
     onLoadEarlierTimeline: () -> Unit,
+    onRefreshTimeline: () -> Unit,
     onPowerTrustRequest: () -> Unit,
     onPowerTrustVerify: (String) -> Unit,
     onKeepAwake: (Int) -> Unit,
@@ -1268,7 +1272,12 @@ private fun MainSessionScreen(
                 onTools = { toolsOpen = true }
             )
             MainStatusNotice(uiState)
-            TimelineStream(uiState = uiState, modifier = Modifier.weight(1f), onLoadEarlier = onLoadEarlierTimeline)
+            TimelineStream(
+                uiState = uiState,
+                modifier = Modifier.weight(1f),
+                onLoadEarlier = onLoadEarlierTimeline,
+                onRefreshLatest = onRefreshTimeline
+            )
             QuickActionBar(
                 enabled = uiState.selectedSession != null && uiState.connectionStatus == "Online",
                 onQuickPrompt = onPromptSend
@@ -1586,7 +1595,12 @@ private fun DrawerSessionRow(session: CodexSession, selected: Boolean, onClick: 
 }
 
 @Composable
-private fun TimelineStream(uiState: RelayUiState, modifier: Modifier = Modifier, onLoadEarlier: () -> Unit) {
+private fun TimelineStream(
+    uiState: RelayUiState,
+    modifier: Modifier = Modifier,
+    onLoadEarlier: () -> Unit,
+    onRefreshLatest: () -> Unit
+) {
     val selectedSession = uiState.selectedSession
     val events = uiState.timeline.filter { it.sessionId == uiState.selectedSessionId }
     val listState = rememberLazyListState()
@@ -1649,6 +1663,24 @@ private fun TimelineStream(uiState: RelayUiState, modifier: Modifier = Modifier,
                         onLoadEarlier = onLoadEarlier
                     )
                 }
+            }
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(end = 8.dp, top = 4.dp)
+                    .clip(RoundedCornerShape(99.dp))
+                    .clickable(enabled = !uiState.syncState.active, onClick = onRefreshLatest),
+                shape = RoundedCornerShape(99.dp),
+                color = ControlBlack.copy(alpha = 0.92f),
+                border = BorderStroke(1.dp, HairlineDark)
+            ) {
+                Text(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    text = if (uiState.syncState.active) "Syncing" else "Refresh latest",
+                    color = if (uiState.syncState.active) TertiaryText else PrimaryText,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Medium
+                )
             }
             if (events.size > 4 && listState.firstVisibleItemIndex > 0) {
                 Surface(

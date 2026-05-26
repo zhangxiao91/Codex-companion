@@ -210,11 +210,18 @@ class RelayViewModel(
         _uiState.update { it.copy(selectedSessionId = sessionId) }
         cacheStore.saveSelectedSessionId(sessionId)
         if (sessionId in confirmedSessionIds) {
-            if (!_uiState.value.syncIndexSupported || cloudSyncNeedsTimeline(sessionId)) {
-                syncSession(sessionId)
-            }
+            refreshLatestTimeline(sessionId)
             requestGitAudit()
         }
+    }
+
+    fun refreshSelectedTimeline() {
+        val sessionId = _uiState.value.selectedSessionId ?: return
+        if (sessionId !in confirmedSessionIds) {
+            _uiState.update { it.copy(lastError = "Session is still syncing") }
+            return
+        }
+        refreshLatestTimeline(sessionId)
     }
 
     fun togglePinnedSession(sessionId: String) {
@@ -1003,6 +1010,29 @@ class RelayViewModel(
         val sent = relayClient.requestTimeline(
             sessionId = sessionId,
             afterCursor = afterCursor,
+            limit = TIMELINE_PAGE_SIZE,
+            page = true
+        )
+        if (!sent) {
+            pendingTimelineSyncIds.remove(sessionId)
+            timelineSyncInFlightIds.remove(sessionId)
+            cancelTimelineSyncTimeout(sessionId)
+            persistSessionSyncMarkers()
+            updateSyncState()
+        }
+    }
+
+    private fun refreshLatestTimeline(sessionId: String) {
+        if (sessionId in timelineSyncInFlightIds) {
+            return
+        }
+        pendingTimelineSyncIds.add(sessionId)
+        timelineSyncInFlightIds.add(sessionId)
+        persistSessionSyncMarkers()
+        updateSyncState()
+        scheduleTimelineSyncTimeout(sessionId)
+        val sent = relayClient.requestTimeline(
+            sessionId = sessionId,
             limit = TIMELINE_PAGE_SIZE,
             page = true
         )
