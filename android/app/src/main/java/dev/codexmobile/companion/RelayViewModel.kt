@@ -1003,7 +1003,7 @@ class RelayViewModel(
         val sent = relayClient.requestSessionSyncIndex(
             selectedSessionId = _uiState.value.selectedSessionId,
             includeArchived = true,
-            includeClean = false
+            includeClean = _uiState.value.sessions.isEmpty() || _uiState.value.cloudSyncStates.isEmpty()
         )
         if (sent) {
             _uiState.update {

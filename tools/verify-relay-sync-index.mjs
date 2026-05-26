@@ -49,6 +49,11 @@ try {
   assertEqual(cleanIndex.payload.sessions.length, 0, 'clean sessions after ack');
   assertEqual(cleanIndex.payload.unchanged_count, 2, 'unchanged count after ack');
 
+  send(client, MessageType.SessionSyncIndex, { limit: 20, include_clean: true }, deviceToken);
+  const cleanFullIndex = await waitForMessage(client, MessageType.SessionSyncIndexResult, 5000);
+  assertEqual(cleanFullIndex.payload.sessions.length, 2, 'clean sessions returned when include_clean is true');
+  assertSessionIds(cleanFullIndex.payload.sessions, ['sync-session-a', 'sync-session-b'], 'include_clean sessions');
+
   send(host, MessageType.TimelineEvent, {
     event: createTimelineEvent('sync-session-a', 'sync-event-a-1', 'Session A changed')
   });

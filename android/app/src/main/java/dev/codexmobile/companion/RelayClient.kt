@@ -237,6 +237,10 @@ class RelayClient(
             "session.create_ephemeral",
             JSONObject()
                 .put("host_id", hostId)
+                .put("ephemeral", false)
+                .put("persist_extended_history", true)
+                .put("service_name", "codex-mobile-companion")
+                .put("client_request_id", java.util.UUID.randomUUID().toString())
         )
     }
 

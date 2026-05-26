@@ -614,18 +614,21 @@ export class AppServerCodexAdapter {
   }
 
   async createEphemeralSession(options = {}) {
+    const ephemeral = options.ephemeral !== false;
     const response = await this.request('thread/start', {
       cwd: options.cwd ?? process.cwd(),
       approvalPolicy: this.approvalPolicy,
       approvalsReviewer: this.approvalsReviewer,
       sandbox: 'read-only',
-      ephemeral: true,
+      ephemeral,
       threadSource: 'user',
-      serviceName: 'codex-mobile-companion-test',
-      baseInstructions: options.baseInstructions ?? 'You are being used for a Codex Mobile Companion integration test. Keep responses concise.',
+      serviceName: options.service_name ?? options.serviceName ?? (ephemeral ? 'codex-mobile-companion-test' : 'codex-mobile-companion'),
+      baseInstructions: options.baseInstructions ?? (ephemeral
+        ? 'You are being used for a Codex Mobile Companion integration test. Keep responses concise.'
+        : 'You are being used through Codex Mobile Companion. Keep responses concise and continue the user task normally.'),
       developerInstructions: options.developerInstructions ?? null,
       experimentalRawEvents: false,
-      persistExtendedHistory: false
+      persistExtendedHistory: options.persist_extended_history ?? options.persistExtendedHistory ?? !ephemeral
     });
 
     const session = mapThreadToSession(response.thread, this.hostId);

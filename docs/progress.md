@@ -4502,3 +4502,39 @@ Result:
 ```text
 [verify] Relay legacy SQLite migration verified.
 ```
+
+## 2026-05-26: First-login sync and mobile New Chat hotfix
+
+Completed:
+
+- Fixed first-login / empty-cache history restoration:
+  - Android now requests `session.sync.index` with `include_clean=true` when local sessions or cloud sync state are empty.
+  - This restores previously acked but locally missing sessions instead of showing an empty/history-hidden inbox.
+  - `verify:relay-sync-index` now covers `include_clean=true` returning clean sessions after ack.
+- Adjusted mobile New Chat creation:
+  - Android now sends `ephemeral=false`, `persist_extended_history=true`, and `service_name=codex-mobile-companion` when creating a new chat.
+  - Host Bridge keeps test clients ephemeral by default, but respects the Android request and creates a persistent user-facing App Server thread for mobile New Chat.
+
+Verification:
+
+```powershell
+node --check bridge/host-bridge/codex-adapter.mjs
+node --check tools/verify-relay-sync-index.mjs
+npm run verify:relay-sync-index
+cd android
+.\gradlew.bat :app:assembleDebug --no-daemon --stacktrace
+.\gradlew.bat :app:testDebugUnitTest --no-daemon
+git diff --check
+```
+
+Result:
+
+```text
+[verify] Relay sync index and ack persistence verified.
+BUILD SUCCESSFUL
+BUILD SUCCESSFUL
+```
+
+Known notes:
+
+- `npm run verify:app-server-prompt` could not run on this Windows machine during this pass because its hard-coded local Relay port `8790` returned `EACCES`. The mobile New Chat fix is therefore verified by static checks and Android build/unit tests, while the live App Server prompt path should be retested on the updated PC/server setup.
