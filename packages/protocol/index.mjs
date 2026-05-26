@@ -20,6 +20,7 @@ export const MessageType = Object.freeze({
   PowerTrustGranted: 'power.trust.granted',
   PowerRequest: 'power.request',
   PowerResult: 'power.result',
+  SessionCreate: 'session.create',
   SessionCreateEphemeral: 'session.create_ephemeral',
   SessionSnapshot: 'session.snapshot',
   SessionSubscribe: 'session.subscribe',

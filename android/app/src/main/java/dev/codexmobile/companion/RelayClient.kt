@@ -234,7 +234,7 @@ class RelayClient(
 
     fun createNewChat(hostId: String): Boolean {
         return send(
-            "session.create_ephemeral",
+            "session.create",
             JSONObject()
                 .put("host_id", hostId)
                 .put("ephemeral", false)
@@ -701,6 +701,7 @@ class RelayClient(
         "session.prompt.queue" -> "Queue"
         "session.prompt.edit" -> "Edit"
         "session.turn.interrupt" -> "Stop"
+        "session.create" -> "New chat"
         "session.create_ephemeral" -> "New chat"
         "approval.decision" -> "Approval"
         "git.request" -> "Git"
@@ -1098,6 +1099,7 @@ class RelayClient(
             "power.trust.request",
             "power.trust.verify",
             "power.request",
+            "session.create",
             "session.create_ephemeral",
             "session.prompt",
             "session.prompt.queue",

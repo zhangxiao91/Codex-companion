@@ -192,8 +192,9 @@ function handleMessage(connection, raw) {
       case MessageType.PowerResult:
         handlePowerResult(connection, message);
         break;
+      case MessageType.SessionCreate:
       case MessageType.SessionCreateEphemeral:
-        handleSessionCreateEphemeral(connection, message);
+        handleSessionCreate(connection, message);
         break;
       case MessageType.SessionSnapshot:
         handleSessionSnapshot(connection, message);
@@ -248,6 +249,7 @@ function isAckableClientMessage(type) {
     || type === MessageType.PowerTrustRequest
     || type === MessageType.PowerTrustVerify
     || type === MessageType.PowerRequest
+    || type === MessageType.SessionCreate
     || type === MessageType.SessionCreateEphemeral
     || type === MessageType.SessionPrompt
     || type === MessageType.SessionPromptQueue
@@ -473,6 +475,7 @@ function isClientMessage(type) {
     || type === MessageType.PowerTrustRequest
     || type === MessageType.PowerTrustVerify
     || type === MessageType.PowerRequest
+    || type === MessageType.SessionCreate
     || type === MessageType.SessionCreateEphemeral
     || type === MessageType.SessionSubscribe
     || type === MessageType.SessionPrompt
@@ -1016,7 +1019,7 @@ function trustHostDeviceForRegister(message) {
   };
 }
 
-function handleSessionCreateEphemeral(connection, message) {
+function handleSessionCreate(connection, message) {
   requirePayloadField(message, 'host_id');
 
   connection.role = SenderRole.Client;
@@ -1028,7 +1031,9 @@ function handleSessionCreateEphemeral(connection, message) {
     return;
   }
 
-  console.log(`[relay] routing ephemeral session create to host ${message.payload.host_id}`);
+  const ephemeral = message.payload.ephemeral !== false;
+  const legacy = message.type === MessageType.SessionCreateEphemeral ? ' legacy=session.create_ephemeral' : '';
+  console.log(`[relay] routing ${ephemeral ? 'ephemeral' : 'persistent'} session create to host ${message.payload.host_id}${legacy}`);
   if (send(hostConnection, message)) {
     sendAck(connection, message, 'accepted');
   } else {

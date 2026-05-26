@@ -4538,3 +4538,33 @@ BUILD SUCCESSFUL
 Known notes:
 
 - `npm run verify:app-server-prompt` could not run on this Windows machine during this pass because its hard-coded local Relay port `8790` returned `EACCES`. The mobile New Chat fix is therefore verified by static checks and Android build/unit tests, while the live App Server prompt path should be retested on the updated PC/server setup.
+
+## 2026-05-26: Sync visibility and New Chat routing follow-up
+
+Completed:
+
+- Inspected current Windows Host Bridge logs for the two reported regressions:
+  - repeated `code=1006` disconnect/reconnect cycles;
+  - `created ephemeral session ...` followed by `ephemeral threads do not support includeTurns`;
+  - multiple Host Bridge-related processes running at the same time.
+- Added explicit persistent New Chat protocol support:
+  - new protocol message `session.create`;
+  - Android New Chat now sends `session.create` with `ephemeral=false` and `persist_extended_history=true`;
+  - Relay routes both `session.create` and legacy `session.create_ephemeral`;
+  - Host Bridge defaults `session.create` to a persistent App Server thread, while keeping legacy ephemeral test clients compatible.
+- Fixed misleading logs:
+  - Relay now logs whether a session create request is persistent or ephemeral;
+  - Host Bridge now logs whether the received and created session is persistent or ephemeral.
+- Made Android cloud sync index requests use `include_clean=true` on every index refresh for now.
+  - This favors correctness during rapid iteration: clean/previously acked sessions remain discoverable after first login, reinstall, or local cache loss.
+- Added `npm run verify:session-create-routing` to prove Relay preserves persistent mobile New Chat routing and still supports legacy ephemeral clients.
+
+Verification:
+
+```powershell
+npm run verify:session-create-routing
+```
+
+Known notes:
+
+- The current local machine still showed duplicate/stale Host Bridge processes before this fix. After deploying this change, the PC side should be restarted with exactly one Host Bridge process so the new logs can identify the active path cleanly.

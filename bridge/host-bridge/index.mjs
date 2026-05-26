@@ -244,13 +244,25 @@ async function handleMessage(currentSocket, event) {
       return;
     }
 
-    if (message.type === MessageType.SessionCreateEphemeral) {
+    if (message.type === MessageType.SessionCreate || message.type === MessageType.SessionCreateEphemeral) {
       if (typeof adapter.createEphemeralSession !== 'function') {
         return;
       }
 
-      const session = await adapter.createEphemeralSession(message.payload);
-      console.log(`[bridge] created ephemeral session ${session.session_id}`);
+      const createOptions = {
+        ...(message.type === MessageType.SessionCreate
+          ? {
+              ephemeral: false,
+              persist_extended_history: true,
+              service_name: 'codex-mobile-companion'
+            }
+          : {}),
+        ...message.payload
+      };
+      const ephemeral = createOptions.ephemeral !== false;
+      console.log(`[bridge] received ${ephemeral ? 'ephemeral' : 'persistent'} session create request for host ${hostId}`);
+      const session = await adapter.createEphemeralSession(createOptions);
+      console.log(`[bridge] created ${ephemeral ? 'ephemeral' : 'persistent'} session ${session.session_id}`);
       send(MessageType.SessionSnapshot, { session });
       return;
     }
