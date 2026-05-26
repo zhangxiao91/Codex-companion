@@ -4475,3 +4475,30 @@ Known notes:
 - Archive/pin state is per Android device, not global across all devices. This matches the current `device_session_sync` design.
 - Android still applies local archive/pin immediately, then mirrors to Relay. If the WebSocket is offline at the exact moment, the current implementation does not yet queue archive/pin mutations for later retry.
 - The first Android verification attempt hit Kotlin incremental build cache corruption because assemble and unit tests were launched in parallel. After `.\gradlew.bat --stop` and clearing generated Kotlin build cache, serial assemble and unit tests passed.
+
+## 2026-05-26: Relay legacy SQLite sync migration hotfix
+
+Completed:
+
+- Fixed server Relay startup against older SQLite databases that already had `sessions` but did not yet have sync columns such as `sync_revision`.
+- Root cause:
+  - `CREATE INDEX IF NOT EXISTS idx_sessions_sync_revision ON sessions(sync_revision)` ran before `ensureColumn()` added the new sync columns.
+  - Existing server databases therefore failed during `createRelaySqliteStore()` with `Error: no such column: sync_revision`.
+- Moved sync-column indexes to run after the migration columns are guaranteed to exist.
+- Added `npm run verify:relay-sqlite-legacy-migration`, which creates a pre-sync-schema legacy SQLite file, opens it through the current store, and verifies:
+  - sync columns are added;
+  - session sync revisions are backfilled;
+  - timeline oldest/newest cursor metadata is backfilled;
+  - sync index reads work on the migrated database.
+
+Verification:
+
+```powershell
+npm run verify:relay-sqlite-legacy-migration
+```
+
+Result:
+
+```text
+[verify] Relay legacy SQLite migration verified.
+```

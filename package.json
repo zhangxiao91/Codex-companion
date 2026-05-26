@@ -66,6 +66,7 @@
     "verify:relay-offline-host-sessions": "node tools/verify-relay-offline-host-sessions.mjs",
     "verify:relay-public-url": "node tools/verify-relay-public-url.mjs",
     "verify:relay-sqlite-persistence": "node tools/verify-relay-sqlite-persistence.mjs",
+    "verify:relay-sqlite-legacy-migration": "node tools/verify-relay-sqlite-legacy-migration.mjs",
     "verify:relay-timeline-cache": "node tools/verify-relay-timeline-cache.mjs",
     "verify:relay-ws-keepalive": "node tools/verify-relay-ws-keepalive.mjs",
     "verify:server-bridge-start": "node tools/verify-server-bridge-start.mjs",

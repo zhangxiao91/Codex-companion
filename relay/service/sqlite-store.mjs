@@ -55,9 +55,6 @@ export function createRelaySqliteStore(options = {}) {
       payload_json TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_sessions_host ON sessions(host_id);
-    CREATE INDEX IF NOT EXISTS idx_sessions_sync_revision ON sessions(sync_revision);
-    CREATE INDEX IF NOT EXISTS idx_sessions_host_sync ON sessions(host_id, sync_revision);
-    CREATE INDEX IF NOT EXISTS idx_sessions_timeline_cursor ON sessions(timeline_newest_cursor);
     CREATE TABLE IF NOT EXISTS timeline_events (
       session_id TEXT NOT NULL,
       event_id TEXT NOT NULL,
@@ -168,6 +165,7 @@ export function createRelaySqliteStore(options = {}) {
     ensureColumn(db, 'sessions', 'timeline_oldest_cursor', 'INTEGER');
     ensureColumn(db, 'sessions', 'last_event_at', 'TEXT');
     ensureColumn(db, 'sessions', 'sync_updated_at', 'TEXT');
+    createSessionSyncIndexes(db);
     initializeSyncMeta(db);
     backfillSessionSyncMetadata(db);
 
@@ -877,6 +875,14 @@ function ensureColumn(db, table, column, definition) {
   if (!columns.includes(column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
+}
+
+function createSessionSyncIndexes(db) {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_sessions_sync_revision ON sessions(sync_revision);
+    CREATE INDEX IF NOT EXISTS idx_sessions_host_sync ON sessions(host_id, sync_revision);
+    CREATE INDEX IF NOT EXISTS idx_sessions_timeline_cursor ON sessions(timeline_newest_cursor);
+  `);
 }
 
 function initializeSyncMeta(db) {
