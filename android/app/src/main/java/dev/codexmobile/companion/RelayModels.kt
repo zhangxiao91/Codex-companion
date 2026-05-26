@@ -74,6 +74,31 @@ data class PromptQueueState(
     val maxDepth: Int
 )
 
+data class SessionSyncEntry(
+    val session: CodexSession,
+    val snapshotRevision: Long,
+    val stageRevision: Long,
+    val syncRevision: Long,
+    val timelineNewestCursor: Long,
+    val timelineOldestCursor: Long?,
+    val dirty: Boolean,
+    val dirtyReasons: List<String>,
+    val recommendedAction: String,
+    val archivedAt: String? = null,
+    val pinnedAt: String? = null
+)
+
+data class CloudSyncState(
+    val sessionId: String,
+    val snapshotRevision: Long = 0,
+    val stageRevision: Long = 0,
+    val syncRevision: Long = 0,
+    val relayTimelineNewestCursor: Long = 0,
+    val relayTimelineOldestCursor: Long? = null,
+    val lastSyncIndexAt: String = "",
+    val lastAckAt: String = ""
+)
+
 data class PromptAttachment(
     val attachmentId: String = java.util.UUID.randomUUID().toString(),
     val displayName: String,
@@ -202,6 +227,7 @@ data class RelayUiState(
     val lastPowerResult: PowerResult? = null,
     val selectedSessionId: String? = null,
     val pinnedSessionIds: Set<String> = emptySet(),
+    val archivedSessionIds: Set<String> = emptySet(),
     val timeline: List<TimelineItem> = emptyList(),
     val approvals: List<ApprovalItem> = emptyList(),
     val gitSnapshots: Map<String, GitSnapshot> = emptyMap(),
@@ -216,12 +242,24 @@ data class RelayUiState(
     val pendingApprovalIds: Set<String> = emptySet(),
     val confirmedSessionIds: Set<String> = emptySet(),
     val pendingTimelineSyncIds: Set<String> = emptySet(),
+    val cloudSyncStates: Map<String, CloudSyncState> = emptyMap(),
+    val syncIndexSupported: Boolean = true,
+    val lastSyncIndexAt: String? = null,
+    val lastSyncIndexDirtyCount: Int = 0,
+    val lastSyncIndexUnchangedCount: Int = 0,
+    val connectionDiagnostics: ConnectionDiagnostics? = null,
     val lastConnectedAt: String? = null,
     val lastHealthCheck: String? = null,
     val lastError: String? = null
 ) {
     val selectedSession: CodexSession?
         get() = sessions.firstOrNull { it.sessionId == selectedSessionId }
+
+    val activeSessions: List<CodexSession>
+        get() = sessions.filterNot { it.sessionId in archivedSessionIds }
+
+    val archivedSessions: List<CodexSession>
+        get() = sessions.filter { it.sessionId in archivedSessionIds }
 
     val pendingApprovals: List<ApprovalItem>
         get() = approvals.filter { it.status == "pending" }
@@ -249,6 +287,26 @@ data class RelayUiState(
     val activeAuthToken: String
         get() = deviceToken.ifBlank { pairingToken }
 }
+
+data class ConnectionDiagnostics(
+    val healthUrl: String = "",
+    val checkedAt: String = "",
+    val authRequired: Boolean = false,
+    val detailed: Boolean = false,
+    val totalHosts: Int? = null,
+    val onlineHosts: Int? = null,
+    val sessions: Int? = null,
+    val clients: Int? = null,
+    val pairedDevices: Int? = null,
+    val cachedTimelineEvents: Int? = null,
+    val websocketConnections: Int? = null,
+    val wsPingIntervalMs: Int? = null,
+    val wsStaleTimeoutMs: Int? = null,
+    val publicWebsocketUrl: String? = null,
+    val publicHealthUrl: String? = null,
+    val storageKind: String? = null,
+    val storagePath: String? = null
+)
 
 data class RelayRequestState(
     val type: String = "",

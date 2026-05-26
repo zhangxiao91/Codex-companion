@@ -130,6 +130,8 @@ class MainActivity : ComponentActivity() {
                 onInterruptTurn = viewModel::interruptTurn,
                 onNewChat = viewModel::createNewChat,
                 onPinnedSessionToggle = viewModel::togglePinnedSession,
+                onSessionArchive = viewModel::archiveSession,
+                onSessionRestore = viewModel::restoreArchivedSession,
                 onLoadEarlierTimeline = viewModel::loadEarlierTimeline,
                 onPowerTrustRequest = viewModel::requestPowerTrust,
                 onPowerTrustVerify = viewModel::verifyPowerTrust,
@@ -198,6 +200,8 @@ private fun CompanionApp(
     onInterruptTurn: () -> Unit,
     onNewChat: () -> Unit,
     onPinnedSessionToggle: (String) -> Unit,
+    onSessionArchive: (String) -> Unit,
+    onSessionRestore: (String) -> Unit,
     onLoadEarlierTimeline: () -> Unit,
     onPowerTrustRequest: () -> Unit,
     onPowerTrustVerify: (String) -> Unit,
@@ -265,6 +269,8 @@ private fun CompanionApp(
                     onInterruptTurn = onInterruptTurn,
                     onNewChat = onNewChat,
                     onPinnedSessionToggle = onPinnedSessionToggle,
+                    onSessionArchive = onSessionArchive,
+                    onSessionRestore = onSessionRestore,
                     onLoadEarlierTimeline = onLoadEarlierTimeline,
                     onPowerTrustRequest = onPowerTrustRequest,
                     onPowerTrustVerify = onPowerTrustVerify,
@@ -283,6 +289,8 @@ private fun CompanionApp(
                     onNewChat = onNewChat,
                     onPromptSend = onPromptSend,
                     onPinnedSessionToggle = onPinnedSessionToggle,
+                    onSessionArchive = onSessionArchive,
+                    onSessionRestore = onSessionRestore,
                     onNotificationsEnabled = onNotificationsEnabled,
                     onSessionNotify = onSessionNotify,
                     onApprovalNotify = onApprovalNotify,
@@ -446,6 +454,8 @@ private fun InboxScreen(
     onNewChat: () -> Unit,
     onPromptSend: (String) -> Unit,
     onPinnedSessionToggle: (String) -> Unit,
+    onSessionArchive: (String) -> Unit,
+    onSessionRestore: (String) -> Unit,
     onNotificationsEnabled: () -> Boolean,
     onSessionNotify: (CodexSession) -> Unit,
     onApprovalNotify: (ApprovalItem) -> Unit,
@@ -454,21 +464,22 @@ private fun InboxScreen(
 ) {
     var hostsOpen by remember { mutableStateOf(false) }
     var actionsOpen by remember { mutableStateOf(false) }
+    var archivedOpen by remember { mutableStateOf(false) }
     var notificationBaselineReady by remember { mutableStateOf(false) }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { }
 
-    val inboxSessions = remember(uiState.sessions, uiState.pinnedSessionIds) {
-        sortInboxSessions(uiState.sessions, uiState.pinnedSessionIds)
+    val inboxSessions = remember(uiState.activeSessions, uiState.pinnedSessionIds) {
+        sortInboxSessions(uiState.activeSessions, uiState.pinnedSessionIds)
     }
 
-    LaunchedEffect(uiState.sessions, uiState.approvals, uiState.notifications) {
+    LaunchedEffect(uiState.activeSessions, uiState.approvals, uiState.notifications) {
         if (!notificationBaselineReady) {
             notificationBaselineReady = true
             return@LaunchedEffect
         }
-        uiState.sessions.forEach(onSessionNotify)
+        uiState.activeSessions.forEach(onSessionNotify)
         uiState.pendingApprovals.forEach(onApprovalNotify)
         uiState.notifications.forEach(onRelayNotification)
     }
@@ -515,6 +526,7 @@ private fun InboxScreen(
                         latestEvent = latestTimelineForSession(uiState.timeline, session.sessionId),
                         pinned = session.sessionId in uiState.pinnedSessionIds,
                         onPinToggle = { onPinnedSessionToggle(session.sessionId) },
+                        onArchive = { onSessionArchive(session.sessionId) },
                         onClick = { onSessionSelected(session.sessionId) }
                     )
                 }
@@ -550,6 +562,10 @@ private fun InboxScreen(
                     actionsOpen = false
                     hostsOpen = true
                 },
+                onArchived = {
+                    actionsOpen = false
+                    archivedOpen = true
+                },
                 onReconnect = {
                     actionsOpen = false
                     onReconnect()
@@ -558,6 +574,24 @@ private fun InboxScreen(
                     actionsOpen = false
                     onHealthCheck()
                 }
+            )
+        }
+    }
+
+    if (archivedOpen) {
+        ModalBottomSheet(
+            onDismissRequest = { archivedOpen = false },
+            containerColor = SheetBlack,
+            contentColor = PrimaryText,
+            dragHandle = null
+        ) {
+            ArchivedSessionsSheet(
+                uiState = uiState,
+                onSessionSelected = { sessionId ->
+                    archivedOpen = false
+                    onSessionSelected(sessionId)
+                },
+                onRestore = onSessionRestore
             )
         }
     }
@@ -601,7 +635,7 @@ private fun InboxTopBar(
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("Command Center", color = PrimaryText, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
             Text(
-                text = "${uiState.connectionStatus} / ${uiState.sessions.size} sessions / ${uiState.hosts.count { it.status == "online" }} online hosts",
+                text = "${uiState.connectionStatus} / ${uiState.activeSessions.size} sessions / ${uiState.hosts.count { it.status == "online" }} online hosts",
                 color = SecondaryText,
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1,
@@ -849,6 +883,7 @@ private fun InboxActionSheet(
     uiState: RelayUiState,
     onNewChat: () -> Unit,
     onHosts: () -> Unit,
+    onArchived: () -> Unit,
     onReconnect: () -> Unit,
     onHealthCheck: () -> Unit
 ) {
@@ -872,6 +907,11 @@ private fun InboxActionSheet(
             onClick = onHosts
         )
         ActionSheetButton(
+            title = "Archived conversations",
+            detail = "${uiState.archivedSessions.size} archived conversation${if (uiState.archivedSessions.size == 1) "" else "s"}.",
+            onClick = onArchived
+        )
+        ActionSheetButton(
             title = if (uiState.connectionStatus == "Online") "Refresh relay" else "Reconnect relay",
             detail = "Reopen the WebSocket and refresh live session state.",
             onClick = onReconnect
@@ -881,6 +921,7 @@ private fun InboxActionSheet(
             detail = "Run the Relay health check and show the result here.",
             onClick = onHealthCheck
         )
+        ConnectionDiagnosticsCompact(uiState = uiState, onHealthCheck = onHealthCheck)
     }
 }
 
@@ -935,8 +976,8 @@ private fun PrimaryPillButton(text: String, enabled: Boolean = true, onClick: ()
 @Composable
 private fun InboxMetricRow(uiState: RelayUiState) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        InboxMetric("Attention", uiState.sessions.count { needsAttention(it) }.toString(), Modifier.weight(1f))
-        InboxMetric("Active", uiState.sessions.count { it.stage.severity == "active" }.toString(), Modifier.weight(1f))
+        InboxMetric("Attention", uiState.activeSessions.count { needsAttention(it) }.toString(), Modifier.weight(1f))
+        InboxMetric("Active", uiState.activeSessions.count { it.stage.severity == "active" }.toString(), Modifier.weight(1f))
         InboxMetric("Approvals", uiState.pendingApprovals.size.toString(), Modifier.weight(1f))
     }
 }
@@ -977,6 +1018,7 @@ private fun InboxSessionCard(
     latestEvent: TimelineItem?,
     pinned: Boolean,
     onPinToggle: () -> Unit,
+    onArchive: () -> Unit,
     onClick: () -> Unit
 ) {
     val tone = stageTone(session.stage)
@@ -1004,12 +1046,21 @@ private fun InboxSessionCard(
                         Text(session.projectName, color = PrimaryText, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text("${session.hostId} / ${session.branch}", color = TertiaryText, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
-                    TextButton(
-                        modifier = Modifier.height(32.dp),
-                        onClick = onPinToggle,
-                        colors = ButtonDefaults.textButtonColors(contentColor = if (pinned) PrimaryText else TertiaryText)
-                    ) {
-                        Text(if (pinned) "Pinned" else "Pin", style = MaterialTheme.typography.labelSmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(
+                            modifier = Modifier.height(32.dp),
+                            onClick = onArchive,
+                            colors = ButtonDefaults.textButtonColors(contentColor = TertiaryText)
+                        ) {
+                            Text("Archive", style = MaterialTheme.typography.labelSmall)
+                        }
+                        TextButton(
+                            modifier = Modifier.height(32.dp),
+                            onClick = onPinToggle,
+                            colors = ButtonDefaults.textButtonColors(contentColor = if (pinned) PrimaryText else TertiaryText)
+                        ) {
+                            Text(if (pinned) "Pinned" else "Pin", style = MaterialTheme.typography.labelSmall)
+                        }
                     }
                 }
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -1165,6 +1216,8 @@ private fun MainSessionScreen(
     onInterruptTurn: () -> Unit,
     onNewChat: () -> Unit,
     onPinnedSessionToggle: (String) -> Unit,
+    onSessionArchive: (String) -> Unit,
+    onSessionRestore: (String) -> Unit,
     onLoadEarlierTimeline: () -> Unit,
     onPowerTrustRequest: () -> Unit,
     onPowerTrustVerify: (String) -> Unit,
@@ -1190,6 +1243,7 @@ private fun MainSessionScreen(
                     scope.launch { drawerState.close() }
                 },
                 onPinnedSessionToggle = onPinnedSessionToggle,
+                onSessionArchive = onSessionArchive,
                 onReconnect = onReconnect
             )
         }
@@ -1288,7 +1342,7 @@ private fun MainTopBar(uiState: RelayUiState, onMenu: () -> Unit, onTools: () ->
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = uiState.selectedSession?.let { "${it.branch} - ${it.stage.label}" } ?: "${uiState.sessions.size} live sessions",
+                    text = uiState.selectedSession?.let { "${it.branch} - ${it.stage.label}" } ?: "${uiState.activeSessions.size} live sessions",
                     color = SecondaryText,
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
@@ -1308,12 +1362,13 @@ private fun SessionDrawer(
     onSessionSelected: (String) -> Unit,
     onNewChat: () -> Unit,
     onPinnedSessionToggle: (String) -> Unit,
+    onSessionArchive: (String) -> Unit,
     onReconnect: () -> Unit
 ) {
     var query by remember { mutableStateOf("") }
     var grouping by remember { mutableStateOf(SessionGrouping.Project) }
-    val filteredSessions = remember(uiState.sessions, uiState.pinnedSessionIds, query) {
-        filterAndSortDrawerSessions(uiState.sessions, uiState.pinnedSessionIds, query)
+    val filteredSessions = remember(uiState.activeSessions, uiState.pinnedSessionIds, query) {
+        filterAndSortDrawerSessions(uiState.activeSessions, uiState.pinnedSessionIds, query)
     }
     val pinnedSessions = filteredSessions.filter { it.sessionId in uiState.pinnedSessionIds }
     val regularSessions = filteredSessions.filterNot { it.sessionId in uiState.pinnedSessionIds }
@@ -1336,14 +1391,15 @@ private fun SessionDrawer(
                 Text("Codex", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
                 StatusPill(uiState.connectionStatus, statusTone(uiState.connectionStatus))
             }
-            DrawerShortcut("Projects", "${uiState.sessions.map { it.hostId }.distinct().size} hosts")
+            DrawerShortcut("Projects", "${uiState.activeSessions.map { it.hostId }.distinct().size} hosts")
             DrawerShortcut("Approvals", "${uiState.pendingApprovals.size} pending")
+            DrawerShortcut("Archived", "${uiState.archivedSessions.size} hidden")
             DrawerShortcut("Git", uiState.selectedGitSnapshot?.branch ?: "No snapshot")
             DrawerSearchField(query = query, onQueryChange = { query = it })
             DrawerGroupingToggle(grouping = grouping, onGroupingChange = { grouping = it })
             Button(
                 modifier = Modifier.fillMaxWidth().height(48.dp),
-                enabled = uiState.connectionStatus == "Online" && uiState.sessions.isNotEmpty(),
+                enabled = uiState.connectionStatus == "Online" && uiState.activeSessions.isNotEmpty(),
                 shape = RoundedCornerShape(99.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = PrimaryText, contentColor = AppBlack),
                 onClick = onNewChat
@@ -1351,7 +1407,7 @@ private fun SessionDrawer(
                 Text("New Chat", fontWeight = FontWeight.SemiBold)
             }
             Text("Sessions", color = PrimaryText, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
-            if (uiState.sessions.isEmpty()) {
+            if (uiState.activeSessions.isEmpty()) {
                 Text("No live sessions. Keep Host Bridge online, then refresh.", color = SecondaryText)
                 OutlinedButton(onClick = onReconnect, border = BorderStroke(1.dp, StrokeDark)) {
                     Text("Reconnect", color = PrimaryText)
@@ -1370,6 +1426,7 @@ private fun SessionDrawer(
                                 selected = session.sessionId == uiState.selectedSessionId,
                                 pinned = true,
                                 onPinToggle = { onPinnedSessionToggle(session.sessionId) },
+                                onArchive = { onSessionArchive(session.sessionId) },
                                 onClick = { onSessionSelected(session.sessionId) }
                             )
                         }
@@ -1384,6 +1441,7 @@ private fun SessionDrawer(
                                 selected = session.sessionId == uiState.selectedSessionId,
                                 pinned = false,
                                 onPinToggle = { onPinnedSessionToggle(session.sessionId) },
+                                onArchive = { onSessionArchive(session.sessionId) },
                                 onClick = { onSessionSelected(session.sessionId) }
                             )
                         }
@@ -1465,6 +1523,7 @@ private fun DrawerSessionRow(
     selected: Boolean,
     pinned: Boolean,
     onPinToggle: () -> Unit,
+    onArchive: () -> Unit,
     onClick: () -> Unit
 ) {
     Surface(
@@ -1484,12 +1543,21 @@ private fun DrawerSessionRow(
                 Text("Updated ${formatMetaTime(session.updatedAt)}", color = TertiaryText, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(session.hostId, color = TertiaryText, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            TextButton(
-                modifier = Modifier.height(34.dp),
-                onClick = onPinToggle,
-                colors = ButtonDefaults.textButtonColors(contentColor = if (pinned) PrimaryText else TertiaryText)
-            ) {
-                Text(if (pinned) "Pinned" else "Pin", style = MaterialTheme.typography.labelSmall)
+            Column(horizontalAlignment = Alignment.End) {
+                TextButton(
+                    modifier = Modifier.height(32.dp),
+                    onClick = onPinToggle,
+                    colors = ButtonDefaults.textButtonColors(contentColor = if (pinned) PrimaryText else TertiaryText)
+                ) {
+                    Text(if (pinned) "Pinned" else "Pin", style = MaterialTheme.typography.labelSmall)
+                }
+                TextButton(
+                    modifier = Modifier.height(32.dp),
+                    onClick = onArchive,
+                    colors = ButtonDefaults.textButtonColors(contentColor = TertiaryText)
+                ) {
+                    Text("Archive", style = MaterialTheme.typography.labelSmall)
+                }
             }
         }
     }
@@ -1544,8 +1612,8 @@ private fun TimelineStream(uiState: RelayUiState, modifier: Modifier = Modifier,
     Box(modifier = modifier.fillMaxWidth()) {
         if (selectedSession == null) {
             EmptyMainState(
-                title = if (uiState.sessions.isEmpty()) "Waiting for Codex" else "Choose a session",
-                body = if (uiState.sessions.isEmpty()) "Live sessions from your connected host will appear here." else "Open the drawer and pick a recent session."
+                title = if (uiState.activeSessions.isEmpty()) "Waiting for Codex" else "Choose a session",
+                body = if (uiState.activeSessions.isEmpty()) "Live sessions from your connected host will appear here." else "Open the drawer and pick a recent session."
             )
         } else if (events.isEmpty()) {
             EmptyMainState(selectedSession.projectName, selectedSession.summary.ifBlank { "No timeline events yet." })
@@ -1791,6 +1859,78 @@ private fun CopyMessageButton(label: String, foreground: Color, onCopy: () -> Un
             color = foreground,
             style = MaterialTheme.typography.labelSmall
         )
+    }
+}
+
+@Composable
+private fun ArchivedSessionsSheet(
+    uiState: RelayUiState,
+    onSessionSelected: (String) -> Unit,
+    onRestore: (String) -> Unit
+) {
+    val sessions = remember(uiState.archivedSessions) { sortInboxSessions(uiState.archivedSessions, emptySet()) }
+    Column(
+        modifier = Modifier
+            .navigationBarsPadding()
+            .padding(horizontal = 18.dp, vertical = 22.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Text("Archived conversations", color = PrimaryText, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+        Text("Archived conversations stay available here and are hidden from the inbox and session drawer.", color = SecondaryText, style = MaterialTheme.typography.bodySmall)
+        if (sessions.isEmpty()) {
+            EmptyMainState(
+                title = "No archived conversations",
+                body = "Archive completed or low-priority sessions to keep the main inbox focused."
+            )
+        } else {
+            LazyColumn(
+                modifier = Modifier.heightIn(max = 520.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                items(sessions, key = { "archived:${it.sessionId}" }) { session ->
+                    ArchivedSessionRow(
+                        session = session,
+                        onOpen = { onSessionSelected(session.sessionId) },
+                        onRestore = { onRestore(session.sessionId) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ArchivedSessionRow(
+    session: CodexSession,
+    onOpen: () -> Unit,
+    onRestore: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = ElevatedBlack,
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.dp, HairlineDark)
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text(session.projectName, color = PrimaryText, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("${session.hostId} / ${session.branch} / updated ${formatMetaTime(session.updatedAt)}", color = TertiaryText, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                StatusPill(session.stage.label, stageTone(session.stage))
+            }
+            Text(
+                text = session.stage.summary.ifBlank { session.summary.ifBlank { "No current summary." } },
+                color = SecondaryText,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                CompactActionButton(modifier = Modifier.weight(1f), text = "Open", onClick = onOpen)
+                CompactActionButton(modifier = Modifier.weight(1f), text = "Restore", onClick = onRestore)
+            }
+        }
     }
 }
 
@@ -2124,6 +2264,7 @@ private fun OptionRow(title: String, detail: String, selected: Boolean, onClick:
 
 @Composable
 private fun ConnectionToolCard(uiState: RelayUiState, onReconnect: () -> Unit, onHealthCheck: () -> Unit) {
+    var diagnosticsOpen by remember { mutableStateOf(false) }
     Panel {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             SectionTitle("Relay")
@@ -2132,6 +2273,199 @@ private fun ConnectionToolCard(uiState: RelayUiState, onReconnect: () -> Unit, o
                 CompactActionButton(modifier = Modifier.weight(1f), text = "Reconnect", onClick = onReconnect)
                 CompactActionButton(modifier = Modifier.weight(1f), text = "Test", onClick = onHealthCheck)
             }
+            CompactActionButton(modifier = Modifier.fillMaxWidth(), text = "Diagnostics", onClick = { diagnosticsOpen = true })
+        }
+    }
+    if (diagnosticsOpen) {
+        ConnectionDiagnosticsDialog(
+            uiState = uiState,
+            onDismiss = { diagnosticsOpen = false },
+            onHealthCheck = onHealthCheck
+        )
+    }
+}
+
+@Composable
+private fun ConnectionDiagnosticsCompact(uiState: RelayUiState, onHealthCheck: () -> Unit) {
+    val diagnostics = uiState.connectionDiagnostics
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = ElevatedBlack,
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.dp, HairlineDark)
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("Mobile diagnostics", color = PrimaryText, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        text = diagnostics?.let {
+                            "health ${formatMetaTime(it.checkedAt)} / ${it.onlineHosts ?: "?"} online hosts / ${it.sessions ?: "?"} sessions"
+                        } ?: "Run Test to fetch Relay health from this phone.",
+                        color = SecondaryText,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                TextButton(onClick = onHealthCheck) {
+                    Text("Test", color = AccentBlue)
+                }
+            }
+            DiagnosticMiniGrid(uiState)
+        }
+    }
+}
+
+@Composable
+private fun ConnectionDiagnosticsDialog(
+    uiState: RelayUiState,
+    onDismiss: () -> Unit,
+    onHealthCheck: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = SheetBlack,
+            shape = RoundedCornerShape(24.dp),
+            border = BorderStroke(1.dp, StrokeDark)
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(18.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("Connection diagnostics", color = PrimaryText, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                        Text("What this Android device can see right now.", color = SecondaryText, style = MaterialTheme.typography.bodySmall)
+                    }
+                    TextButton(onClick = onDismiss) {
+                        Text("Close", color = SecondaryText)
+                    }
+                }
+
+                DiagnosticMiniGrid(uiState)
+                DiagnosticSection("App state") {
+                    DiagnosticRow("WebSocket", uiState.connectionStatus)
+                    DiagnosticRow("Device paired", if (uiState.deviceToken.isNotBlank()) "yes (${uiState.deviceId.take(8)})" else "no")
+                    DiagnosticRow("Relay URL", uiState.relayUrl)
+                    DiagnosticRow("Last connected", uiState.lastConnectedAt?.let(::formatMetaTime) ?: "never")
+                    DiagnosticRow("Last sync", if (uiState.syncState.active) uiState.syncState.summary.ifBlank { "syncing" } else "idle")
+                    DiagnosticRow("Cloud sync index", if (uiState.syncIndexSupported) "enabled" else "fallback")
+                    DiagnosticRow("Last index check", uiState.lastSyncIndexAt?.let(::formatMetaTime) ?: "never")
+                    DiagnosticRow("Index dirty / clean", "${uiState.lastSyncIndexDirtyCount} / ${uiState.lastSyncIndexUnchangedCount}")
+                    DiagnosticRow("Sessions confirmed", "${uiState.confirmedSessionIds.size}/${uiState.sessions.size}")
+                    DiagnosticRow("Pending timeline sync", uiState.pendingTimelineSyncIds.size.toString())
+                    DiagnosticRow("Pending approvals", uiState.pendingApprovals.size.toString())
+                }
+
+                val diagnostics = uiState.connectionDiagnostics
+                if (diagnostics == null) {
+                    InlineNotice("No Relay health snapshot yet. Tap Run test from this phone.", NoticeTone.Warning)
+                } else {
+                    DiagnosticSection("Relay health") {
+                        DiagnosticRow("Health URL", diagnostics.healthUrl)
+                        DiagnosticRow("Checked", diagnostics.checkedAt.ifBlank { "unknown" }.let(::formatMetaTime))
+                        DiagnosticRow("Auth required", diagnostics.authRequired.yesNo())
+                        DiagnosticRow("Detailed diagnostics", diagnostics.detailed.yesNo())
+                        DiagnosticRow("Hosts", "${diagnostics.onlineHosts ?: "?"} online / ${diagnostics.totalHosts ?: "?"} total")
+                        DiagnosticRow("Sessions", diagnostics.sessions?.toString() ?: "unknown")
+                        DiagnosticRow("Clients", diagnostics.clients?.toString() ?: "unknown")
+                        DiagnosticRow("Paired devices", diagnostics.pairedDevices?.toString() ?: "unknown")
+                        DiagnosticRow("Cached events", diagnostics.cachedTimelineEvents?.toString() ?: "unknown")
+                        DiagnosticRow("WS connections", diagnostics.websocketConnections?.toString() ?: "unknown")
+                        DiagnosticRow("WS keepalive", "${diagnostics.wsPingIntervalMs ?: "?"}ms ping / ${diagnostics.wsStaleTimeoutMs ?: "?"}ms stale")
+                        DiagnosticRow("Public WS", diagnostics.publicWebsocketUrl ?: "not set")
+                        DiagnosticRow("Public health", diagnostics.publicHealthUrl ?: "not set")
+                        DiagnosticRow("Storage", listOfNotNull(diagnostics.storageKind, diagnostics.storagePath).joinToString(" / ").ifBlank { "unknown" })
+                    }
+                }
+
+                if (!uiState.lastHealthCheck.isNullOrBlank()) {
+                    InlineNotice(uiState.lastHealthCheck, NoticeTone.Positive)
+                }
+                if (!uiState.lastError.isNullOrBlank()) {
+                    InlineNotice(uiState.lastError, NoticeTone.Critical)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    CompactActionButton(modifier = Modifier.weight(1f), text = "Run test", onClick = onHealthCheck)
+                    CompactActionButton(modifier = Modifier.weight(1f), text = "Close", onClick = onDismiss)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiagnosticMiniGrid(uiState: RelayUiState) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        DarkMetricTile(modifier = Modifier.weight(1f), label = "Socket", value = uiState.connectionStatus)
+        DarkMetricTile(modifier = Modifier.weight(1f), label = "Hosts", value = "${uiState.hosts.count { it.status == "online" }}/${uiState.hosts.size}")
+        DarkMetricTile(modifier = Modifier.weight(1f), label = "Sessions", value = uiState.sessions.size.toString())
+    }
+}
+
+@Composable
+private fun DiagnosticSection(title: String, content: @Composable () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = ElevatedBlack,
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.dp, HairlineDark)
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(title, color = PrimaryText, fontWeight = FontWeight.SemiBold)
+            content()
+        }
+    }
+}
+
+@Composable
+private fun DiagnosticRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Text(
+            modifier = Modifier.width(112.dp),
+            text = label,
+            color = TertiaryText,
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            modifier = Modifier.weight(1f),
+            text = value.ifBlank { "unknown" },
+            color = SecondaryText,
+            style = MaterialTheme.typography.bodySmall
+        )
+    }
+}
+
+@Composable
+private fun DarkMetricTile(modifier: Modifier = Modifier, label: String, value: String) {
+    Surface(
+        modifier = modifier.heightIn(min = 58.dp),
+        shape = RoundedCornerShape(14.dp),
+        color = CardBlack,
+        border = BorderStroke(1.dp, HairlineDark)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(value, color = PrimaryText, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(label, color = TertiaryText, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -3967,6 +4301,8 @@ private fun formatMetaTime(raw: String): String {
         formatter.format(instant)
     }.getOrDefault(raw.take(16))
 }
+
+private fun Boolean.yesNo(): String = if (this) "yes" else "no"
 
 private fun parseIsoMillis(raw: String): Long {
     if (raw.isBlank()) {

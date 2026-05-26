@@ -97,6 +97,17 @@ class RelayStateReducersTest {
     }
 
     @Test
+    fun relayUiStateSeparatesActiveAndArchivedSessions() {
+        val state = RelayUiState(
+            sessions = listOf(session("active"), session("archived")),
+            archivedSessionIds = setOf("archived")
+        )
+
+        assertEquals(listOf("active"), state.activeSessions.map { it.sessionId })
+        assertEquals(listOf("archived"), state.archivedSessions.map { it.sessionId })
+    }
+
+    @Test
     fun mergeApprovalUpsertsPendingApprovalAtTopAndKeepsLimit() {
         val existing = listOf(
             approval("old-1"),

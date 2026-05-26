@@ -4154,3 +4154,324 @@ Known notes:
 
 - The detector is diagnostic only. It does not restart Relay or Host Bridge by itself.
 - Missing Windows auto-start is reported as a warning, because manual `npm run connect` remains valid during development.
+
+## 2026-05-26: Android connection diagnostics
+
+Completed:
+
+- Added an Android-side connection diagnostics snapshot parsed from Relay `/health`.
+- `RelayClient.testHealth()` now keeps the existing human-readable health summary and also emits structured diagnostics:
+  - health URL and checked time;
+  - auth/detailed-diagnostics state;
+  - host/session/client/device counts;
+  - cached timeline event count;
+  - WebSocket connection and keepalive settings;
+  - public Relay URLs and SQLite storage metadata when available.
+- `RelayUiState` now stores `connectionDiagnostics` separately from sensitive tokens.
+- Added a mobile diagnostics card to the inbox `More` sheet.
+- Added a `Diagnostics` dialog in `Session tools` showing:
+  - app WebSocket state;
+  - whether this phone is paired;
+  - Relay URL and last connected time;
+  - sync state, confirmed sessions, pending timeline sync, and pending approvals;
+  - latest Relay health details and recent error/health messages.
+
+Verification:
+
+```powershell
+cd android
+.\gradlew.bat :app:assembleDebug --no-daemon --stacktrace
+.\gradlew.bat :app:testDebugUnitTest --no-daemon
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL
+```
+
+Known notes:
+
+- The first unit-test run timed out because Gradle/Java processes were still active. `.\gradlew.bat --stop` cleared the stuck daemon, then serial assemble and unit-test verification passed.
+- This is still an on-demand diagnostic view, not a foreground-service or push-based background reliability fix.
+
+## 2026-05-26: Android timeline sync throttling
+
+Completed:
+
+- Fixed a likely sync-stall trigger where Android would request timeline sync for every known session at once.
+- Added a bounded timeline sync queue in `RelayViewModel`:
+  - confirmed sessions are queued for sync;
+  - only one timeline sync request is in flight at a time;
+  - the next queued session starts after a timeline event/page arrives or the current request times out;
+  - reset/re-pairing clears queued, pending, and in-flight sync markers.
+- Kept the existing 20 second per-session timeline timeout as the recovery path for host-side read stalls.
+- Added explicit OkHttp HTTP timeouts for Relay health/pairing/API calls so mobile diagnostics fail with a bounded error instead of hanging indefinitely.
+
+Verification:
+
+```powershell
+cd android
+.\gradlew.bat :app:assembleDebug --no-daemon --stacktrace
+.\gradlew.bat :app:testDebugUnitTest --no-daemon
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL
+BUILD SUCCESSFUL
+```
+
+Known notes:
+
+- This deliberately trades initial full-history sync speed for stability. Current selected-session live updates still arrive through the WebSocket subscription.
+- If long histories still stall, the next layer to instrument is Host Bridge timeline read duration per session, because Android should now advance the queue after each response or timeout.
+
+## 2026-05-26: Android conversation archive
+
+Completed:
+
+- Added local Android conversation archive state.
+- Archived sessions remain cached locally and remain visible in a dedicated archive list, but are hidden from:
+  - the main inbox;
+  - session drawer search/grouping;
+  - active-session notification fanout;
+  - background full-session timeline sync.
+- Added archive actions to inbox cards and drawer rows.
+- Added `More -> Archived conversations`, with Open and Restore actions per archived session.
+- Restoring a session brings it back into the normal inbox/drawer.
+- Archiving a pinned session unpins it, and archiving the selected session moves selection to the most recently updated non-archived session.
+- Added JVM coverage for active/archived session separation in `RelayUiState`.
+
+Verification:
+
+```powershell
+cd android
+.\gradlew.bat :app:assembleDebug --no-daemon --stacktrace
+.\gradlew.bat :app:testDebugUnitTest --no-daemon
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL
+BUILD SUCCESSFUL
+```
+
+Known notes:
+
+- Archive is mobile-local in this first version. It does not change Relay or Codex session state.
+- Archived sessions are not deleted; they are a visibility/filtering layer.
+
+## 2026-05-26: Android startup crash fix for oversized timeline cache
+
+Completed:
+
+- Investigated a startup crash through ADB logcat.
+- Root cause:
+  - Room threw `SQLiteBlobTooBigException` while loading `cached_timeline` on startup;
+  - a cached timeline row had a payload too large for Android `CursorWindow`;
+  - `RelayViewModel` initialized by reading timeline cache immediately, so the app crashed before rendering UI.
+- Hardened timeline cache startup:
+  - startup now reads timeline summaries without `payloadJson`;
+  - startup timeline restore is limited to 120 items per session;
+  - oversized cached timeline payloads are trimmed on `RelayCacheStore` init;
+  - newly cached timeline payloads are compacted when they exceed 64k chars, preserving turn/item/request ids when possible.
+- Background timeline sync now uses `timeline.page` instead of replaying cached timeline events one by one.
+- Cache prelude pages no longer advance the background sync queue until a host page/error or timeout arrives.
+
+Verification:
+
+```powershell
+cd android
+.\gradlew.bat :app:assembleDebug --no-daemon --stacktrace
+.\gradlew.bat :app:testDebugUnitTest --no-daemon
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL
+BUILD SUCCESSFUL
+```
+
+Known notes:
+
+- ADB later showed the device as `offline`, so final on-device install/launch verification is pending USB debugging reconnection.
+- This fix keeps pairing/session metadata. It does not require clearing app data.
+
+## 2026-05-26: Android incremental session sync
+
+Completed:
+
+- Changed Android reconnect / foreground refresh from broad all-session timeline sync to incremental sync.
+- Session snapshots no longer automatically enqueue every known session for timeline sync.
+- Auto sync now prioritizes:
+  - currently selected session;
+  - active / warning / waiting sessions;
+  - sessions with no local cursor yet;
+  - sessions whose snapshot `updatedAt` is newer than the last stored sync time.
+- Auto sync is capped at 8 sessions per reconnect/foreground refresh.
+- Opening a session explicitly queues that session for timeline sync, so older archived/history sessions are loaded on demand instead of slowing down startup.
+- Archived sessions are excluded from automatic background timeline sync.
+- Background timeline sync continues to use `timeline.page` plus one in-flight request at a time.
+
+Verification:
+
+```powershell
+cd android
+.\gradlew.bat :app:assembleDebug --no-daemon --stacktrace
+.\gradlew.bat :app:testDebugUnitTest --no-daemon
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL
+BUILD SUCCESSFUL
+```
+
+Known notes:
+
+- This is an intentionally conservative incremental policy. It should make reopening fast with dozens of sessions, while preserving on-demand freshness when a user opens an older session.
+- A future refinement can persist per-session sync policy and expose a manual "sync all archive/history" command.
+
+## 2026-05-26: Cloud incremental sync refactor design
+
+Completed:
+
+- Added `docs/cloud-incremental-sync-refactor.md` as the full design for moving reconnect/foreground sync from Android heuristics to Relay-owned durable sync state.
+- Defined the target model:
+  - Relay persists session-level `snapshot_revision`, `stage_revision`, `sync_revision`, `timeline_newest_cursor`, and `timeline_oldest_cursor`.
+  - Relay persists per-device `device_session_sync` ack state.
+  - Android requests `session.sync.index`, syncs only dirty sessions, and sends `session.sync.ack` after local persistence.
+- Documented protocol additions:
+  - `session.sync.index`
+  - `session.sync.index.result`
+  - `session.sync.ack`
+- Documented Relay, Android, and Host Bridge responsibilities, including fallback behavior for old Relay versions.
+- Captured edge-case handling for `unknown session`, stuck stage state, host offline, timeline cursor gaps, multi-device sync, and cloud archive/pin extension.
+- Added a phased implementation plan and verification plan covering Relay schema/protocol, Android client/cache, diagnostics, and optional cloud archive/pin.
+
+Known notes:
+
+- This entry is a design deliverable only; no runtime protocol or database migration has been implemented in this step.
+- The current Android heuristic incremental sync remains the active production behavior until Relay sync index lands.
+
+Next:
+
+1. Implement Relay Phase 1: SQLite schema extensions, revision bump helpers, `session.sync.index`, and `session.sync.ack`.
+2. Add Node verifiers for dirty-session detection, ack suppression, restart persistence, and cursor-gap handling.
+3. Switch Android to prefer sync index while retaining the existing heuristic fallback.
+
+## 2026-05-26: Cloud incremental sync implementation v1
+
+Completed:
+
+- Implemented the first production path for the cloud incremental sync refactor.
+- Protocol:
+  - added `session.sync.index`;
+  - added `session.sync.index.result`;
+  - added `session.sync.ack`.
+- Relay SQLite:
+  - extended `sessions` with `snapshot_revision`, `stage_revision`, `sync_revision`, `metadata_hash`, `stage_hash`, timeline cursor metadata, and `sync_updated_at`;
+  - added `device_session_sync` for per-device session ack state;
+  - added `sync_meta` for Relay global sync revision;
+  - backfills session sync metadata from existing session/timeline rows at startup.
+- Relay runtime:
+  - session snapshot persistence now bumps snapshot/stage revisions only when mobile-visible hashes change;
+  - timeline event persistence updates per-session newest/oldest cursor metadata and bumps sync revision for new live events;
+  - `session.sync.index` returns dirty sessions, dirty reasons, recommended action, unchanged count, and pagination metadata;
+  - `session.sync.ack` persists device-level seen revisions/cursors and is idempotent;
+  - `/health` now reports sync-index enablement and `device_session_sync` counts.
+- Android:
+  - added `SessionSyncEntry` and `CloudSyncState`;
+  - added Room table `cached_cloud_sync_states` with a `1 -> 2` migration;
+  - `RelayClient` can request sync index, parse index results, and ack synced sessions;
+  - `RelayViewModel` requests sync index after connect, uses index results to enqueue only dirty timeline work, acks snapshot-only rows immediately, and acks timeline rows after local cursor catches up;
+  - old Relay versions fall back to the previous heuristic incremental sync if `session.sync.index` is rejected;
+  - diagnostics now show cloud sync index mode, last index check, and dirty/clean counts.
+- README now documents the current sync behavior and the new verifier.
+
+Verification:
+
+```powershell
+npm run verify:relay-sync-index
+npm run verify:relay-sqlite-persistence
+npm run verify:state-sync-regressions
+cd android
+.\gradlew.bat :app:assembleDebug --no-daemon --stacktrace
+.\gradlew.bat :app:testDebugUnitTest --no-daemon
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL
+BUILD SUCCESSFUL
+[verify] Relay sync index and ack persistence verified.
+[verify] Relay SQLite persistence verified.
+[verify] State sync stale timeline and restored stage regressions verified.
+```
+
+Known notes:
+
+- Android still sends the existing `session.subscribe *` for compatibility, so session snapshots may still arrive eagerly. The important improvement is that timeline pages are now driven by Relay dirty index instead of broad Android guessing when the Relay supports it.
+- Cloud archive/pin remains a later phase. Archive is still Android-local.
+- Cursor-gap specific verification is not split into a dedicated script yet; the first verifier covers dirty detection, ack suppression, and restart persistence.
+
+Next:
+
+1. Add a dedicated cursor-gap verifier and harden the `resync_from_host` branch.
+2. Move cloud archive/pin into `device_session_sync` so archive state can survive app reinstall or second device use.
+3. Consider changing new Android clients to subscribe snapshots more selectively after sync-index confidence is high.
+
+## 2026-05-26: Cloud sync cursor-gap and archive/pin
+
+Completed:
+
+- Added dedicated cursor-gap verification:
+  - Relay now refreshes session timeline bounds after SQLite timeline trimming.
+  - `session.sync.index` dirty filtering now detects `seen_timeline_cursor < timeline_oldest_cursor`.
+  - Added `npm run verify:relay-sync-cursor-gap`.
+  - The verifier forces `RELAY_TIMELINE_CACHE_LIMIT=2`, acks a stale cursor, and confirms `cursor_gap` with `recommended_action = resync_from_host`.
+- Added per-device cloud archive/pin state:
+  - protocol messages `session.archive.update` and `session.pin.update`;
+  - Relay handlers require device token auth and update `device_session_sync.archived_at` / `pinned_at`;
+  - default sync index excludes archived sessions;
+  - `include_archived=true` returns archived rows with `device_seen.archived_at`;
+  - added `npm run verify:relay-cloud-archive-pin`.
+- Android now sends cloud archive/pin updates when the local user archives/restores/pins/unpins a session.
+- Android sync index requests include archived rows so local archive/pin state can be restored from Relay per-device metadata.
+- README validation and sync-behavior notes were updated.
+
+Verification:
+
+```powershell
+npm run verify:relay-sync-cursor-gap
+npm run verify:relay-cloud-archive-pin
+npm run verify:relay-sync-index
+npm run verify:relay-sqlite-persistence
+npm run verify:state-sync-regressions
+cd android
+.\gradlew.bat :app:assembleDebug --no-daemon --stacktrace
+.\gradlew.bat :app:testDebugUnitTest --no-daemon
+```
+
+Result:
+
+```text
+[verify] Relay sync cursor-gap detection verified.
+[verify] Relay cloud archive/pin state verified.
+[verify] Relay sync index and ack persistence verified.
+[verify] Relay SQLite persistence verified.
+[verify] State sync stale timeline and restored stage regressions verified.
+BUILD SUCCESSFUL
+```
+
+Known notes:
+
+- Archive/pin state is per Android device, not global across all devices. This matches the current `device_session_sync` design.
+- Android still applies local archive/pin immediately, then mirrors to Relay. If the WebSocket is offline at the exact moment, the current implementation does not yet queue archive/pin mutations for later retry.
+- The first Android verification attempt hit Kotlin incremental build cache corruption because assemble and unit tests were launched in parallel. After `.\gradlew.bat --stop` and clearing generated Kotlin build cache, serial assemble and unit tests passed.

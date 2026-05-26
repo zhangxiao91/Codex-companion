@@ -11,6 +11,8 @@ import androidx.room.Query
 import androidx.room.RewriteQueriesToDropUnusedColumns
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -20,10 +22,15 @@ class RelayCacheStore(context: Context) {
         RelayCacheDatabase::class.java,
         "relay_cache.db"
     )
+        .addMigrations(CACHE_MIGRATION_1_2)
         .fallbackToDestructiveMigration(dropAllTables = true)
         .allowMainThreadQueries()
         .build()
     private val dao = database.dao()
+
+    init {
+        dao.trimOversizedTimelinePayloads(MAX_CACHED_TIMELINE_PAYLOAD_CHARS)
+    }
 
     fun selectedSessionId(): String? = dao.appState(APP_STATE_SELECTED_SESSION)?.value?.takeIf { it.isNotBlank() }
 
@@ -46,6 +53,12 @@ class RelayCacheStore(context: Context) {
         }.getOrDefault(emptySet())
     }
 
+    fun archivedSessionIds(): Set<String> = appStateStringSet(APP_STATE_ARCHIVED_SESSIONS)
+
+    fun saveArchivedSessionIds(sessionIds: Set<String>) {
+        saveStringSet(APP_STATE_ARCHIVED_SESSIONS, sessionIds)
+    }
+
     fun savePinnedSessionIds(sessionIds: Set<String>) {
         saveAppState(
             APP_STATE_PINNED_SESSIONS,
@@ -63,7 +76,13 @@ class RelayCacheStore(context: Context) {
         dao.clearSessions()
     }
 
-    fun timeline(): List<TimelineItem> = dao.timeline(MAX_TIMELINE_ITEMS_PER_SESSION).mapNotNull { it.toModel() }
+    fun timeline(): List<TimelineItem> =
+        runCatching {
+            dao.timelineSummary(MAX_STARTUP_TIMELINE_ITEMS_PER_SESSION).mapNotNull { it.toModel() }
+        }.getOrElse {
+            dao.trimOversizedTimelinePayloads(0)
+            emptyList()
+        }
 
     fun saveTimeline(timeline: List<TimelineItem>) {
         dao.upsertTimeline(timeline.map { CachedTimelineItem.fromModel(it) })
@@ -72,6 +91,19 @@ class RelayCacheStore(context: Context) {
     }
 
     fun syncState(sessionId: String): CachedSyncState? = dao.syncState(sessionId)
+
+    fun cloudSyncStates(): Map<String, CloudSyncState> =
+        dao.cloudSyncStates().associate { it.sessionId to it.toModel() }
+
+    fun cloudSyncState(sessionId: String): CloudSyncState? = dao.cloudSyncState(sessionId)?.toModel()
+
+    fun saveCloudSyncStates(states: Collection<CloudSyncState>) {
+        dao.upsertCloudSyncStates(states.map { CachedCloudSyncState.fromModel(it) })
+    }
+
+    fun saveCloudSyncState(state: CloudSyncState) {
+        dao.upsertCloudSyncStates(listOf(CachedCloudSyncState.fromModel(state)))
+    }
 
     fun saveSyncState(sessionId: String, latestCursor: String?, earliestCursor: String?) {
         dao.upsertSyncState(
@@ -219,6 +251,7 @@ class RelayCacheStore(context: Context) {
         dao.clearTimeline()
         dao.clearPromptQueues()
         dao.clearSyncStates()
+        dao.clearCloudSyncStates()
         dao.clearAppState()
         dao.clearNotifications()
     }
@@ -289,11 +322,32 @@ class RelayCacheStore(context: Context) {
         const val MAX_RELAY_REQUEST_HISTORY = 20
         const val APP_STATE_SELECTED_SESSION = "selected_session_id"
         const val APP_STATE_PINNED_SESSIONS = "pinned_session_ids"
+        const val APP_STATE_ARCHIVED_SESSIONS = "archived_session_ids"
         const val APP_STATE_RELAY_REQUEST_STATE = "relay_request_state"
         const val APP_STATE_RELAY_REQUEST_HISTORY = "relay_request_history"
         const val APP_STATE_APPROVALS = "approvals"
         const val APP_STATE_CONFIRMED_SESSIONS = "confirmed_session_ids"
         const val APP_STATE_PENDING_TIMELINE_SYNC = "pending_timeline_sync_ids"
+        const val MAX_STARTUP_TIMELINE_ITEMS_PER_SESSION = 120
+        const val MAX_CACHED_TIMELINE_PAYLOAD_CHARS = 64_000
+        val CACHE_MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS cached_cloud_sync_states (
+                        sessionId TEXT NOT NULL PRIMARY KEY,
+                        snapshotRevision INTEGER NOT NULL,
+                        stageRevision INTEGER NOT NULL,
+                        syncRevision INTEGER NOT NULL,
+                        relayTimelineNewestCursor INTEGER NOT NULL,
+                        relayTimelineOldestCursor INTEGER,
+                        lastSyncIndexAt TEXT NOT NULL,
+                        lastAckAt TEXT NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
     }
 }
 
@@ -303,10 +357,11 @@ class RelayCacheStore(context: Context) {
         CachedSession::class,
         CachedTimelineItem::class,
         CachedSyncState::class,
+        CachedCloudSyncState::class,
         CachedPromptQueue::class,
         CachedNotification::class
     ],
-    version = 1
+    version = 2
 )
 abstract class RelayCacheDatabase : RoomDatabase() {
     abstract fun dao(): RelayCacheDao
@@ -344,6 +399,18 @@ interface RelayCacheDao {
     @RewriteQueriesToDropUnusedColumns
     fun timeline(limitPerSession: Int): List<CachedTimelineItem>
 
+    @Query("""
+        SELECT eventId, sessionId, type, title, summary, createdAt, cursor, cursorValue, '' AS payloadJson
+        FROM (
+            SELECT eventId, sessionId, type, title, summary, createdAt, cursor, cursorValue,
+                ROW_NUMBER() OVER (PARTITION BY sessionId ORDER BY cursorValue DESC, createdAt DESC) AS rn
+            FROM cached_timeline
+        )
+        WHERE rn <= :limitPerSession
+        ORDER BY cursorValue DESC, createdAt DESC
+    """)
+    fun timelineSummary(limitPerSession: Int): List<CachedTimelineItem>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     fun upsertTimeline(items: List<CachedTimelineItem>)
 
@@ -363,6 +430,9 @@ interface RelayCacheDao {
     @Query("DELETE FROM cached_timeline")
     fun clearTimeline()
 
+    @Query("UPDATE cached_timeline SET payloadJson = '' WHERE length(payloadJson) > :maxPayloadChars")
+    fun trimOversizedTimelinePayloads(maxPayloadChars: Int)
+
     @Query("SELECT * FROM cached_sync_state WHERE sessionId = :sessionId LIMIT 1")
     fun syncState(sessionId: String): CachedSyncState?
 
@@ -371,6 +441,18 @@ interface RelayCacheDao {
 
     @Query("DELETE FROM cached_sync_state")
     fun clearSyncStates()
+
+    @Query("SELECT * FROM cached_cloud_sync_states")
+    fun cloudSyncStates(): List<CachedCloudSyncState>
+
+    @Query("SELECT * FROM cached_cloud_sync_states WHERE sessionId = :sessionId LIMIT 1")
+    fun cloudSyncState(sessionId: String): CachedCloudSyncState?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun upsertCloudSyncStates(states: List<CachedCloudSyncState>)
+
+    @Query("DELETE FROM cached_cloud_sync_states")
+    fun clearCloudSyncStates()
 
     @Query("SELECT * FROM cached_prompt_queues")
     fun promptQueues(): List<CachedPromptQueue>
@@ -495,14 +577,34 @@ data class CachedTimelineItem(
             createdAt = event.createdAt,
             cursor = event.cursor,
             cursorValue = event.cursor?.toLongOrNull() ?: 0L,
-            payloadJson = event.payloadJson.ifBlank {
+            payloadJson = compactPayloadJson(event.payloadJson.ifBlank {
                 JSONObject()
                     .put("turn_id", event.turnId ?: "")
                     .put("item_id", event.itemId ?: "")
                     .put("client_request_id", event.clientRequestId ?: "")
                     .toString()
-            }
+            })
         )
+
+        private fun compactPayloadJson(payloadJson: String): String {
+            if (payloadJson.length <= RelayCacheStore.MAX_CACHED_TIMELINE_PAYLOAD_CHARS) {
+                return payloadJson
+            }
+            return runCatching {
+                val payload = JSONObject(payloadJson)
+                JSONObject()
+                    .put("turn_id", payload.optString("turn_id", ""))
+                    .put("active_turn_id", payload.optString("active_turn_id", ""))
+                    .put("item_id", payload.optString("item_id", ""))
+                    .put("client_request_id", payload.optString("client_request_id", ""))
+                    .put("truncated_payload", true)
+                    .toString()
+            }.getOrDefault(
+                JSONObject()
+                    .put("truncated_payload", true)
+                    .toString()
+            )
+        }
 
         private fun firstNonBlank(vararg values: String): String? =
             values.firstOrNull { it.isNotBlank() }
@@ -516,6 +618,42 @@ data class CachedSyncState(
     val earliestCursor: String?,
     val lastSyncedAt: String
 )
+
+@Entity(tableName = "cached_cloud_sync_states")
+data class CachedCloudSyncState(
+    @PrimaryKey val sessionId: String,
+    val snapshotRevision: Long,
+    val stageRevision: Long,
+    val syncRevision: Long,
+    val relayTimelineNewestCursor: Long,
+    val relayTimelineOldestCursor: Long?,
+    val lastSyncIndexAt: String,
+    val lastAckAt: String
+) {
+    fun toModel(): CloudSyncState = CloudSyncState(
+        sessionId = sessionId,
+        snapshotRevision = snapshotRevision,
+        stageRevision = stageRevision,
+        syncRevision = syncRevision,
+        relayTimelineNewestCursor = relayTimelineNewestCursor,
+        relayTimelineOldestCursor = relayTimelineOldestCursor,
+        lastSyncIndexAt = lastSyncIndexAt,
+        lastAckAt = lastAckAt
+    )
+
+    companion object {
+        fun fromModel(state: CloudSyncState) = CachedCloudSyncState(
+            sessionId = state.sessionId,
+            snapshotRevision = state.snapshotRevision,
+            stageRevision = state.stageRevision,
+            syncRevision = state.syncRevision,
+            relayTimelineNewestCursor = state.relayTimelineNewestCursor,
+            relayTimelineOldestCursor = state.relayTimelineOldestCursor,
+            lastSyncIndexAt = state.lastSyncIndexAt,
+            lastAckAt = state.lastAckAt
+        )
+    }
+}
 
 @Entity(tableName = "cached_prompt_queues")
 data class CachedPromptQueue(

@@ -23,11 +23,13 @@ The system now has three main pieces:
 - Pair Android to a local PC or a server Relay
 - Keep session history visible even when a host is offline
 - Replay cached timeline pages with cursor-based pagination
+- Use Relay-owned cloud incremental sync so reconnects check dirty sessions before requesting timeline pages
 - Send prompts to an online host
 - Queue simple follow-up prompts
 - Show approval requests and completion / needs-input / host-offline notifications
 - Show Git status, diff summary, file diffs, commit confirmation, and push confirmation
 - Persist devices, hosts, sessions, timeline cache, queue state, approvals, notifications, and Git audit metadata in SQLite
+- Persist per-device session sync acknowledgements in SQLite, so clean sessions are skipped after reconnect/restart
 - Keep a trusted host/device identity model instead of re-pairing every time
 
 ## Recommended topology
@@ -145,11 +147,25 @@ $env:RELAY_APPROVAL_RESOLVED_TTL_MS='86400000'
 $env:RELAY_APPROVAL_CLEANUP_INTERVAL_MS='3600000'
 ```
 
+## Sync behavior
+
+Current Android builds prefer the Relay sync index when the server supports it:
+
+- Android asks Relay for `session.sync.index` after connecting.
+- Relay compares session revisions / timeline cursors against this device's last ack.
+- Android only requests timeline pages for dirty sessions or sessions the user opens.
+- After Room persistence, Android sends `session.sync.ack`.
+- Archive and pin are now stored per Android device in Relay sync state and restored from the sync index.
+- If the Relay is older and rejects the sync-index message, Android falls back to the previous local heuristic sync.
+
+This is meant to make reconnecting with dozens of sessions much faster and less timeout-prone.
+
 ## Docs
 
 - [docs/architecture.md](docs/architecture.md)
 - [docs/implementation-plan.md](docs/implementation-plan.md)
 - [docs/server-relay-plan.md](docs/server-relay-plan.md)
+- [docs/cloud-incremental-sync-refactor.md](docs/cloud-incremental-sync-refactor.md)
 - [docs/progress.md](docs/progress.md)
 - [codex-mobile-android-analysis.md](codex-mobile-android-analysis.md)
 
@@ -161,6 +177,9 @@ Common checks:
 npm run verify:delivery-strategy
 npm run verify:relay-offline-host-sessions
 npm run verify:relay-sqlite-persistence
+npm run verify:relay-sync-cursor-gap
+npm run verify:relay-sync-index
+npm run verify:relay-cloud-archive-pin
 npm run verify:notification-events
 npm run verify:rich-prompt-flow
 cd android

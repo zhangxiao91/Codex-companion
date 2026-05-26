@@ -32,9 +32,16 @@ class RelayClient(
         fun onPowerResult(result: PowerResult)
         fun onTimelineEvent(event: TimelineItem)
         fun onTimelinePage(sessionId: String, events: List<TimelineItem>, hasMoreBefore: Boolean, source: String)
+        fun onSessionSyncIndex(
+            entries: List<SessionSyncEntry>,
+            unchangedCount: Int,
+            hasMore: Boolean,
+            nextCursor: String?
+        )
         fun onNotificationEvent(notification: NotificationEvent)
         fun onRelayRequestState(state: RelayRequestState)
         fun onHealthCheck(summary: String)
+        fun onHealthDiagnostics(diagnostics: ConnectionDiagnostics)
         fun onPairingComplete(deviceId: String, deviceToken: String)
         fun onError(message: String)
     }
@@ -132,6 +139,56 @@ class RelayClient(
         }
         return send("session.timeline.request", payload)
     }
+
+    fun requestSessionSyncIndex(
+        selectedSessionId: String? = null,
+        limit: Int = 200,
+        includeArchived: Boolean = false,
+        includeClean: Boolean = false
+    ): Boolean {
+        val payload = JSONObject()
+            .put("limit", limit.coerceIn(1, 500))
+            .put("include_archived", includeArchived)
+            .put("include_clean", includeClean)
+        if (!selectedSessionId.isNullOrBlank()) {
+            payload.put("selected_session_id", selectedSessionId)
+        }
+        return send("session.sync.index", payload)
+    }
+
+    fun ackSessionSync(entries: Collection<SessionSyncEntry>): Boolean {
+        if (entries.isEmpty()) {
+            return true
+        }
+        val sessions = JSONArray()
+        entries.forEach { entry ->
+            sessions.put(
+                JSONObject()
+                    .put("session_id", entry.session.sessionId)
+                    .put("seen_snapshot_revision", entry.snapshotRevision)
+                    .put("seen_stage_revision", entry.stageRevision)
+                    .put("seen_timeline_cursor", entry.timelineNewestCursor)
+                    .put("seen_sync_revision", entry.syncRevision)
+            )
+        }
+        return send("session.sync.ack", JSONObject().put("sessions", sessions))
+    }
+
+    fun updateSessionArchive(sessionId: String, archived: Boolean): Boolean =
+        send(
+            "session.archive.update",
+            JSONObject()
+                .put("session_id", sessionId)
+                .put("archived", archived)
+        )
+
+    fun updateSessionPin(sessionId: String, pinned: Boolean): Boolean =
+        send(
+            "session.pin.update",
+            JSONObject()
+                .put("session_id", sessionId)
+                .put("pinned", pinned)
+        )
 
     fun sendPrompt(sessionId: String, text: String): Boolean {
         return sendPrompt(
@@ -243,7 +300,8 @@ class RelayClient(
 
     fun testHealth(url: String = DEFAULT_RELAY_URL, token: String = "") {
         runCatching {
-            val requestBuilder = Request.Builder().url(healthUrlFor(url))
+            val healthUrl = healthUrlFor(url)
+            val requestBuilder = Request.Builder().url(healthUrl)
             val trimmedToken = token.trim()
             addAuthHeaders(requestBuilder, trimmedToken)
             addShortHttpHeaders(requestBuilder)
@@ -262,6 +320,7 @@ class RelayClient(
                                 return
                             }
 
+                            listener.onHealthDiagnostics(parseHealthDiagnostics(body, healthUrl))
                             listener.onHealthCheck(summarizeHealth(body))
                         }
                     }
@@ -424,6 +483,22 @@ class RelayClient(
                         events = events,
                         hasMoreBefore = payload.optBoolean("has_more_before", false),
                         source = payload.optString("source", "")
+                    )
+                }
+
+                "session.sync.index.result" -> {
+                    val payload = message.getJSONObject("payload")
+                    val entriesArray = payload.optJSONArray("sessions")
+                    val entries = if (entriesArray == null) {
+                        emptyList()
+                    } else {
+                        List(entriesArray.length()) { index -> parseSessionSyncEntry(entriesArray.getJSONObject(index)) }
+                    }
+                    listener.onSessionSyncIndex(
+                        entries = entries,
+                        unchangedCount = payload.optInt("unchanged_count", 0),
+                        hasMore = payload.optBoolean("has_more", false),
+                        nextCursor = payload.optString("next_cursor", "").takeIf { it.isNotBlank() }
                     )
                 }
 
@@ -695,6 +770,40 @@ class RelayClient(
         return "health ok: hosts=$hosts, sessions=$sessions, clients=$clients, cached_events=$cachedEvents, lan=$lan"
     }
 
+    private fun parseHealthDiagnostics(raw: String, healthUrl: String): ConnectionDiagnostics {
+        val json = JSONObject(raw)
+        val counts = json.optJSONObject("counts")
+        val websocket = json.optJSONObject("websocket")
+        val listen = json.optJSONObject("listen")
+        val storage = json.optJSONObject("storage")
+        return ConnectionDiagnostics(
+            healthUrl = healthUrl,
+            checkedAt = json.optString("checked_at", ""),
+            authRequired = json.optBoolean("auth_required", false),
+            detailed = counts != null,
+            totalHosts = counts?.optNullableInt("hosts"),
+            onlineHosts = counts?.optNullableInt("online_hosts"),
+            sessions = counts?.optNullableInt("sessions"),
+            clients = counts?.optNullableInt("clients"),
+            pairedDevices = counts?.optNullableInt("paired_devices"),
+            cachedTimelineEvents = counts?.optNullableInt("cached_timeline_events"),
+            websocketConnections = websocket?.optNullableInt("connections"),
+            wsPingIntervalMs = websocket?.optNullableInt("ping_interval_ms"),
+            wsStaleTimeoutMs = websocket?.optNullableInt("stale_timeout_ms"),
+            publicWebsocketUrl = listen?.optString("public_websocket_url", "")?.takeIf { it.isNotBlank() },
+            publicHealthUrl = listen?.optString("public_health_url", "")?.takeIf { it.isNotBlank() },
+            storageKind = storage?.optString("kind", "")?.takeIf { it.isNotBlank() },
+            storagePath = storage?.optString("path", "")?.takeIf { it.isNotBlank() }
+        )
+    }
+
+    private fun JSONObject.optNullableInt(name: String): Int? {
+        if (!has(name) || isNull(name)) {
+            return null
+        }
+        return optInt(name)
+    }
+
     private fun parseGitAuditItem(json: JSONObject): GitAuditItem = GitAuditItem(
         eventId = json.optString("event_id", UUID.randomUUID().toString()),
         auditId = json.optString("audit_id", ""),
@@ -735,6 +844,31 @@ class RelayClient(
             summary = summary,
             updatedAt = updatedAt,
             stage = parseSessionStage(json.optJSONObject("stage"), status, summary, updatedAt)
+        )
+    }
+
+    private fun parseSessionSyncEntry(json: JSONObject): SessionSyncEntry {
+        val dirtyReasonsArray = json.optJSONArray("dirty_reasons")
+        val dirtyReasons = if (dirtyReasonsArray == null) {
+            emptyList()
+        } else {
+            List(dirtyReasonsArray.length()) { index -> dirtyReasonsArray.optString(index, "") }
+                .filter { it.isNotBlank() }
+        }
+        val deviceSeen = json.optJSONObject("device_seen")
+        return SessionSyncEntry(
+            session = parseSession(json.getJSONObject("session")),
+            snapshotRevision = json.optLong("snapshot_revision", 0L),
+            stageRevision = json.optLong("stage_revision", 0L),
+            syncRevision = json.optLong("sync_revision", 0L),
+            timelineNewestCursor = json.optLong("timeline_newest_cursor", 0L),
+            timelineOldestCursor = json.takeIf { it.has("timeline_oldest_cursor") && !it.isNull("timeline_oldest_cursor") }
+                ?.optLong("timeline_oldest_cursor"),
+            dirty = json.optBoolean("dirty", false),
+            dirtyReasons = dirtyReasons,
+            recommendedAction = json.optString("recommended_action", "none"),
+            archivedAt = deviceSeen?.optString("archived_at", "")?.takeIf { it.isNotBlank() },
+            pinnedAt = deviceSeen?.optString("pinned_at", "")?.takeIf { it.isNotBlank() }
         )
     }
 
@@ -964,7 +1098,10 @@ class RelayClient(
             "session.prompt",
             "session.prompt.queue",
             "session.prompt.edit",
-            "session.turn.interrupt"
+            "session.turn.interrupt",
+            "session.sync.ack",
+            "session.archive.update",
+            "session.pin.update"
         )
 
         private fun encodeQuery(value: String): String =
@@ -975,6 +1112,10 @@ class RelayClient(
 
         private fun defaultHttpClient(): OkHttpClient =
             OkHttpClient.Builder()
+                .connectTimeout(8, TimeUnit.SECONDS)
+                .readTimeout(12, TimeUnit.SECONDS)
+                .writeTimeout(8, TimeUnit.SECONDS)
+                .callTimeout(15, TimeUnit.SECONDS)
                 .pingInterval(WEBSOCKET_PING_SECONDS, TimeUnit.SECONDS)
                 .build()
     }

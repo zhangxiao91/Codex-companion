@@ -28,6 +28,11 @@ export const MessageType = Object.freeze({
   SessionPromptEdit: 'session.prompt.edit',
   SessionTurnInterrupt: 'session.turn.interrupt',
   SessionTimelineRequest: 'session.timeline.request',
+  SessionSyncIndex: 'session.sync.index',
+  SessionSyncIndexResult: 'session.sync.index.result',
+  SessionSyncAck: 'session.sync.ack',
+  SessionArchiveUpdate: 'session.archive.update',
+  SessionPinUpdate: 'session.pin.update',
   TimelineEvent: 'timeline.event',
   TimelinePage: 'timeline.page',
   NotificationEvent: 'notification.event'

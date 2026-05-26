@@ -216,6 +216,18 @@ function handleMessage(connection, raw) {
       case MessageType.SessionTimelineRequest:
         handleSessionTimelineRequest(connection, message);
         break;
+      case MessageType.SessionSyncIndex:
+        handleSessionSyncIndex(connection, message);
+        break;
+      case MessageType.SessionSyncAck:
+        handleSessionSyncAck(connection, message);
+        break;
+      case MessageType.SessionArchiveUpdate:
+        handleSessionArchiveUpdate(connection, message);
+        break;
+      case MessageType.SessionPinUpdate:
+        handleSessionPinUpdate(connection, message);
+        break;
       case MessageType.TimelineEvent:
         handleTimelineEvent(connection, message);
         break;
@@ -240,7 +252,10 @@ function isAckableClientMessage(type) {
     || type === MessageType.SessionPrompt
     || type === MessageType.SessionPromptQueue
     || type === MessageType.SessionPromptEdit
-    || type === MessageType.SessionTurnInterrupt;
+    || type === MessageType.SessionTurnInterrupt
+    || type === MessageType.SessionSyncAck
+    || type === MessageType.SessionArchiveUpdate
+    || type === MessageType.SessionPinUpdate;
 }
 
 function isDuplicateClientMessage(message) {
@@ -310,6 +325,10 @@ function createHealthPayload(request) {
       cached_timeline_events: cachedTimelineEvents,
       prompt_queue_states: state.promptQueueStates.size,
       notification_events: state.notificationEvents.length
+    },
+    sync: {
+      session_sync_index_enabled: true,
+      device_session_sync_rows: relayStore.counts().device_session_sync
     },
     cache: {
       timeline_cache_limit: timelineCacheLimit,
@@ -460,7 +479,11 @@ function isClientMessage(type) {
     || type === MessageType.SessionPromptQueue
     || type === MessageType.SessionPromptEdit
     || type === MessageType.SessionTurnInterrupt
-    || type === MessageType.SessionTimelineRequest;
+    || type === MessageType.SessionTimelineRequest
+    || type === MessageType.SessionSyncIndex
+    || type === MessageType.SessionSyncAck
+    || type === MessageType.SessionArchiveUpdate
+    || type === MessageType.SessionPinUpdate;
 }
 
 async function handlePairRequest(request, response) {
@@ -1634,6 +1657,148 @@ function handleSessionTimelineRequest(connection, message) {
   } else {
     sendError(connection, `Host connection failed: ${session.host_id}`);
   }
+}
+
+function handleSessionSyncIndex(connection, message) {
+  const device = deviceInfoForMessage(message);
+  if (device.device_id === 'unknown') {
+    sendError(connection, 'Device token is required for session sync index.');
+    return;
+  }
+
+  connection.role = SenderRole.Client;
+  state.clients.add(connection);
+
+  const payload = message.payload && typeof message.payload === 'object' ? message.payload : {};
+  const result = relayStore.loadSessionSyncEntries({
+    deviceId: device.device_id,
+    limit: payload.limit,
+    cursor: payload.cursor,
+    includeArchived: payload.include_archived === true,
+    includeClean: payload.include_clean === true,
+    selectedSessionId: payload.selected_session_id,
+    sessionIds: Array.isArray(payload.session_ids) ? payload.session_ids : []
+  });
+  const sessions = result.entries.map((entry) => {
+    const dirtyReasons = syncDirtyReasons(entry);
+    return {
+      session: entry.session,
+      snapshot_revision: entry.snapshot_revision,
+      stage_revision: entry.stage_revision,
+      sync_revision: entry.sync_revision,
+      timeline_newest_cursor: entry.timeline_newest_cursor,
+      timeline_oldest_cursor: entry.timeline_oldest_cursor,
+      last_event_at: entry.last_event_at,
+      sync_updated_at: entry.sync_updated_at,
+      device_seen: entry.device_seen,
+      dirty: dirtyReasons.length > 0,
+      dirty_reasons: dirtyReasons,
+      recommended_action: recommendedSyncAction(entry, dirtyReasons)
+    };
+  });
+
+  send(connection, createMessage(MessageType.SessionSyncIndexResult, {
+    server_sync_revision: String(Math.max(0, ...sessions.map((entry) => Number.parseInt(entry.sync_revision ?? '0', 10) || 0))),
+    sessions,
+    unchanged_count: result.unchanged_count,
+    has_more: result.has_more,
+    next_cursor: result.next_cursor
+  }));
+}
+
+function handleSessionSyncAck(connection, message) {
+  const device = deviceInfoForMessage(message);
+  if (device.device_id === 'unknown') {
+    sendError(connection, 'Device token is required for session sync ack.');
+    return;
+  }
+
+  const payload = message.payload && typeof message.payload === 'object' ? message.payload : {};
+  const sessions = Array.isArray(payload.sessions)
+    ? payload.sessions
+    : payload.session_id
+      ? [payload]
+      : [];
+  if (sessions.length === 0) {
+    sendError(connection, 'session.sync.ack requires payload.sessions.');
+    return;
+  }
+
+  for (const ack of sessions) {
+    relayStore.saveDeviceSessionSync(device.device_id, ack);
+  }
+  sendAck(connection, message, 'accepted');
+}
+
+function handleSessionArchiveUpdate(connection, message) {
+  updateDeviceSessionUiStateFromMessage(connection, message, 'archived');
+}
+
+function handleSessionPinUpdate(connection, message) {
+  updateDeviceSessionUiStateFromMessage(connection, message, 'pinned');
+}
+
+function updateDeviceSessionUiStateFromMessage(connection, message, field) {
+  requirePayloadField(message, 'session_id');
+  requirePayloadField(message, field);
+
+  const device = deviceInfoForMessage(message);
+  if (device.device_id === 'unknown') {
+    sendError(connection, 'Device token is required for session UI state updates.');
+    return;
+  }
+
+  connection.role = SenderRole.Client;
+  state.clients.add(connection);
+
+  const sessionId = message.payload.session_id;
+  if (!state.sessions.has(sessionId)) {
+    sendError(connection, `Unknown session: ${sessionId}`);
+    return;
+  }
+
+  if (field === 'archived') {
+    relayStore.updateDeviceSessionArchive(device.device_id, sessionId, message.payload.archived === true);
+  } else {
+    relayStore.updateDeviceSessionPin(device.device_id, sessionId, message.payload.pinned === true);
+  }
+  sendAck(connection, message, 'accepted');
+}
+
+function syncDirtyReasons(entry) {
+  const reasons = [];
+  const seen = entry.device_seen ?? {};
+  if (!seen.seen_at) {
+    reasons.push('missing_local');
+  }
+  if ((entry.snapshot_revision ?? 0) > (seen.seen_snapshot_revision ?? 0)) {
+    reasons.push('snapshot');
+  }
+  if ((entry.stage_revision ?? 0) > (seen.seen_stage_revision ?? 0)) {
+    reasons.push('stage');
+  }
+  if ((entry.timeline_newest_cursor ?? 0) > (seen.seen_timeline_cursor ?? 0)) {
+    reasons.push('timeline');
+  }
+  if ((entry.timeline_oldest_cursor ?? 0) > 0
+    && (seen.seen_timeline_cursor ?? 0) > 0
+    && (seen.seen_timeline_cursor ?? 0) < (entry.timeline_oldest_cursor ?? 0)) {
+    reasons.push('cursor_gap');
+  }
+  return [...new Set(reasons)];
+}
+
+function recommendedSyncAction(entry, dirtyReasons) {
+  if (dirtyReasons.includes('cursor_gap')) {
+    return 'resync_from_host';
+  }
+  if (dirtyReasons.includes('timeline') || dirtyReasons.includes('missing_local')) {
+    return 'timeline_page';
+  }
+  if (dirtyReasons.includes('snapshot') || dirtyReasons.includes('stage')) {
+    return 'snapshot_only';
+  }
+  return 'none';
 }
 
 function handleTimelineEvent(connection, message) {

@@ -22,6 +22,7 @@ class RelayViewModel(
     private val confirmedSessionIds = mutableSetOf<String>()
     private val pendingTimelineSyncIds = cacheStore.pendingTimelineSyncIds().toMutableSet()
     private val timelineSyncInFlightIds = mutableSetOf<String>()
+    private val timelineSyncQueueIds = ArrayDeque<String>()
     private val timelineSyncTimeoutJobs = mutableMapOf<String, Job>()
     private var earlierTimelineTimeoutJob: Job? = null
     private val snapshotSyncedSessionIds = mutableSetOf<String>()
@@ -34,9 +35,11 @@ class RelayViewModel(
             sessions = initialSessions,
             selectedSessionId = cacheStore.selectedSessionId(),
             pinnedSessionIds = cacheStore.pinnedSessionIds(),
+            archivedSessionIds = cacheStore.archivedSessionIds(),
             timeline = cacheStore.timeline(),
             approvals = initialApprovals,
             promptQueues = cacheStore.promptQueues(),
+            cloudSyncStates = cacheStore.cloudSyncStates(),
             relayRequestState = cacheStore.relayRequestState(),
             relayRequestHistory = cacheStore.relayRequestHistory(),
             pendingApprovalIds = RelayStateReducers.pendingApprovalIds(initialApprovals),
@@ -97,12 +100,14 @@ class RelayViewModel(
                 sessions = emptyList(),
                 hosts = emptyList(),
                 selectedSessionId = null,
+                archivedSessionIds = emptySet(),
                 timeline = emptyList(),
                 approvals = emptyList(),
                 gitSnapshots = emptyMap(),
                 gitAudit = emptyMap(),
                 promptQueues = emptyMap(),
                 lastConnectedAt = null,
+                connectionDiagnostics = null,
                 lastError = null
             )
         }
@@ -132,12 +137,14 @@ class RelayViewModel(
                 sessions = emptyList(),
                 hosts = emptyList(),
                 selectedSessionId = null,
+                archivedSessionIds = emptySet(),
                 timeline = emptyList(),
                 approvals = emptyList(),
                 gitSnapshots = emptyMap(),
                 gitAudit = emptyMap(),
                 promptQueues = emptyMap(),
                 lastConnectedAt = null,
+                connectionDiagnostics = null,
                 lastHealthCheck = null,
                 lastError = null
             )
@@ -173,12 +180,14 @@ class RelayViewModel(
                 sessions = emptyList(),
                 hosts = emptyList(),
                 selectedSessionId = null,
+                archivedSessionIds = emptySet(),
                 timeline = emptyList(),
                 approvals = emptyList(),
                 gitSnapshots = emptyMap(),
                 gitAudit = emptyMap(),
                 promptQueues = emptyMap(),
                 lastConnectedAt = null,
+                connectionDiagnostics = null,
                 lastHealthCheck = "Pairing from code",
                 lastError = null
             )
@@ -198,15 +207,12 @@ class RelayViewModel(
     }
 
     fun selectSession(sessionId: String) {
-        val afterCursor = _uiState.value.timeline
-            .filter { it.sessionId == sessionId }
-            .mapNotNull { it.cursor?.toLongOrNull() }
-            .maxOrNull()
-            ?.toString()
         _uiState.update { it.copy(selectedSessionId = sessionId) }
         cacheStore.saveSelectedSessionId(sessionId)
         if (sessionId in confirmedSessionIds) {
-            relayClient.requestTimeline(sessionId, afterCursor)
+            if (!_uiState.value.syncIndexSupported || cloudSyncNeedsTimeline(sessionId)) {
+                syncSession(sessionId)
+            }
             requestGitAudit()
         }
     }
@@ -220,9 +226,58 @@ class RelayViewModel(
                 state.pinnedSessionIds + sessionId
             }
             cacheStore.savePinnedSessionIds(pinned)
+            if (state.deviceToken.isNotBlank()) {
+                relayClient.updateSessionPin(sessionId, !wasPinned)
+            }
             state.copy(
                 pinnedSessionIds = pinned,
                 lastHealthCheck = if (wasPinned) "Session unpinned" else "Session pinned",
+                lastError = null
+            )
+        }
+    }
+
+    fun archiveSession(sessionId: String) {
+        _uiState.update { state ->
+            val archived = state.archivedSessionIds + sessionId
+            val pinned = state.pinnedSessionIds - sessionId
+            val nextSelectedSessionId = if (state.selectedSessionId == sessionId) {
+                state.sessions
+                    .filterNot { it.sessionId in archived }
+                    .maxByOrNull { parseIsoMillis(it.updatedAt) }
+                    ?.sessionId
+            } else {
+                state.selectedSessionId
+            }
+            cacheStore.saveArchivedSessionIds(archived)
+            cacheStore.savePinnedSessionIds(pinned)
+            cacheStore.saveSelectedSessionId(nextSelectedSessionId)
+            if (state.deviceToken.isNotBlank()) {
+                relayClient.updateSessionArchive(sessionId, true)
+                if (sessionId in state.pinnedSessionIds) {
+                    relayClient.updateSessionPin(sessionId, false)
+                }
+            }
+            state.copy(
+                archivedSessionIds = archived,
+                pinnedSessionIds = pinned,
+                selectedSessionId = nextSelectedSessionId,
+                lastHealthCheck = "Session archived",
+                lastError = null
+            )
+        }
+    }
+
+    fun restoreArchivedSession(sessionId: String) {
+        _uiState.update { state ->
+            val archived = state.archivedSessionIds - sessionId
+            cacheStore.saveArchivedSessionIds(archived)
+            if (state.deviceToken.isNotBlank()) {
+                relayClient.updateSessionArchive(sessionId, false)
+            }
+            state.copy(
+                archivedSessionIds = archived,
+                lastHealthCheck = "Session restored",
                 lastError = null
             )
         }
@@ -495,6 +550,7 @@ class RelayViewModel(
                 lastError = null
             )
         }
+        requestSessionSyncIndex()
     }
 
     override fun onDisconnected(reason: String) {
@@ -545,7 +601,7 @@ class RelayViewModel(
         cacheStore.saveSessions(state.sessions)
         cacheStore.saveSelectedSessionId(state.selectedSessionId)
         updateSyncState()
-        if (snapshotSyncedSessionIds.add(session.sessionId)) {
+        if (!state.syncIndexSupported && snapshotSyncedSessionIds.add(session.sessionId) && shouldAutoSyncSession(session)) {
             syncSession(session.sessionId)
         }
     }
@@ -637,13 +693,20 @@ class RelayViewModel(
         }
         persistCachedState()
         updateSyncState()
+        ackCloudSyncIfCaughtUp(event.sessionId)
+        drainTimelineSyncQueue()
     }
 
     override fun onTimelinePage(sessionId: String, events: List<TimelineItem>, hasMoreBefore: Boolean, source: String) {
-        pendingTimelineSyncIds.remove(sessionId)
-        timelineSyncInFlightIds.remove(sessionId)
-        cancelTimelineSyncTimeout(sessionId)
-        persistSessionSyncMarkers()
+        val backgroundCachePrelude = source == "cache"
+            && sessionId in timelineSyncInFlightIds
+            && !_uiState.value.timelineLoadingEarlier
+        if (!backgroundCachePrelude) {
+            pendingTimelineSyncIds.remove(sessionId)
+            timelineSyncInFlightIds.remove(sessionId)
+            cancelTimelineSyncTimeout(sessionId)
+            persistSessionSyncMarkers()
+        }
         _uiState.update { state ->
             val timeline = mergeTimelineEvents(state.timeline, events)
             val waitingForHostPage = source == "cache" && state.timelineLoadingEarlier
@@ -661,6 +724,7 @@ class RelayViewModel(
                 timelineHasMoreEarlier = nextHasMoreEarlier,
                 pendingTimelineSyncIds = pendingTimelineSyncIds.toSet(),
                 lastHealthCheck = when {
+                    backgroundCachePrelude -> "Loaded cached timeline; waiting for host"
                     source == "host_error" -> "Timeline sync failed"
                     events.isEmpty() -> "No earlier timeline events cached"
                     else -> "Loaded ${events.size} earlier timeline event(s)"
@@ -670,6 +734,89 @@ class RelayViewModel(
         }
         persistCachedState()
         updateSyncState()
+        if (!backgroundCachePrelude) {
+            ackCloudSyncIfCaughtUp(sessionId)
+        }
+        if (!backgroundCachePrelude) {
+            drainTimelineSyncQueue()
+        }
+    }
+
+    override fun onSessionSyncIndex(
+        entries: List<SessionSyncEntry>,
+        unchangedCount: Int,
+        hasMore: Boolean,
+        nextCursor: String?
+    ) {
+        val now = Instant.now().toString()
+        val immediateAckEntries = mutableListOf<SessionSyncEntry>()
+        _uiState.update { state ->
+            val sessions = mergeSessions(state.sessions, entries.map { it.session })
+            val nextCloudStates = state.cloudSyncStates.toMutableMap()
+            entries.forEach { entry ->
+                nextCloudStates[entry.session.sessionId] = CloudSyncState(
+                    sessionId = entry.session.sessionId,
+                    snapshotRevision = entry.snapshotRevision,
+                    stageRevision = entry.stageRevision,
+                    syncRevision = entry.syncRevision,
+                    relayTimelineNewestCursor = entry.timelineNewestCursor,
+                    relayTimelineOldestCursor = entry.timelineOldestCursor,
+                    lastSyncIndexAt = now,
+                    lastAckAt = state.cloudSyncStates[entry.session.sessionId]?.lastAckAt.orEmpty()
+                )
+                confirmedSessionIds.add(entry.session.sessionId)
+                if (entry.recommendedAction == "snapshot_only" || entry.recommendedAction == "none") {
+                    immediateAckEntries.add(entry)
+                }
+            }
+            val cloudArchived = entries.mapNotNull { entry ->
+                entry.session.sessionId.takeIf { !entry.archivedAt.isNullOrBlank() }
+            }.toSet()
+            val cloudPinned = entries.mapNotNull { entry ->
+                entry.session.sessionId.takeIf { !entry.pinnedAt.isNullOrBlank() && entry.archivedAt.isNullOrBlank() }
+            }.toSet()
+            val cloudTouchedIds = entries
+                .filter { !it.archivedAt.isNullOrBlank() || !it.pinnedAt.isNullOrBlank() }
+                .map { it.session.sessionId }
+                .toSet()
+            val archived = (state.archivedSessionIds - cloudTouchedIds) + cloudArchived
+            val pinned = ((state.pinnedSessionIds - cloudTouchedIds) + cloudPinned) - archived
+            cacheStore.saveSessions(sessions)
+            cacheStore.saveCloudSyncStates(nextCloudStates.values)
+            cacheStore.saveArchivedSessionIds(archived)
+            cacheStore.savePinnedSessionIds(pinned)
+            persistSessionSyncMarkers()
+            state.copy(
+                sessions = sessions,
+                selectedSessionId = state.selectedSessionId ?: sessions.firstOrNull()?.sessionId,
+                archivedSessionIds = archived,
+                pinnedSessionIds = pinned,
+                confirmedSessionIds = confirmedSessionIds.toSet(),
+                cloudSyncStates = nextCloudStates,
+                syncIndexSupported = true,
+                lastSyncIndexAt = now,
+                lastSyncIndexDirtyCount = entries.count { it.dirty },
+                lastSyncIndexUnchangedCount = unchangedCount,
+                lastHealthCheck = when {
+                    entries.isEmpty() -> "Relay sync index clean"
+                    else -> "Relay sync index: ${entries.count { it.dirty }} update(s)"
+                },
+                lastError = null
+            )
+        }
+        if (immediateAckEntries.isNotEmpty()) {
+            relayClient.ackSessionSync(immediateAckEntries)
+            markCloudAcked(immediateAckEntries.map { it.session.sessionId })
+        }
+        entries
+            .filter { it.recommendedAction == "timeline_page" || it.recommendedAction == "resync_from_host" }
+            .filter { shouldSyncCloudEntry(it) }
+            .take(MAX_INCREMENTAL_AUTO_SYNC_SESSIONS)
+            .forEach { syncSession(it.session.sessionId) }
+        updateSyncState()
+        if (hasMore && !nextCursor.isNullOrBlank()) {
+            _uiState.update { it.copy(lastHealthCheck = "More Relay sync index pages available") }
+        }
     }
 
     override fun onNotificationEvent(notification: NotificationEvent) {
@@ -694,6 +841,10 @@ class RelayViewModel(
         _uiState.update { it.copy(lastHealthCheck = summary, lastError = null) }
     }
 
+    override fun onHealthDiagnostics(diagnostics: ConnectionDiagnostics) {
+        _uiState.update { it.copy(connectionDiagnostics = diagnostics) }
+    }
+
     override fun onPairingComplete(deviceId: String, deviceToken: String) {
         settings.saveDevicePairing(deviceId, deviceToken)
         _uiState.update {
@@ -708,6 +859,17 @@ class RelayViewModel(
     }
 
     override fun onError(message: String) {
+        if (message.contains("Unsupported message type: session.sync.index", ignoreCase = true)) {
+            _uiState.update {
+                it.copy(
+                    syncIndexSupported = false,
+                    lastHealthCheck = "Relay sync index unsupported; using local incremental sync",
+                    lastError = null
+                )
+            }
+            syncIncrementalKnownSessions()
+            return
+        }
         if (_uiState.value.timelineLoadingEarlier) {
             cancelEarlierTimelineTimeout()
         }
@@ -715,7 +877,11 @@ class RelayViewModel(
     }
 
     fun refreshAllSessions() {
-        syncAllKnownSessions()
+        if (_uiState.value.syncIndexSupported) {
+            requestSessionSyncIndex()
+        } else {
+            syncIncrementalKnownSessions()
+        }
     }
 
     override fun onCleared() {
@@ -735,6 +901,8 @@ class RelayViewModel(
         const val MAX_RECONNECT_DELAY_MS = 30_000L
         const val FOREGROUND_REFRESH_INTERVAL_MS = 30_000L
         const val TIMELINE_SYNC_TIMEOUT_MS = 20_000L
+        const val MAX_TIMELINE_SYNC_IN_FLIGHT = 1
+        const val MAX_INCREMENTAL_AUTO_SYNC_SESSIONS = 8
 
         fun isValidRelayUrl(url: String): Boolean =
             url.startsWith("ws://") || url.startsWith("wss://")
@@ -778,13 +946,41 @@ class RelayViewModel(
         if (sessionId in timelineSyncInFlightIds) {
             return
         }
+        if (sessionId !in pendingTimelineSyncIds) {
+            pendingTimelineSyncIds.add(sessionId)
+            persistSessionSyncMarkers()
+            updateSyncState()
+        }
+        if (sessionId !in timelineSyncQueueIds) {
+            timelineSyncQueueIds.addLast(sessionId)
+        }
+        drainTimelineSyncQueue()
+    }
+
+    private fun drainTimelineSyncQueue() {
+        while (timelineSyncInFlightIds.size < MAX_TIMELINE_SYNC_IN_FLIGHT && timelineSyncQueueIds.isNotEmpty()) {
+            val sessionId = timelineSyncQueueIds.removeFirst()
+            if (sessionId !in confirmedSessionIds || sessionId in timelineSyncInFlightIds) {
+                continue
+            }
+            startTimelineSync(sessionId)
+        }
+        updateSyncState()
+    }
+
+    private fun startTimelineSync(sessionId: String) {
         val latestCursor = latestCursorFor(sessionId) ?: cacheStore.syncState(sessionId)?.latestCursor
         pendingTimelineSyncIds.add(sessionId)
         timelineSyncInFlightIds.add(sessionId)
         persistSessionSyncMarkers()
         updateSyncState()
         scheduleTimelineSyncTimeout(sessionId)
-        val sent = relayClient.requestTimeline(sessionId, latestCursor)
+        val sent = relayClient.requestTimeline(
+            sessionId = sessionId,
+            afterCursor = latestCursor,
+            limit = TIMELINE_PAGE_SIZE,
+            page = true
+        )
         if (!sent) {
             pendingTimelineSyncIds.remove(sessionId)
             timelineSyncInFlightIds.remove(sessionId)
@@ -794,20 +990,153 @@ class RelayViewModel(
         }
     }
 
-    private fun syncAllKnownSessions() {
-        val confirmed = liveConfirmedSessionIds()
-        _uiState.value.sessions
-            .filter { it.sessionId in confirmed }
-            .forEach { session ->
-                syncSession(session.sessionId)
-        }
+    private fun syncIncrementalKnownSessions() {
+        incrementalSyncCandidates(_uiState.value)
+            .forEach { session -> syncSession(session.sessionId) }
         updateSyncState()
+    }
+
+    private fun requestSessionSyncIndex() {
+        if (_uiState.value.deviceToken.isBlank()) {
+            return
+        }
+        val sent = relayClient.requestSessionSyncIndex(
+            selectedSessionId = _uiState.value.selectedSessionId,
+            includeArchived = true,
+            includeClean = false
+        )
+        if (sent) {
+            _uiState.update {
+                it.copy(
+                    syncState = buildSyncState(active = true, summary = "Checking Relay sync index"),
+                    lastHealthCheck = "Checking Relay sync index",
+                    lastError = null
+                )
+            }
+        }
+    }
+
+    private fun mergeSessions(current: List<CodexSession>, incoming: List<CodexSession>): List<CodexSession> {
+        val incomingIds = incoming.map { it.sessionId }.toSet()
+        return (incoming + current.filterNot { it.sessionId in incomingIds })
+            .sortedByDescending { parseIsoMillis(it.updatedAt) }
+    }
+
+    private fun shouldSyncCloudEntry(entry: SessionSyncEntry): Boolean {
+        val session = entry.session
+        if (session.sessionId in _uiState.value.archivedSessionIds) {
+            return false
+        }
+        if (session.sessionId == _uiState.value.selectedSessionId) {
+            return true
+        }
+        if (session.stage.severity == "active" || session.stage.severity == "warning") {
+            return true
+        }
+        val localLatest = latestCursorFor(session.sessionId)?.toLongOrNull()
+            ?: cacheStore.syncState(session.sessionId)?.latestCursor?.toLongOrNull()
+            ?: 0L
+        return localLatest == 0L || localLatest < entry.timelineNewestCursor
+    }
+
+    private fun cloudSyncNeedsTimeline(sessionId: String): Boolean {
+        val cloud = _uiState.value.cloudSyncStates[sessionId] ?: return true
+        val localLatest = latestCursorFor(sessionId)?.toLongOrNull()
+            ?: cacheStore.syncState(sessionId)?.latestCursor?.toLongOrNull()
+            ?: 0L
+        return localLatest < cloud.relayTimelineNewestCursor
+    }
+
+    private fun ackCloudSyncIfCaughtUp(sessionId: String) {
+        val cloud = _uiState.value.cloudSyncStates[sessionId] ?: return
+        val session = _uiState.value.sessions.firstOrNull { it.sessionId == sessionId } ?: return
+        val localLatest = latestCursorFor(sessionId)?.toLongOrNull()
+            ?: cacheStore.syncState(sessionId)?.latestCursor?.toLongOrNull()
+            ?: 0L
+        if (localLatest < cloud.relayTimelineNewestCursor) {
+            return
+        }
+        val entry = SessionSyncEntry(
+            session = session,
+            snapshotRevision = cloud.snapshotRevision,
+            stageRevision = cloud.stageRevision,
+            syncRevision = cloud.syncRevision,
+            timelineNewestCursor = cloud.relayTimelineNewestCursor,
+            timelineOldestCursor = cloud.relayTimelineOldestCursor,
+            dirty = false,
+            dirtyReasons = emptyList(),
+            recommendedAction = "none"
+        )
+        if (relayClient.ackSessionSync(listOf(entry))) {
+            markCloudAcked(listOf(sessionId))
+        }
+    }
+
+    private fun markCloudAcked(sessionIds: List<String>) {
+        val ackedAt = Instant.now().toString()
+        _uiState.update { state ->
+            val nextCloudStates = state.cloudSyncStates.toMutableMap()
+            sessionIds.forEach { sessionId ->
+                val current = nextCloudStates[sessionId]
+                if (current != null) {
+                    nextCloudStates[sessionId] = current.copy(lastAckAt = ackedAt)
+                }
+            }
+            cacheStore.saveCloudSyncStates(nextCloudStates.values)
+            state.copy(cloudSyncStates = nextCloudStates)
+        }
+    }
+
+    private fun incrementalSyncCandidates(state: RelayUiState): List<CodexSession> {
+        val confirmed = liveConfirmedSessionIds()
+        return state.activeSessions
+            .filter { session -> session.sessionId in confirmed }
+            .filter { session -> shouldAutoSyncSession(session) }
+            .sortedWith(
+                compareByDescending<CodexSession> { it.sessionId == state.selectedSessionId }
+                    .thenByDescending { sessionPriority(it) }
+                    .thenByDescending { parseIsoMillis(it.updatedAt) }
+            )
+            .take(MAX_INCREMENTAL_AUTO_SYNC_SESSIONS)
+    }
+
+    private fun shouldAutoSyncSession(session: CodexSession): Boolean {
+        val state = _uiState.value
+        if (session.sessionId in state.archivedSessionIds) {
+            return false
+        }
+        if (session.sessionId == state.selectedSessionId) {
+            return true
+        }
+        if (session.stage.severity == "active" || session.stage.severity == "warning") {
+            return true
+        }
+        if (session.status == "running" || session.status == "waiting_for_input") {
+            return true
+        }
+        val syncState = cacheStore.syncState(session.sessionId)
+        if (latestCursorFor(session.sessionId).isNullOrBlank() && syncState?.latestCursor.isNullOrBlank()) {
+            return true
+        }
+        val sessionUpdatedAt = parseIsoMillis(session.updatedAt)
+        val lastSyncedAt = parseIsoMillis(syncState?.lastSyncedAt.orEmpty())
+        return sessionUpdatedAt > lastSyncedAt
+    }
+
+    private fun sessionPriority(session: CodexSession): Int = when {
+        session.stage.severity == "warning" -> 4
+        session.stage.severity == "active" -> 3
+        session.status == "running" -> 3
+        session.status == "waiting_for_input" -> 2
+        latestCursorFor(session.sessionId).isNullOrBlank() && cacheStore.syncState(session.sessionId)?.latestCursor.isNullOrBlank() -> 1
+        else -> 0
     }
 
     private fun resetSessionSyncMarkers() {
         confirmedSessionIds.clear()
         pendingTimelineSyncIds.clear()
         timelineSyncInFlightIds.clear()
+        timelineSyncQueueIds.clear()
         timelineSyncTimeoutJobs.values.forEach { it.cancel() }
         timelineSyncTimeoutJobs.clear()
         cancelEarlierTimelineTimeout()
@@ -945,6 +1274,7 @@ class RelayViewModel(
                 )
             }
             updateSyncState()
+            drainTimelineSyncQueue()
         }
     }
 
