@@ -67,6 +67,24 @@ try {
   const client = await connect(relayUrl);
   await send(client, MessageType.SessionTimelineRequest, {
     session_id: 'cache-session-001',
+    limit: 2,
+    cache_only: true,
+    page: true
+  }, deviceToken);
+
+  const latestPage = await waitForTimelinePage(client, 5000);
+  if (latestPage.events.length !== 2
+    || latestPage.events[0].type !== 'second_cached_event'
+    || latestPage.events[1].type !== 'third_cached_event') {
+    throw new Error(`Expected default page to return latest two cached events, received ${JSON.stringify(latestPage.events)}`);
+  }
+
+  if (latestPage.has_more_before !== true) {
+    throw new Error('Expected default latest page to report older cached history.');
+  }
+
+  await send(client, MessageType.SessionTimelineRequest, {
+    session_id: 'cache-session-001',
     after_cursor: '1',
     cache_only: true
   }, deviceToken);

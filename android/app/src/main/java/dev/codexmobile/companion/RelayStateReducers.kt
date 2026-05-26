@@ -27,6 +27,36 @@ internal object RelayStateReducers {
             current.filter { it.approvalId != incoming.approvalId }
         }
 
+    fun mergeCloudArchivedSessions(
+        currentArchivedSessionIds: Set<String>,
+        entries: List<SessionSyncEntry>
+    ): Set<String> {
+        val cloudKnownSessionIds = entries.map { it.session.sessionId }.toSet()
+        val cloudArchivedSessionIds = entries
+            .mapNotNull { entry -> entry.session.sessionId.takeIf { !entry.archivedAt.isNullOrBlank() } }
+            .toSet()
+        return (currentArchivedSessionIds - cloudKnownSessionIds) + cloudArchivedSessionIds
+    }
+
+    fun mergeCloudPinnedSessions(
+        currentPinnedSessionIds: Set<String>,
+        entries: List<SessionSyncEntry>,
+        archivedSessionIds: Set<String>
+    ): Set<String> {
+        val cloudKnownSessionIds = entries.map { it.session.sessionId }.toSet()
+        val cloudPinnedSessionIds = entries
+            .mapNotNull { entry ->
+                entry.session.sessionId.takeIf {
+                    !entry.pinnedAt.isNullOrBlank() && entry.archivedAt.isNullOrBlank()
+                }
+            }
+            .toSet()
+        return ((currentPinnedSessionIds - cloudKnownSessionIds) + cloudPinnedSessionIds) - archivedSessionIds
+    }
+
+    fun isTimelineCursorDrift(localLatestCursor: Long, relayNewestCursor: Long): Boolean =
+        relayNewestCursor > 0 && localLatestCursor > relayNewestCursor
+
     fun buildSyncState(
         sessions: List<CodexSession>,
         confirmedSessionIds: Set<String>,

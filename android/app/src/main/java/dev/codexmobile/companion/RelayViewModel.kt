@@ -283,6 +283,24 @@ class RelayViewModel(
         }
     }
 
+    fun restoreAllArchivedSessions() {
+        val sessionIds = _uiState.value.archivedSessionIds.toList()
+        if (sessionIds.isEmpty()) {
+            return
+        }
+        _uiState.update { state ->
+            cacheStore.saveArchivedSessionIds(emptySet())
+            if (state.deviceToken.isNotBlank()) {
+                sessionIds.forEach { sessionId -> relayClient.updateSessionArchive(sessionId, false) }
+            }
+            state.copy(
+                archivedSessionIds = emptySet(),
+                lastHealthCheck = "Restored ${sessionIds.size} archived session(s)",
+                lastError = null
+            )
+        }
+    }
+
     fun sendPrompt(text: String) {
         sendPrompt(PromptDraft(text = text.trim()))
     }
@@ -765,22 +783,14 @@ class RelayViewModel(
                     lastAckAt = state.cloudSyncStates[entry.session.sessionId]?.lastAckAt.orEmpty()
                 )
                 confirmedSessionIds.add(entry.session.sessionId)
-                if (entry.recommendedAction == "snapshot_only" || entry.recommendedAction == "none") {
+                if ((entry.recommendedAction == "snapshot_only" || entry.recommendedAction == "none")
+                    && !entryHasTimelineCursorDrift(entry)
+                ) {
                     immediateAckEntries.add(entry)
                 }
             }
-            val cloudArchived = entries.mapNotNull { entry ->
-                entry.session.sessionId.takeIf { !entry.archivedAt.isNullOrBlank() }
-            }.toSet()
-            val cloudPinned = entries.mapNotNull { entry ->
-                entry.session.sessionId.takeIf { !entry.pinnedAt.isNullOrBlank() && entry.archivedAt.isNullOrBlank() }
-            }.toSet()
-            val cloudTouchedIds = entries
-                .filter { !it.archivedAt.isNullOrBlank() || !it.pinnedAt.isNullOrBlank() }
-                .map { it.session.sessionId }
-                .toSet()
-            val archived = (state.archivedSessionIds - cloudTouchedIds) + cloudArchived
-            val pinned = ((state.pinnedSessionIds - cloudTouchedIds) + cloudPinned) - archived
+            val archived = RelayStateReducers.mergeCloudArchivedSessions(state.archivedSessionIds, entries)
+            val pinned = RelayStateReducers.mergeCloudPinnedSessions(state.pinnedSessionIds, entries, archived)
             cacheStore.saveSessions(sessions)
             cacheStore.saveCloudSyncStates(nextCloudStates.values)
             cacheStore.saveArchivedSessionIds(archived)
@@ -970,6 +980,21 @@ class RelayViewModel(
 
     private fun startTimelineSync(sessionId: String) {
         val latestCursor = latestCursorFor(sessionId) ?: cacheStore.syncState(sessionId)?.latestCursor
+        val cloudNewestCursor = _uiState.value.cloudSyncStates[sessionId]?.relayTimelineNewestCursor ?: 0L
+        val localLatestCursor = latestCursor?.toLongOrNull() ?: 0L
+        val afterCursor = if (RelayStateReducers.isTimelineCursorDrift(localLatestCursor, cloudNewestCursor)) {
+            cacheStore.clearTimelineForSession(sessionId)
+            _uiState.update { state ->
+                state.copy(
+                    timeline = state.timeline.filterNot { it.sessionId == sessionId },
+                    timelineHasMoreEarlier = state.timelineHasMoreEarlier - sessionId,
+                    lastHealthCheck = "Refreshing timeline after cursor drift"
+                )
+            }
+            null
+        } else {
+            latestCursor
+        }
         pendingTimelineSyncIds.add(sessionId)
         timelineSyncInFlightIds.add(sessionId)
         persistSessionSyncMarkers()
@@ -977,7 +1002,7 @@ class RelayViewModel(
         scheduleTimelineSyncTimeout(sessionId)
         val sent = relayClient.requestTimeline(
             sessionId = sessionId,
-            afterCursor = latestCursor,
+            afterCursor = afterCursor,
             limit = TIMELINE_PAGE_SIZE,
             page = true
         )
@@ -1036,7 +1061,9 @@ class RelayViewModel(
         val localLatest = latestCursorFor(session.sessionId)?.toLongOrNull()
             ?: cacheStore.syncState(session.sessionId)?.latestCursor?.toLongOrNull()
             ?: 0L
-        return localLatest == 0L || localLatest < entry.timelineNewestCursor
+        return localLatest == 0L
+            || localLatest < entry.timelineNewestCursor
+            || RelayStateReducers.isTimelineCursorDrift(localLatest, entry.timelineNewestCursor)
     }
 
     private fun cloudSyncNeedsTimeline(sessionId: String): Boolean {
@@ -1045,6 +1072,7 @@ class RelayViewModel(
             ?: cacheStore.syncState(sessionId)?.latestCursor?.toLongOrNull()
             ?: 0L
         return localLatest < cloud.relayTimelineNewestCursor
+            || RelayStateReducers.isTimelineCursorDrift(localLatest, cloud.relayTimelineNewestCursor)
     }
 
     private fun ackCloudSyncIfCaughtUp(sessionId: String) {
@@ -1053,7 +1081,9 @@ class RelayViewModel(
         val localLatest = latestCursorFor(sessionId)?.toLongOrNull()
             ?: cacheStore.syncState(sessionId)?.latestCursor?.toLongOrNull()
             ?: 0L
-        if (localLatest < cloud.relayTimelineNewestCursor) {
+        if (localLatest < cloud.relayTimelineNewestCursor
+            || RelayStateReducers.isTimelineCursorDrift(localLatest, cloud.relayTimelineNewestCursor)
+        ) {
             return
         }
         val entry = SessionSyncEntry(
@@ -1085,6 +1115,13 @@ class RelayViewModel(
             cacheStore.saveCloudSyncStates(nextCloudStates.values)
             state.copy(cloudSyncStates = nextCloudStates)
         }
+    }
+
+    private fun entryHasTimelineCursorDrift(entry: SessionSyncEntry): Boolean {
+        val localLatest = latestCursorFor(entry.session.sessionId)?.toLongOrNull()
+            ?: cacheStore.syncState(entry.session.sessionId)?.latestCursor?.toLongOrNull()
+            ?: 0L
+        return RelayStateReducers.isTimelineCursorDrift(localLatest, entry.timelineNewestCursor)
     }
 
     private fun incrementalSyncCandidates(state: RelayUiState): List<CodexSession> {

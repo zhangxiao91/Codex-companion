@@ -90,6 +90,11 @@ class RelayCacheStore(context: Context) {
         updateSyncStateFromTimeline(timeline)
     }
 
+    fun clearTimelineForSession(sessionId: String) {
+        dao.clearTimelineForSession(sessionId)
+        dao.clearSyncState(sessionId)
+    }
+
     fun syncState(sessionId: String): CachedSyncState? = dao.syncState(sessionId)
 
     fun cloudSyncStates(): Map<String, CloudSyncState> =
@@ -430,6 +435,9 @@ interface RelayCacheDao {
     @Query("DELETE FROM cached_timeline")
     fun clearTimeline()
 
+    @Query("DELETE FROM cached_timeline WHERE sessionId = :sessionId")
+    fun clearTimelineForSession(sessionId: String)
+
     @Query("UPDATE cached_timeline SET payloadJson = '' WHERE length(payloadJson) > :maxPayloadChars")
     fun trimOversizedTimelinePayloads(maxPayloadChars: Int)
 
@@ -441,6 +449,9 @@ interface RelayCacheDao {
 
     @Query("DELETE FROM cached_sync_state")
     fun clearSyncStates()
+
+    @Query("DELETE FROM cached_sync_state WHERE sessionId = :sessionId")
+    fun clearSyncState(sessionId: String)
 
     @Query("SELECT * FROM cached_cloud_sync_states")
     fun cloudSyncStates(): List<CachedCloudSyncState>

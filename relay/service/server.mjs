@@ -1639,7 +1639,7 @@ function handleSessionTimelineRequest(connection, message) {
   subscriptions.add(message.payload.session_id);
   state.subscriptions.set(connection, subscriptions);
 
-  sendCachedTimeline(connection, message.payload.session_id, {
+  const cacheResult = sendCachedTimeline(connection, message.payload.session_id, {
     afterCursor: message.payload.after_cursor,
     beforeCursor: message.payload.before_cursor,
     limit: message.payload.limit,
@@ -1657,7 +1657,7 @@ function handleSessionTimelineRequest(connection, message) {
   }
 
   console.log(`[relay] routing timeline request to host ${session.host_id}: ${message.payload.session_id}`);
-  if (send(hostConnection, message)) {
+  if (send(hostConnection, hostTimelineRequestMessage(message, cacheResult))) {
     sendAck(connection, message, 'accepted');
   } else {
     sendError(connection, `Host connection failed: ${session.host_id}`);
@@ -2217,9 +2217,11 @@ function sendCachedTimeline(connection, sessionId, options = {}) {
     ? cachedEvents
       .filter((event) => parseCursor(event.cursor) < beforeCursor)
       .slice(-limit)
-    : cachedEvents
-      .filter((event) => parseCursor(event.cursor) > afterCursor)
-      .slice(0, limit);
+    : afterCursor > 0
+      ? cachedEvents
+        .filter((event) => parseCursor(event.cursor) > afterCursor)
+        .slice(0, limit)
+      : cachedEvents.slice(-limit);
   const replayedEvents = selectedEvents.map((event) => ({
     ...event,
     replayed_from_cache: true
@@ -2248,7 +2250,11 @@ function sendCachedTimeline(connection, sessionId, options = {}) {
       has_more_after: hasMoreAfter,
       source: 'cache'
     }));
-    return;
+    return {
+      selected_count: selectedEvents.length,
+      after_cursor: afterCursor,
+      before_cursor: beforeCursor
+    };
   }
 
   for (const event of replayedEvents) {
@@ -2256,6 +2262,25 @@ function sendCachedTimeline(connection, sessionId, options = {}) {
       event
     }));
   }
+  return {
+    selected_count: selectedEvents.length,
+    after_cursor: afterCursor,
+    before_cursor: beforeCursor
+  };
+}
+
+function hostTimelineRequestMessage(message, cacheResult) {
+  const afterCursor = cacheResult?.after_cursor ?? parseCursor(message.payload?.after_cursor);
+  if (afterCursor <= 0 || (cacheResult?.selected_count ?? 0) > 0) {
+    return message;
+  }
+
+  const payload = { ...message.payload };
+  delete payload.after_cursor;
+  return {
+    ...message,
+    payload
+  };
 }
 
 function parseCursor(cursor) {

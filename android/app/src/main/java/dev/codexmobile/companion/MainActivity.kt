@@ -132,6 +132,7 @@ class MainActivity : ComponentActivity() {
                 onPinnedSessionToggle = viewModel::togglePinnedSession,
                 onSessionArchive = viewModel::archiveSession,
                 onSessionRestore = viewModel::restoreArchivedSession,
+                onRestoreAllArchived = viewModel::restoreAllArchivedSessions,
                 onLoadEarlierTimeline = viewModel::loadEarlierTimeline,
                 onPowerTrustRequest = viewModel::requestPowerTrust,
                 onPowerTrustVerify = viewModel::verifyPowerTrust,
@@ -202,6 +203,7 @@ private fun CompanionApp(
     onPinnedSessionToggle: (String) -> Unit,
     onSessionArchive: (String) -> Unit,
     onSessionRestore: (String) -> Unit,
+    onRestoreAllArchived: () -> Unit,
     onLoadEarlierTimeline: () -> Unit,
     onPowerTrustRequest: () -> Unit,
     onPowerTrustVerify: (String) -> Unit,
@@ -291,6 +293,7 @@ private fun CompanionApp(
                     onPinnedSessionToggle = onPinnedSessionToggle,
                     onSessionArchive = onSessionArchive,
                     onSessionRestore = onSessionRestore,
+                    onRestoreAllArchived = onRestoreAllArchived,
                     onNotificationsEnabled = onNotificationsEnabled,
                     onSessionNotify = onSessionNotify,
                     onApprovalNotify = onApprovalNotify,
@@ -456,6 +459,7 @@ private fun InboxScreen(
     onPinnedSessionToggle: (String) -> Unit,
     onSessionArchive: (String) -> Unit,
     onSessionRestore: (String) -> Unit,
+    onRestoreAllArchived: () -> Unit,
     onNotificationsEnabled: () -> Boolean,
     onSessionNotify: (CodexSession) -> Unit,
     onApprovalNotify: (ApprovalItem) -> Unit,
@@ -591,7 +595,8 @@ private fun InboxScreen(
                     archivedOpen = false
                     onSessionSelected(sessionId)
                 },
-                onRestore = onSessionRestore
+                onRestore = onSessionRestore,
+                onRestoreAll = onRestoreAllArchived
             )
         }
     }
@@ -1866,7 +1871,8 @@ private fun CopyMessageButton(label: String, foreground: Color, onCopy: () -> Un
 private fun ArchivedSessionsSheet(
     uiState: RelayUiState,
     onSessionSelected: (String) -> Unit,
-    onRestore: (String) -> Unit
+    onRestore: (String) -> Unit,
+    onRestoreAll: () -> Unit
 ) {
     val sessions = remember(uiState.archivedSessions) { sortInboxSessions(uiState.archivedSessions, emptySet()) }
     Column(
@@ -1877,6 +1883,9 @@ private fun ArchivedSessionsSheet(
     ) {
         Text("Archived conversations", color = PrimaryText, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
         Text("Archived conversations stay available here and are hidden from the inbox and session drawer.", color = SecondaryText, style = MaterialTheme.typography.bodySmall)
+        if (sessions.isNotEmpty()) {
+            CompactActionButton(text = "Restore all", onClick = onRestoreAll)
+        }
         if (sessions.isEmpty()) {
             EmptyMainState(
                 title = "No archived conversations",

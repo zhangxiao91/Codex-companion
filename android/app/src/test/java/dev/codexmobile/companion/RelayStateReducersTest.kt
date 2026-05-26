@@ -108,6 +108,46 @@ class RelayStateReducersTest {
     }
 
     @Test
+    fun mergeCloudArchivedSessionsUnarchivesReturnedCleanCloudSessions() {
+        val archived = RelayStateReducers.mergeCloudArchivedSessions(
+            currentArchivedSessionIds = setOf("stale-local", "local-only", "cloud-archived"),
+            entries = listOf(
+                syncEntry("stale-local"),
+                syncEntry("cloud-archived", archivedAt = "2026-05-24T00:00:00Z")
+            )
+        )
+
+        assertEquals(setOf("local-only", "cloud-archived"), archived)
+    }
+
+    @Test
+    fun mergeCloudPinnedSessionsUnpinsReturnedCleanCloudSessionsAndDropsArchivedPins() {
+        val pinned = RelayStateReducers.mergeCloudPinnedSessions(
+            currentPinnedSessionIds = setOf("stale-local-pin", "local-only-pin", "cloud-pinned", "cloud-archived"),
+            entries = listOf(
+                syncEntry("stale-local-pin"),
+                syncEntry("cloud-pinned", pinnedAt = "2026-05-24T00:00:00Z"),
+                syncEntry(
+                    "cloud-archived",
+                    archivedAt = "2026-05-24T00:00:00Z",
+                    pinnedAt = "2026-05-24T00:00:00Z"
+                )
+            ),
+            archivedSessionIds = setOf("cloud-archived")
+        )
+
+        assertEquals(setOf("local-only-pin", "cloud-pinned"), pinned)
+    }
+
+    @Test
+    fun isTimelineCursorDriftOnlyWhenLocalCursorExceedsRelayNewest() {
+        assertTrue(RelayStateReducers.isTimelineCursorDrift(localLatestCursor = 120, relayNewestCursor = 80))
+        assertFalse(RelayStateReducers.isTimelineCursorDrift(localLatestCursor = 80, relayNewestCursor = 80))
+        assertFalse(RelayStateReducers.isTimelineCursorDrift(localLatestCursor = 0, relayNewestCursor = 80))
+        assertFalse(RelayStateReducers.isTimelineCursorDrift(localLatestCursor = 120, relayNewestCursor = 0))
+    }
+
+    @Test
     fun mergeApprovalUpsertsPendingApprovalAtTopAndKeepsLimit() {
         val existing = listOf(
             approval("old-1"),
@@ -227,5 +267,23 @@ class RelayStateReducersTest {
         summary = summary,
         createdAt = "2026-05-24T00:00:0${cursor.takeLast(1)}Z",
         cursor = cursor
+    )
+
+    private fun syncEntry(
+        id: String,
+        archivedAt: String? = null,
+        pinnedAt: String? = null
+    ): SessionSyncEntry = SessionSyncEntry(
+        session = session(id),
+        snapshotRevision = 1,
+        stageRevision = 1,
+        syncRevision = 1,
+        timelineNewestCursor = 0,
+        timelineOldestCursor = null,
+        dirty = false,
+        dirtyReasons = emptyList(),
+        recommendedAction = "none",
+        archivedAt = archivedAt,
+        pinnedAt = pinnedAt
     )
 }

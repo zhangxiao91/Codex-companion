@@ -4568,3 +4568,90 @@ npm run verify:session-create-routing
 Known notes:
 
 - The current local machine still showed duplicate/stale Host Bridge processes before this fix. After deploying this change, the PC side should be restarted with exactly one Host Bridge process so the new logs can identify the active path cleanly.
+
+## 2026-05-26: Stale archive recovery hotfix
+
+Completed:
+
+- Confirmed the server Relay still had history after the reported "history disappeared" case:
+  - `npm run doctor` reported `sessions=51` and `cached_timeline_events=7561`;
+  - the missing sessions were visible under the Android Archive view, so data was filtered rather than lost.
+- Clarified the intended product behavior:
+  - Archive is for user-driven conversation cleanup;
+  - first login, reconnect, or cloud sync must not silently move normal history into Archive.
+- Fixed Android archive/pin merge semantics:
+  - if `session.sync.index` returns a session with no cloud `archived_at`, Android now removes stale local archive state for that session;
+  - if `session.sync.index` returns no cloud `pinned_at`, Android now removes stale local pin state for that session;
+  - cloud archived sessions still remain archived, and archived sessions cannot remain pinned.
+- Added reducer tests covering stale archive and stale pin cleanup from cloud sync entries.
+
+Verification:
+
+```powershell
+npm run doctor
+npm run verify:session-create-routing
+npm run verify:relay-sync-index
+cd android
+.\gradlew.bat --stop
+.\gradlew.bat :app:assembleDebug --no-daemon --stacktrace
+.\gradlew.bat :app:testDebugUnitTest --no-daemon
+git diff --check
+```
+
+Result:
+
+```text
+Overall: OK (0 fail, 1 warn)
+[verify] Session create routing preserves persistent mobile New Chat and legacy ephemeral clients.
+[verify] Relay sync index and ack persistence verified.
+BUILD SUCCESSFUL
+BUILD SUCCESSFUL
+```
+
+Known notes:
+
+- Android Gradle initially hit Kotlin incremental cache corruption after parallel assemble/test execution. Stopping Gradle and clearing generated Kotlin build cache allowed serial verification to pass.
+
+## 2026-05-26: Timeline latest truncation and cloud archive recovery
+
+Completed:
+
+- Investigated long conversation truncation that lost the newest part of a thread.
+- Root cause:
+  - Host `thread/read` pages use thread-local cursors such as `1..N`;
+  - Relay live/cache events use Relay-assigned monotonic cursors;
+  - Android could keep a local cursor larger than the Relay/session newest cursor, then request `after_cursor=<large value>`;
+  - Host-side pagination would treat that as beyond the end of the thread and return no newer events.
+- Hardened Relay timeline cache paging:
+  - cache page requests with no `after_cursor` / `before_cursor` now return the latest page, not the oldest page;
+  - when Relay cache has no events after a requested cursor, Relay strips `after_cursor` before forwarding to Host, so Host can return the newest page instead of an empty page.
+- Hardened Android timeline sync:
+  - detects cursor drift when local latest cursor is greater than Relay `timeline_newest_cursor`;
+  - clears that session's local timeline/sync marker and requests a fresh latest page;
+  - avoids acknowledging cloud sync while cursor drift is present.
+- Added Archive recovery UI:
+  - Archive sheet now includes `Restore all`, which clears local archived state and sends `session.archive.update archived=false` for every archived session.
+
+Verification:
+
+```powershell
+npm run verify:relay-timeline-cache
+cd android
+.\gradlew.bat --stop
+.\gradlew.bat :app:assembleDebug --no-daemon --stacktrace
+.\gradlew.bat :app:testDebugUnitTest --no-daemon
+git diff --check
+```
+
+Result:
+
+```text
+[verify] Relay timeline cache cursor replay verified.
+BUILD SUCCESSFUL
+BUILD SUCCESSFUL
+```
+
+Known notes:
+
+- This fix touches both server Relay and Android. The server Relay must be updated/restarted before Android can benefit from the cache paging change.
+- If conversations are already archived in Relay cloud state, Android will keep respecting that state until the user restores them. Use Archive -> Restore all to clear accidental bulk archive state.
