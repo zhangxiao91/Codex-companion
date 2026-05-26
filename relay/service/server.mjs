@@ -28,6 +28,8 @@ const maxPromptImageDataUrlBytes = Number.parseInt(process.env.RELAY_MAX_PROMPT_
 const auditLogLimit = Number.parseInt(process.env.RELAY_AUDIT_LOG_LIMIT ?? '500', 10);
 const notificationLogLimit = Number.parseInt(process.env.RELAY_NOTIFICATION_LOG_LIMIT ?? '200', 10);
 const processedMessageTtlMs = Number.parseInt(process.env.RELAY_PROCESSED_MESSAGE_TTL_MS ?? '120000', 10);
+const wsPingIntervalMs = Number.parseInt(process.env.RELAY_WS_PING_INTERVAL_MS ?? '25000', 10);
+const wsStaleTimeoutMs = Number.parseInt(process.env.RELAY_WS_STALE_TIMEOUT_MS ?? '75000', 10);
 const approvalPendingTtlMs = Number.parseInt(process.env.RELAY_APPROVAL_PENDING_TTL_MS ?? String(7 * 24 * 60 * 60 * 1000), 10);
 const approvalResolvedTtlMs = Number.parseInt(process.env.RELAY_APPROVAL_RESOLVED_TTL_MS ?? String(24 * 60 * 60 * 1000), 10);
 const approvalCleanupIntervalMs = Number.parseInt(process.env.RELAY_APPROVAL_CLEANUP_INTERVAL_MS ?? String(60 * 60 * 1000), 10);
@@ -56,6 +58,7 @@ const state = {
   notificationEvents: [],
   deviceTokens: new Map(),
   processedMessageIds: new Map(),
+  connections: new Set(),
   nextTimelineCursor: 1
 };
 
@@ -113,6 +116,7 @@ server.on('upgrade', (request, socket, head) => {
   handleWebSocketUpgrade(request, socket, head, (connection) => {
     connection.role = undefined;
     connection.hostId = undefined;
+    state.connections.add(connection);
 
     connection.on('message', (raw) => handleMessage(connection, raw));
     connection.on('close', () => handleClose(connection));
@@ -125,6 +129,7 @@ server.on('upgrade', (request, socket, head) => {
 
 await loadPersistentState();
 startApprovalCleanupTimer();
+startWebSocketKeepAlive();
 
 server.listen(port, host, () => {
   console.log(`[relay] listening on ws://${host}:${port}`);
@@ -309,6 +314,11 @@ function createHealthPayload(request) {
     cache: {
       timeline_cache_limit: timelineCacheLimit,
       next_timeline_cursor: String(state.nextTimelineCursor)
+    },
+    websocket: {
+      connections: state.connections.size,
+      ping_interval_ms: wsPingIntervalMs,
+      stale_timeout_ms: wsStaleTimeoutMs
     },
     audit: {
       git_audit_log_path: gitAuditLogPath,
@@ -770,6 +780,36 @@ function startApprovalCleanupTimer() {
     return;
   }
   const timer = setInterval(cleanupExpiredApprovals, approvalCleanupIntervalMs);
+  timer.unref?.();
+}
+
+function startWebSocketKeepAlive() {
+  if (!Number.isFinite(wsPingIntervalMs) || wsPingIntervalMs <= 0) {
+    return;
+  }
+  const timer = setInterval(() => {
+    const now = Date.now();
+    for (const connection of state.connections) {
+      if (connection.closed) {
+        state.connections.delete(connection);
+        continue;
+      }
+      const lastPongAt = connection.lastPongAt ?? connection.lastActivityAt ?? now;
+      const lastActivityAt = connection.lastActivityAt ?? lastPongAt;
+      const staleForMs = now - Math.max(lastPongAt, lastActivityAt);
+      if (Number.isFinite(wsStaleTimeoutMs) && wsStaleTimeoutMs > 0 && staleForMs > wsStaleTimeoutMs) {
+        console.log(`[relay] websocket stale for ${staleForMs}ms; closing ${connection.role ?? 'unknown'} ${connection.hostId ?? ''}`.trim());
+        connection.terminate();
+        continue;
+      }
+      try {
+        connection.sendPing();
+      } catch (error) {
+        console.error(`[relay] websocket ping failed: ${error.message}`);
+        connection.terminate();
+      }
+    }
+  }, wsPingIntervalMs);
   timer.unref?.();
 }
 
@@ -1650,6 +1690,7 @@ function maybeResolveApprovalFromTimelineEvent(event) {
 }
 
 function handleClose(connection) {
+  state.connections.delete(connection);
   state.clients.delete(connection);
   state.subscriptions.delete(connection);
 
@@ -2064,8 +2105,7 @@ function requireApprovalField(approval, field) {
 
 function send(connection, message) {
   try {
-    connection.sendText(encodeMessage(message));
-    return true;
+    return connection.sendText(encodeMessage(message)) === true;
   } catch (error) {
     console.error('[relay] failed to send websocket message', error.message);
     handleClose(connection);

@@ -1,21 +1,39 @@
 import { spawn } from 'node:child_process';
 import { createHostIdentityStore } from '../bridge/host-bridge/host-identity-store.mjs';
+import { loadServerRelayConfig } from './server-relay-config.mjs';
+import { loadWindowsBridgeConfig } from './windows-host-bridge-service.mjs';
 
-const relayUrl = process.env.RELAY_PUBLIC_WS_URL
-  ?? process.env.RELAY_URL;
-const token = process.env.RELAY_HOST_TOKEN
-  ?? process.env.RELAY_DEV_TOKEN
-  ?? process.env.DEV_TOKEN;
-const hostId = process.env.HOST_ID ?? 'local-dev-host';
-const hostName = process.env.HOST_NAME ?? 'Local Development Host';
-const adapter = process.env.CODEX_ADAPTER ?? 'app-server';
-const hostIdentityStore = createHostIdentityStore();
+const serverConfig = loadConfigSafely(loadServerRelayConfig);
+const bridgeConfig = loadConfigSafely(loadWindowsBridgeConfig);
+const hostIdentityPath = firstNonBlank(
+  process.env.HOST_IDENTITY_PATH,
+  bridgeConfig.host_identity_path,
+  '.relay/host-identity.json'
+);
+const hostIdentityStore = createHostIdentityStore({ path: hostIdentityPath });
 const storedIdentity = hostIdentityStore.load();
+const relayUrl = firstNonBlank(
+  process.env.RELAY_PUBLIC_WS_URL,
+  process.env.RELAY_URL,
+  bridgeConfig.relay_url,
+  storedIdentity.relay_url,
+  serverConfig.public_ws_url
+);
+const token = firstNonBlank(
+  process.env.RELAY_HOST_TOKEN,
+  process.env.RELAY_DEV_TOKEN,
+  process.env.DEV_TOKEN,
+  bridgeConfig.host_token,
+  serverConfig.host_token
+);
+const hostId = firstNonBlank(process.env.HOST_ID, bridgeConfig.host_id, 'local-dev-host');
+const hostName = firstNonBlank(process.env.HOST_NAME, bridgeConfig.host_name, 'Local Development Host');
+const adapter = firstNonBlank(process.env.CODEX_ADAPTER, bridgeConfig.codex_adapter, 'app-server');
 const storedIdentityMatchesRelay = storedIdentity.relay_url === relayUrl;
 const storedIdentityMatchesRelayOrigin = storedIdentity.relay_url === relayUrl || !storedIdentity.relay_url;
 
 if (!relayUrl) {
-  throw new Error('Set RELAY_URL or RELAY_PUBLIC_WS_URL to the server Relay WebSocket URL.');
+  throw new Error('Set RELAY_URL/RELAY_PUBLIC_WS_URL once, or create .relay/windows-host-bridge-config.json / .relay/server-relay-config.json.');
 }
 
 if (!relayUrl.startsWith('ws://') && !relayUrl.startsWith('wss://')) {
@@ -66,3 +84,21 @@ child.on('exit', (code, signal) => {
 
   process.exit(code ?? 0);
 });
+
+function loadConfigSafely(loadConfig) {
+  try {
+    return loadConfig();
+  } catch {
+    return {};
+  }
+}
+
+function firstNonBlank(...values) {
+  for (const value of values) {
+    const normalized = String(value ?? '').trim();
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return '';
+}

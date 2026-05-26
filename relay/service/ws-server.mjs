@@ -38,6 +38,11 @@ export class WebSocketTextConnection extends EventEmitter {
     this.socket = socket;
     this.buffer = Buffer.alloc(0);
     this.closed = false;
+    this.lastActivityAt = Date.now();
+    this.lastPongAt = Date.now();
+
+    socket.setKeepAlive?.(true, 30000);
+    socket.setNoDelay?.(true);
 
     socket.on('data', (chunk) => this.acceptData(chunk));
     socket.on('close', () => this.close());
@@ -55,12 +60,26 @@ export class WebSocketTextConnection extends EventEmitter {
 
   sendText(text) {
     if (this.closed) {
-      return;
+      return false;
     }
 
     const payload = Buffer.from(text, 'utf8');
     const header = encodeHeader(0x1, payload.length);
     this.socket.write(Buffer.concat([header, payload]));
+    return true;
+  }
+
+  sendPing() {
+    this.sendControlFrame(0x9, Buffer.from(String(Date.now())));
+  }
+
+  terminate() {
+    if (this.closed) {
+      return;
+    }
+
+    this.socket.destroy();
+    this.close();
   }
 
   close() {
@@ -107,6 +126,7 @@ export class WebSocketTextConnection extends EventEmitter {
 
       const payload = Buffer.from(this.buffer.subarray(offset, offset + payloadLength));
       this.buffer = this.buffer.subarray(frameLength);
+      this.lastActivityAt = Date.now();
 
       if (masked) {
         for (let index = 0; index < payload.length; index += 1) {
@@ -125,6 +145,11 @@ export class WebSocketTextConnection extends EventEmitter {
         continue;
       }
 
+      if (opcode === 0xA) {
+        this.lastPongAt = Date.now();
+        continue;
+      }
+
       if (opcode === 0x1) {
         this.emit('message', payload.toString('utf8'));
       }
@@ -133,10 +158,11 @@ export class WebSocketTextConnection extends EventEmitter {
 
   sendControlFrame(opcode, payload) {
     if (payload.length > 125 || this.closed) {
-      return;
+      return false;
     }
 
     this.socket.write(Buffer.concat([Buffer.from([0x80 | opcode, payload.length]), payload]));
+    return true;
   }
 }
 
@@ -162,4 +188,3 @@ function encodeHeader(opcode, payloadLength) {
   header.writeUInt32BE(payloadLength >>> 0, 6);
   return header;
 }
-

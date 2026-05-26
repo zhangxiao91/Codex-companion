@@ -3990,3 +3990,167 @@ Result:
 Known notes:
 
 - The new failure verifier covers the stable offline-host delivery failure path. The lower-level WebSocket send-throw branch now shares the same state ordering, so it also cannot persist a resolved approval before send succeeds.
+
+## 2026-05-25: Timeline sync timeout and host error recovery
+
+Completed:
+
+- Fixed a timeline sync stall where Relay could acknowledge a `session.timeline.request`, route it to Host Bridge, and then receive no timeline response if the Host Bridge failed while reading Codex history.
+- Host Bridge now catches timeline read failures and returns a `timeline.page` with `source: "host_error"` and an error detail, so Relay/Android receive a terminal response instead of waiting indefinitely.
+- Android now clears session timeline in-flight markers when it receives `host_error` pages and surfaces a concise sync failure message.
+- Android now has a 20 second timeout for background session timeline sync. If a session receives no timeline event/page, it clears `pendingTimelineSyncIds` and releases the sync banner instead of getting stuck forever.
+- Android long-history pagination also has a 20 second timeout so "load earlier" cannot remain spinning indefinitely.
+- Added `npm run verify:host-timeline-error-page`, which forces the mock Host Bridge timeline reader to fail and verifies that the mobile-side client receives a `host_error` timeline page.
+
+Verification:
+
+```powershell
+node --check bridge/host-bridge/index.mjs
+node --check bridge/host-bridge/codex-adapter.mjs
+node --check tools/verify-host-timeline-error-page.mjs
+npm run verify:host-timeline-error-page
+npm run verify:relay-timeline-cache
+npm run verify:host-timeline-pagination
+npm run verify:state-sync-regressions
+cd android
+.\gradlew.bat clean --no-daemon
+.\gradlew.bat :app:testDebugUnitTest --no-daemon
+.\gradlew.bat :app:assembleDebug --no-daemon
+```
+
+Result:
+
+```text
+[verify] Host timeline failure returns host_error page.
+[verify] Relay timeline cache cursor replay verified.
+[verify] Host timeline cursor pagination verified.
+[verify] State sync stale timeline and restored stage regressions verified.
+BUILD SUCCESSFUL
+BUILD SUCCESSFUL
+BUILD SUCCESSFUL
+```
+
+Known notes:
+
+- The first Android verification attempt ran unit tests and assemble in parallel, which corrupted/locked Kotlin incremental build cache files. `.\gradlew.bat --stop` plus `.\gradlew.bat clean --no-daemon` fixed the local build cache, and serial verification passed.
+- If long-run testing still sees timeouts after this change, the next likely layer is Codex App Server `thread/read` latency itself; the app should now recover visibly instead of getting stuck.
+
+## 2026-05-26: WebSocket keepalive hardening
+
+Completed:
+
+- Relay now enables TCP keepalive and `TCP_NODELAY` on upgraded WebSocket sockets.
+- Relay now sends WebSocket ping control frames to all active WebSocket connections.
+- Relay tracks pong/activity timestamps and terminates stale half-open connections after a configurable timeout, allowing Android and Host Bridge reconnect paths to recover instead of staying in a ghost-online state.
+- Added server configuration knobs:
+  - `RELAY_WS_PING_INTERVAL_MS`, default `25000`;
+  - `RELAY_WS_STALE_TIMEOUT_MS`, default `75000`.
+- `/health` now exposes active WebSocket connection count plus keepalive timing.
+- Host Bridge heartbeat now treats failed heartbeat/status sends as a connection failure and immediately schedules reconnect.
+- Host Bridge WebSocket sends are now wrapped in a try/catch so send exceptions trigger reconnect rather than leaving the process apparently connected.
+- Added `npm run verify:relay-ws-keepalive`, using a short ping interval to verify a normal WebSocket client survives Relay keepalive pings.
+
+Verification:
+
+```powershell
+node --check relay/service/ws-server.mjs
+node --check relay/service/server.mjs
+node --check bridge/host-bridge/index.mjs
+node --check tools/verify-relay-ws-keepalive.mjs
+npm run verify:relay-ws-keepalive
+npm run verify:server-bridge-start
+npm run verify:host-snapshot
+npm run verify:relay-health
+```
+
+Result:
+
+```text
+[verify] Relay WebSocket keepalive verified.
+[verify] Server Host Bridge startup helper verified.
+[verify] Host snapshot routing verified.
+[verify] Relay health endpoint verified.
+```
+
+Known notes:
+
+- This improves detection/recovery for dead TCP/WebSocket connections. It does not make Android immune to OS background process suspension; true background reliability still needs a foreground service or push-based wakeup.
+- If a reverse proxy is introduced later, its WebSocket idle timeout should be greater than `RELAY_WS_PING_INTERVAL_MS` and preferably greater than `RELAY_WS_STALE_TIMEOUT_MS`.
+
+## 2026-05-26: Connection shortcut simplification
+
+Completed:
+
+- Added shorter npm aliases for fast iteration:
+  - `npm run local` for local PC dev pairing;
+  - `npm run server:up` for saved server Relay startup;
+  - `npm run connect` for PC Host Bridge startup;
+  - `npm run pair` for showing the Android server pairing QR/code.
+- `tools/server-host-bridge-start.mjs` now reads saved configuration in this order:
+  - explicit environment variables;
+  - `.relay/windows-host-bridge-config.json`;
+  - saved host identity;
+  - `.relay/server-relay-config.json`.
+- `tools/server-pairing-code.mjs` now reads `.relay/server-relay-config.json`, so pairing QR/code can be regenerated without retyping Relay URL or pairing token.
+- README now documents the shorter daily flow:
+  - server: `npm run server:up`;
+  - PC: `npm run connect`;
+  - Android: `npm run pair` only when pairing changes.
+- Added `npm run verify:connection-shortcuts` to prove config-only startup works without `RELAY_URL` / `RELAY_HOST_TOKEN` environment variables.
+
+Verification:
+
+```powershell
+node --check tools/server-host-bridge-start.mjs
+node --check tools/server-pairing-code.mjs
+node --check tools/verify-connection-shortcuts.mjs
+npm run verify:connection-shortcuts
+```
+
+Result:
+
+```text
+[verify] Connection shortcut config fallback verified.
+```
+
+Known notes:
+
+- These are command shortcuts, not a process manager. Server Relay still needs screen/systemd/pm2 or equivalent for long-running server operation.
+- Windows Host Bridge auto-start remains available through `npm run bridge:windows:install`.
+
+## 2026-05-26: Connection doctor
+
+Completed:
+
+- Added `npm run doctor` and `npm run status` as a read-only connection detector.
+- The doctor checks:
+  - saved server Relay config and Windows Host Bridge config;
+  - saved host device trust;
+  - Relay `/health` reachability and detailed counts;
+  - configured health URL plus a fallback health URL derived from the active WebSocket URL;
+  - WebSocket upgrade reachability;
+  - online host count;
+  - pairing-code generation readiness;
+  - Windows scheduled-task or startup-launcher presence;
+  - recent Host Bridge log health.
+- Added `npm run verify:doctor`, which starts a temporary Relay plus mock Host Bridge and verifies the detector reports the host online and WebSocket reachable.
+- README now documents `npm run doctor` in the daily server / PC / Android workflow.
+
+Verification:
+
+```powershell
+node --check tools/connection-doctor.mjs
+node --check tools/verify-connection-doctor.mjs
+npm run verify:doctor
+```
+
+Result:
+
+```text
+[verify] Connection doctor verified.
+```
+
+Known notes:
+
+- The detector is diagnostic only. It does not restart Relay or Host Bridge by itself.
+- Missing Windows auto-start is reported as a warning, because manual `npm run connect` remains valid during development.

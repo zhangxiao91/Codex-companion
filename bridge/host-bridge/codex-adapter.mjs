@@ -165,6 +165,9 @@ export class MockCodexAdapter {
   }
 
   async readTimeline(sessionId, options = {}) {
+    if (process.env.MOCK_TIMELINE_FAIL === '1') {
+      throw new Error(`Mock timeline failure for ${sessionId}`);
+    }
     if (sessionId !== this.session.session_id) {
       throw new Error(`Unknown mock session: ${sessionId}`);
     }

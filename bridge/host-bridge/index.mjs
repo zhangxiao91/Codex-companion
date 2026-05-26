@@ -154,17 +154,23 @@ async function handleMessage(currentSocket, event) {
       console.log(`[bridge] received timeline request for ${sessionId}`);
 
       if (typeof adapter.readTimeline !== 'function') {
+        sendTimelineErrorPage(message, 'Host adapter does not support timeline reads.');
         return;
       }
 
-      const responses = await adapter.readTimeline(sessionId, {
-        afterCursor: message.payload.after_cursor,
-        beforeCursor: message.payload.before_cursor,
-        limit: message.payload.limit,
-        page: message.payload.page === true
-      });
-      for (const response of responses) {
-        sendMessage(withAuth(response));
+      try {
+        const responses = await adapter.readTimeline(sessionId, {
+          afterCursor: message.payload.after_cursor,
+          beforeCursor: message.payload.before_cursor,
+          limit: message.payload.limit,
+          page: message.payload.page === true
+        });
+        for (const response of responses) {
+          sendMessage(withAuth(response));
+        }
+      } catch (error) {
+        console.error(`[bridge] timeline request failed for ${sessionId}: ${error.message}`);
+        sendTimelineErrorPage(message, error.message);
       }
       return;
     }
@@ -278,6 +284,21 @@ function handleClose(currentSocket, event) {
   scheduleReconnect();
 }
 
+function sendTimelineErrorPage(message, detail) {
+  send(MessageType.TimelinePage, {
+    session_id: message.payload?.session_id ?? '',
+    events: [],
+    before_cursor: message.payload?.before_cursor ?? null,
+    after_cursor: message.payload?.after_cursor ?? null,
+    oldest_cursor: null,
+    newest_cursor: null,
+    has_more_before: false,
+    has_more_after: false,
+    source: 'host_error',
+    error: detail
+  });
+}
+
 function handleError(currentSocket, event) {
   if (currentSocket !== socket) {
     return;
@@ -291,11 +312,15 @@ function handleError(currentSocket, event) {
 function startHeartbeat() {
   stopHeartbeat();
   heartbeatTimer = setInterval(() => {
-    send(MessageType.HostHeartbeat, {
+    const heartbeatSent = send(MessageType.HostHeartbeat, {
       host_id: hostId,
       bridge_version: bridgeVersion
     });
-    send(MessageType.PowerStatus, powerController.status());
+    const statusSent = send(MessageType.PowerStatus, powerController.status());
+    if (!heartbeatSent || !statusSent) {
+      console.error('[bridge] heartbeat send failed; reconnecting');
+      forceReconnect();
+    }
   }, 5000);
 }
 
@@ -327,6 +352,18 @@ function scheduleReconnect() {
   }, delayMs);
 }
 
+function forceReconnect() {
+  stopHeartbeat();
+  const currentSocket = socket;
+  socket = undefined;
+  try {
+    currentSocket?.close();
+  } catch {
+    // Ignore close failures; reconnect scheduling is the recovery path.
+  }
+  scheduleReconnect();
+}
+
 function clearReconnectTimer() {
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
@@ -343,8 +380,14 @@ function sendMessage(message) {
     return false;
   }
 
-  socket.send(encodeMessage(message));
-  return true;
+  try {
+    socket.send(encodeMessage(message));
+    return true;
+  } catch (error) {
+    console.error(`[bridge] websocket send failed: ${error.message}`);
+    forceReconnect();
+    return false;
+  }
 }
 
 function createRelayMessage(type, payload) {

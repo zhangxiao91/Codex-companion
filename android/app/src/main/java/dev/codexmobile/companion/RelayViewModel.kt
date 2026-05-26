@@ -22,6 +22,8 @@ class RelayViewModel(
     private val confirmedSessionIds = mutableSetOf<String>()
     private val pendingTimelineSyncIds = cacheStore.pendingTimelineSyncIds().toMutableSet()
     private val timelineSyncInFlightIds = mutableSetOf<String>()
+    private val timelineSyncTimeoutJobs = mutableMapOf<String, Job>()
+    private var earlierTimelineTimeoutJob: Job? = null
     private val snapshotSyncedSessionIds = mutableSetOf<String>()
     private val _uiState = MutableStateFlow(
         RelayUiState(
@@ -375,6 +377,7 @@ class RelayViewModel(
         )
         if (sent) {
             _uiState.update { it.copy(timelineLoadingEarlier = true, lastError = null) }
+            scheduleEarlierTimelineTimeout(sessionId)
         }
     }
 
@@ -622,6 +625,7 @@ class RelayViewModel(
     override fun onTimelineEvent(event: TimelineItem) {
         pendingTimelineSyncIds.remove(event.sessionId)
         timelineSyncInFlightIds.remove(event.sessionId)
+        cancelTimelineSyncTimeout(event.sessionId)
         persistSessionSyncMarkers()
         _uiState.update { state ->
             val timeline = mergeTimelineEvents(state.timeline, listOf(event))
@@ -638,6 +642,7 @@ class RelayViewModel(
     override fun onTimelinePage(sessionId: String, events: List<TimelineItem>, hasMoreBefore: Boolean, source: String) {
         pendingTimelineSyncIds.remove(sessionId)
         timelineSyncInFlightIds.remove(sessionId)
+        cancelTimelineSyncTimeout(sessionId)
         persistSessionSyncMarkers()
         _uiState.update { state ->
             val timeline = mergeTimelineEvents(state.timeline, events)
@@ -647,16 +652,24 @@ class RelayViewModel(
             } else {
                 state.timelineHasMoreEarlier + (sessionId to hasMoreBefore)
             }
+            if (!waitingForHostPage) {
+                cancelEarlierTimelineTimeout()
+            }
             state.copy(
                 timeline = timeline,
                 timelineLoadingEarlier = waitingForHostPage,
                 timelineHasMoreEarlier = nextHasMoreEarlier,
                 pendingTimelineSyncIds = pendingTimelineSyncIds.toSet(),
-                lastHealthCheck = if (events.isEmpty()) "No earlier timeline events cached" else "Loaded ${events.size} earlier timeline event(s)",
-                lastError = null
+                lastHealthCheck = when {
+                    source == "host_error" -> "Timeline sync failed"
+                    events.isEmpty() -> "No earlier timeline events cached"
+                    else -> "Loaded ${events.size} earlier timeline event(s)"
+                },
+                lastError = if (source == "host_error") "Host timeline sync failed for $sessionId" else null
             )
         }
         persistCachedState()
+        updateSyncState()
     }
 
     override fun onNotificationEvent(notification: NotificationEvent) {
@@ -695,6 +708,9 @@ class RelayViewModel(
     }
 
     override fun onError(message: String) {
+        if (_uiState.value.timelineLoadingEarlier) {
+            cancelEarlierTimelineTimeout()
+        }
         _uiState.update { it.copy(timelineLoadingEarlier = false, syncState = buildSyncState(active = false), lastError = message) }
     }
 
@@ -704,6 +720,9 @@ class RelayViewModel(
 
     override fun onCleared() {
         reconnectJob?.cancel()
+        timelineSyncTimeoutJobs.values.forEach { it.cancel() }
+        timelineSyncTimeoutJobs.clear()
+        cancelEarlierTimelineTimeout()
         relayClient.close(clearPendingAcks = true)
         super.onCleared()
     }
@@ -715,6 +734,7 @@ class RelayViewModel(
         const val TIMELINE_PAGE_SIZE = 80
         const val MAX_RECONNECT_DELAY_MS = 30_000L
         const val FOREGROUND_REFRESH_INTERVAL_MS = 30_000L
+        const val TIMELINE_SYNC_TIMEOUT_MS = 20_000L
 
         fun isValidRelayUrl(url: String): Boolean =
             url.startsWith("ws://") || url.startsWith("wss://")
@@ -763,10 +783,12 @@ class RelayViewModel(
         timelineSyncInFlightIds.add(sessionId)
         persistSessionSyncMarkers()
         updateSyncState()
+        scheduleTimelineSyncTimeout(sessionId)
         val sent = relayClient.requestTimeline(sessionId, latestCursor)
         if (!sent) {
             pendingTimelineSyncIds.remove(sessionId)
             timelineSyncInFlightIds.remove(sessionId)
+            cancelTimelineSyncTimeout(sessionId)
             persistSessionSyncMarkers()
             updateSyncState()
         }
@@ -786,6 +808,9 @@ class RelayViewModel(
         confirmedSessionIds.clear()
         pendingTimelineSyncIds.clear()
         timelineSyncInFlightIds.clear()
+        timelineSyncTimeoutJobs.values.forEach { it.cancel() }
+        timelineSyncTimeoutJobs.clear()
+        cancelEarlierTimelineTimeout()
         snapshotSyncedSessionIds.clear()
         persistSessionSyncMarkers()
     }
@@ -900,6 +925,53 @@ class RelayViewModel(
 
     private fun mergeTimelineEvents(current: List<TimelineItem>, incoming: List<TimelineItem>): List<TimelineItem> {
         return RelayStateReducers.mergeTimelineEvents(current, incoming, MAX_TIMELINE_ITEMS_PER_SESSION)
+    }
+
+    private fun scheduleTimelineSyncTimeout(sessionId: String) {
+        cancelTimelineSyncTimeout(sessionId)
+        timelineSyncTimeoutJobs[sessionId] = viewModelScope.launch {
+            delay(TIMELINE_SYNC_TIMEOUT_MS)
+            if (sessionId !in timelineSyncInFlightIds) {
+                return@launch
+            }
+            pendingTimelineSyncIds.remove(sessionId)
+            timelineSyncInFlightIds.remove(sessionId)
+            timelineSyncTimeoutJobs.remove(sessionId)
+            persistSessionSyncMarkers()
+            _uiState.update {
+                it.copy(
+                    pendingTimelineSyncIds = pendingTimelineSyncIds.toSet(),
+                    lastError = "Timeline sync timed out for $sessionId"
+                )
+            }
+            updateSyncState()
+        }
+    }
+
+    private fun cancelTimelineSyncTimeout(sessionId: String) {
+        timelineSyncTimeoutJobs.remove(sessionId)?.cancel()
+    }
+
+    private fun scheduleEarlierTimelineTimeout(sessionId: String) {
+        cancelEarlierTimelineTimeout()
+        earlierTimelineTimeoutJob = viewModelScope.launch {
+            delay(TIMELINE_SYNC_TIMEOUT_MS)
+            if (!_uiState.value.timelineLoadingEarlier) {
+                return@launch
+            }
+            _uiState.update {
+                it.copy(
+                    timelineLoadingEarlier = false,
+                    lastError = "Loading earlier history timed out for $sessionId"
+                )
+            }
+            updateSyncState()
+        }
+    }
+
+    private fun cancelEarlierTimelineTimeout() {
+        earlierTimelineTimeoutJob?.cancel()
+        earlierTimelineTimeoutJob = null
     }
 
     private fun requestGit(

@@ -37,6 +37,12 @@ The system now has three main pieces:
 Use this when the host bridge runs on your PC:
 
 ```powershell
+npm run local
+```
+
+`npm run dev:pair` is kept as the explicit alias.
+
+```powershell
 npm run dev:pair
 ```
 
@@ -51,22 +57,52 @@ Use this when Android should connect over the internet or campus/public network:
 
 ```powershell
 npm run server:relay:init
-npm run server:relay
+npm run server:up
 ```
 
 Then start a host bridge from the PC:
 
 ```powershell
-$env:RELAY_URL='wss://relay.example.com'
-$env:RELAY_HOST_TOKEN='choose-a-long-random-token'
-npm run server:bridge
+npm run connect
 ```
+
+`npm run connect` reads saved server / Windows bridge config and saved host device trust, so after the first successful trust setup you usually do not need to pass `RELAY_URL` or `RELAY_HOST_TOKEN` again. `npm run server:bridge` remains the explicit alias.
 
 For one-step Windows host startup:
 
 ```powershell
 npm run bridge:windows:install
 npm run bridge:windows:start
+```
+
+To show the Android pairing QR/code again from saved server config:
+
+```powershell
+npm run pair
+```
+
+To diagnose the current connection without changing state:
+
+```powershell
+npm run doctor
+```
+
+The doctor checks saved config, Relay `/health`, WebSocket upgrade, online host count, pairing-code readiness, Windows auto-start, and the recent Host Bridge log. `npm run status` is the same command with a shorter name.
+
+Long-running workflow during fast iteration:
+
+```powershell
+# server
+npm run server:up
+
+# PC
+npm run connect
+
+# if something looks wrong
+npm run doctor
+
+# Android
+# scan or paste the code from npm run pair only when pairing changes
 ```
 
 ## Pairing
