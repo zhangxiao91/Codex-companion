@@ -4868,3 +4868,47 @@ Result:
 ```text
 [verify] Server Relay persisted config verified.
 ```
+
+## 2026-05-29: One-command server and bridge update scripts
+
+Completed:
+
+- Added shared update helpers in `tools/update-common.mjs`.
+- Added `npm run server:update` via `tools/server-update.mjs`.
+- Added `npm run bridge:update` via `tools/bridge-update.mjs`.
+- Server update flow:
+  - refuses dirty worktrees by default;
+  - `git fetch --prune`;
+  - `git pull --ff-only`;
+  - `npm ci`;
+  - lightweight Node syntax checks;
+  - restarts Linux server Relay through a `screen` session.
+- Windows bridge update flow:
+  - refuses dirty worktrees by default;
+  - `git fetch --prune`;
+  - `git pull --ff-only`;
+  - `npm ci`;
+  - lightweight Node syntax checks;
+  - stops and starts the configured Windows Host Bridge scheduled task.
+- Both scripts support:
+  - `--dry-run`;
+  - `--skip-restart`;
+  - `--allow-dirty`.
+- README now documents both update commands and server environment knobs.
+
+Verification:
+
+```powershell
+node --check tools/update-common.mjs
+node --check tools/server-update.mjs
+node --check tools/bridge-update.mjs
+npm run server:update -- --dry-run
+npm run bridge:update -- --dry-run
+```
+
+Result:
+
+```text
+server:update dry-run completed.
+bridge:update dry-run completed.
+```

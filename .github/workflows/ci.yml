@@ -39,6 +39,9 @@ jobs:
           node --check bridge/host-bridge/codex-adapter.mjs
           node --check packages/protocol/index.mjs
           node --check packages/protocol/version.mjs
+          node --check tools/update-common.mjs
+          node --check tools/server-update.mjs
+          node --check tools/bridge-update.mjs
 
       - name: Verify relay health
         timeout-minutes: 4

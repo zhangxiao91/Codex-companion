@@ -108,6 +108,62 @@ npm run doctor
 # scan or paste the code from npm run pair only when pairing changes
 ```
 
+### One-command updates
+
+Server Relay:
+
+```bash
+npm run server:update
+```
+
+Default behavior:
+
+- refuses to run if the Git worktree has local changes
+- runs `git fetch --prune`
+- runs `git pull --ff-only`
+- runs `npm ci`
+- runs lightweight Node syntax checks
+- restarts Relay in a `screen` session named `codex-companion-relay`
+
+Useful options:
+
+```bash
+npm run server:update -- --dry-run
+npm run server:update -- --skip-restart
+npm run server:update -- --allow-dirty
+```
+
+Server environment knobs:
+
+```bash
+export CMC_SERVER_RELAY_SCREEN_NAME=codex-companion-relay
+export CMC_SERVER_RELAY_LOG_PATH=.relay/server-relay-screen.log
+```
+
+Windows Host Bridge:
+
+```powershell
+npm run bridge:update
+```
+
+Default behavior:
+
+- refuses to run if the Git worktree has local changes
+- runs `git fetch --prune`
+- runs `git pull --ff-only`
+- runs `npm ci`
+- runs lightweight Node syntax checks
+- stops the Windows scheduled task if it is running
+- starts the Windows Host Bridge scheduled task again
+
+Useful options:
+
+```powershell
+npm run bridge:update -- --dry-run
+npm run bridge:update -- --skip-restart
+npm run bridge:update -- --allow-dirty
+```
+
 ## Pairing
 
 The current pairing flow supports:
