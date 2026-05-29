@@ -4852,3 +4852,19 @@ Second follow-up after the 35 minute run also timed out:
   - `gradle/actions/setup-gradle@v6`;
   - `actions/upload-artifact@v6`.
 - Removed the third-party Android setup action and now calls the hosted runner `sdkmanager` directly through `$ANDROID_HOME`.
+
+Third follow-up after `Verify server relay config` timed out:
+
+- Fixed `tools/server-relay-start.mjs` so SIGTERM/SIGINT shuts down the child Relay process before the wrapper exits.
+- Updated `tools/verify-server-relay-config.mjs` to disable pairing QR/browser output and isolate identity/audit paths in the temp directory.
+- Local verification:
+
+```powershell
+npm run verify:server-relay-config
+```
+
+Result:
+
+```text
+[verify] Server Relay persisted config verified.
+```

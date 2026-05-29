@@ -89,7 +89,30 @@ const child = spawn('node', ['relay/service/server.mjs'], {
   stdio: 'inherit'
 });
 
+let shuttingDown = false;
+
+function shutdown(signal) {
+  if (shuttingDown) {
+    return;
+  }
+  shuttingDown = true;
+  if (child && !child.killed) {
+    child.kill(signal);
+  }
+  setTimeout(() => {
+    process.exit(0);
+  }, 1000).unref();
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
 child.on('exit', (code, signal) => {
+  if (shuttingDown) {
+    process.exit(0);
+    return;
+  }
+
   if (signal) {
     process.kill(process.pid, signal);
     return;

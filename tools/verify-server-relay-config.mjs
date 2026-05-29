@@ -38,7 +38,11 @@ try {
 
   const relay = spawnProcess('relay', 'node', ['tools/server-relay-start.mjs'], {
     ...process.env,
-    CMC_SERVER_RELAY_CONFIG: configPath
+    CMC_SERVER_RELAY_CONFIG: configPath,
+    CMC_PAIRING_QR: 'none',
+    CMC_PAIRING_OPEN: '0',
+    RELAY_IDENTITY_STORE_PATH: join(tempDir, 'identity-store.json'),
+    RELAY_GIT_AUDIT_LOG_PATH: join(tempDir, 'git-audit.ndjson')
   });
   children.push(relay);
   await waitForOutput(relay, '[relay] listening', 5000);
@@ -86,7 +90,7 @@ function spawnProcess(label, command, args, env) {
 
 function stopProcess(child) {
   if (child && !child.killed) {
-    child.kill();
+    child.kill('SIGTERM');
   }
 }
 
