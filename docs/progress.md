@@ -4831,3 +4831,12 @@ Notes:
 - This is continuous delivery only. CI does not restart the server Relay, Windows Host Bridge, or install APKs onto real devices yet.
 - ADB was available but no device was listed, so the newly built debug APK was not installed automatically.
 - Next deployment step should be update scripts that consume CI/release artifacts and restart server/bridge only after checking active session state.
+
+Follow-up after first GitHub Actions run:
+
+- The first `Node verification` job exceeded the initial 15 minute timeout before completing.
+- GitHub Actions also warned that JavaScript actions were running on the deprecated Node 20 runtime.
+- Updated `.github/workflows/ci.yml`:
+  - global `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`;
+  - Node verification timeout increased to 35 minutes;
+  - Android debug build timeout increased to 45 minutes for cold Gradle/SDK runs.
