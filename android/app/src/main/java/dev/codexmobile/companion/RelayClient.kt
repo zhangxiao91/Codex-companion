@@ -789,6 +789,7 @@ class RelayClient(
         val websocket = json.optJSONObject("websocket")
         val listen = json.optJSONObject("listen")
         val storage = json.optJSONObject("storage")
+        val version = json.optJSONObject("version")
         return ConnectionDiagnostics(
             healthUrl = healthUrl,
             checkedAt = json.optString("checked_at", ""),
@@ -806,7 +807,9 @@ class RelayClient(
             publicWebsocketUrl = listen?.optString("public_websocket_url", "")?.takeIf { it.isNotBlank() },
             publicHealthUrl = listen?.optString("public_health_url", "")?.takeIf { it.isNotBlank() },
             storageKind = storage?.optString("kind", "")?.takeIf { it.isNotBlank() },
-            storagePath = storage?.optString("path", "")?.takeIf { it.isNotBlank() }
+            storagePath = storage?.optString("path", "")?.takeIf { it.isNotBlank() },
+            relayVersion = version?.optString("relay", "")?.takeIf { it.isNotBlank() },
+            relayProtocolVersion = version?.takeIf { it.has("protocol") && !it.isNull("protocol") }?.optString("protocol")
         )
     }
 

@@ -4944,3 +4944,43 @@ Result:
 artifact:apk dry-run completed.
 package json ok.
 ```
+
+## 2026-05-30: Android tri-side version visibility and update advice
+
+Completed:
+
+- Android now parses Relay `/health.version` into `ConnectionDiagnostics`.
+- Android host snapshots already carry Host Bridge `bridge_version` and `protocol_version`; the diagnostics UI now surfaces them together.
+- Added Android app version display using package manager metadata.
+- Added a `Versions` section in the connection diagnostics dialog:
+  - Android app version;
+  - Android protocol version;
+  - Relay version/protocol;
+  - Host Bridge version/protocol for recent hosts.
+- Added visible "Suggested update" warning when:
+  - Relay does not report version/protocol metadata;
+  - Android protocol differs from Relay protocol;
+  - an online Host Bridge lacks version/protocol metadata;
+  - Host Bridge protocol differs from Relay protocol;
+  - Host Bridge package version differs from Relay package version.
+- The compact mobile diagnostics card also shows the update suggestion when a mismatch is detected.
+
+Verification:
+
+```powershell
+cd android
+.\gradlew.bat :app:assembleDebug --no-daemon --stacktrace
+.\gradlew.bat :app:testDebugUnitTest --no-daemon --stacktrace
+```
+
+Result:
+
+```text
+BUILD SUCCESSFUL
+BUILD SUCCESSFUL
+```
+
+Notes:
+
+- The Android `versionName` is displayed but not compared directly to the Node package version because Android currently uses a separate app version line.
+- ADB was available but no device was listed, so the debug APK was not installed automatically.

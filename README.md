@@ -318,7 +318,8 @@ Node/Relay/Bridge version metadata:
 
 - Relay `/health` now includes `version.relay` and `version.protocol`
 - Host Bridge registers and heartbeats with `bridge_version` and `protocol_version`
-- Android host rows can show bridge and protocol version metadata
+- Android diagnostics show Android, Relay, and Host Bridge version/protocol metadata
+- Android shows a suggested update warning when Relay/Host versions or protocol versions are out of sync
 
 ## Notes
 

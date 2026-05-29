@@ -306,7 +306,9 @@ data class ConnectionDiagnostics(
     val publicWebsocketUrl: String? = null,
     val publicHealthUrl: String? = null,
     val storageKind: String? = null,
-    val storagePath: String? = null
+    val storagePath: String? = null,
+    val relayVersion: String? = null,
+    val relayProtocolVersion: String? = null
 )
 
 data class RelayRequestState(

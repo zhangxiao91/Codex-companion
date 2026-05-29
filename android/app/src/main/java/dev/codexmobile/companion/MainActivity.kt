@@ -3,6 +3,7 @@ package dev.codexmobile.companion
 import android.os.Bundle
 import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -2461,6 +2462,9 @@ private fun ConnectionToolCard(uiState: RelayUiState, onReconnect: () -> Unit, o
 @Composable
 private fun ConnectionDiagnosticsCompact(uiState: RelayUiState, onHealthCheck: () -> Unit) {
     val diagnostics = uiState.connectionDiagnostics
+    val context = LocalContext.current
+    val appVersion = remember(context) { appVersionLabel(context) }
+    val updateAdvice = versionUpdateAdvice(uiState, appVersion)
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = ElevatedBlack,
@@ -2489,6 +2493,9 @@ private fun ConnectionDiagnosticsCompact(uiState: RelayUiState, onHealthCheck: (
                 }
             }
             DiagnosticMiniGrid(uiState)
+            if (updateAdvice != null) {
+                InlineNotice(updateAdvice, NoticeTone.Warning)
+            }
         }
     }
 }
@@ -2499,6 +2506,9 @@ private fun ConnectionDiagnosticsDialog(
     onDismiss: () -> Unit,
     onHealthCheck: () -> Unit
 ) {
+    val context = LocalContext.current
+    val appVersion = remember(context) { appVersionLabel(context) }
+    val updateAdvice = versionUpdateAdvice(uiState, appVersion)
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
@@ -2523,6 +2533,37 @@ private fun ConnectionDiagnosticsDialog(
                 }
 
                 DiagnosticMiniGrid(uiState)
+                if (updateAdvice != null) {
+                    InlineNotice(updateAdvice, NoticeTone.Warning)
+                }
+                DiagnosticSection("Versions") {
+                    DiagnosticRow("Android app", appVersion)
+                    DiagnosticRow("Android protocol", ANDROID_PROTOCOL_VERSION)
+                    DiagnosticRow(
+                        "Relay",
+                        listOf(
+                            uiState.connectionDiagnostics?.relayVersion?.let { "v$it" },
+                            uiState.connectionDiagnostics?.relayProtocolVersion?.let { "protocol $it" }
+                        ).filterNotNull().joinToString(" / ").ifBlank { "unknown" }
+                    )
+                    val hostVersions = uiState.hosts
+                        .sortedWith(compareByDescending<HostNode> { it.status == "online" }.thenBy { it.displayName.lowercase() })
+                        .take(4)
+                    if (hostVersions.isEmpty()) {
+                        DiagnosticRow("Host Bridge", "no hosts")
+                    } else {
+                        hostVersions.forEach { host ->
+                            DiagnosticRow(
+                                host.displayName,
+                                listOf(
+                                    host.status,
+                                    host.bridgeVersion.takeIf { it.isNotBlank() }?.let { "v$it" },
+                                    host.protocolVersion.takeIf { it.isNotBlank() }?.let { "protocol $it" }
+                                ).filterNotNull().joinToString(" / ")
+                            )
+                        }
+                    }
+                }
                 DiagnosticSection("App state") {
                     DiagnosticRow("WebSocket", uiState.connectionStatus)
                     DiagnosticRow("Device paired", if (uiState.deviceToken.isNotBlank()) "yes (${uiState.deviceId.take(8)})" else "no")
@@ -4388,6 +4429,57 @@ private fun statusTone(status: String): NoticeTone {
     }
 }
 
+private fun appVersionLabel(context: Context): String {
+    val packageInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        context.packageManager.getPackageInfo(context.packageName, PackageManager.PackageInfoFlags.of(0))
+    } else {
+        @Suppress("DEPRECATION")
+        context.packageManager.getPackageInfo(context.packageName, 0)
+    }
+    val versionName = packageInfo.versionName ?: "unknown"
+    val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        packageInfo.longVersionCode
+    } else {
+        @Suppress("DEPRECATION")
+        packageInfo.versionCode.toLong()
+    }
+    return "v$versionName ($versionCode)"
+}
+
+private fun versionUpdateAdvice(uiState: RelayUiState, appVersion: String): String? {
+    val diagnostics = uiState.connectionDiagnostics ?: return null
+    val relayVersion = diagnostics.relayVersion.orEmpty()
+    val relayProtocol = diagnostics.relayProtocolVersion.orEmpty()
+    val onlineHosts = uiState.hosts.filter { it.status == "online" }
+
+    if (relayVersion.isBlank()) {
+        return "Suggested update: Relay does not report a version. Update the server Relay first."
+    }
+    if (relayProtocol.isBlank()) {
+        return "Suggested update: Relay does not report a protocol version. Update the server Relay first."
+    }
+    if (relayProtocol != ANDROID_PROTOCOL_VERSION) {
+        return "Suggested update: Android $appVersion protocol $ANDROID_PROTOCOL_VERSION differs from Relay protocol $relayProtocol."
+    }
+
+    val unknownHost = onlineHosts.firstOrNull { it.bridgeVersion.isBlank() || it.protocolVersion.isBlank() }
+    if (unknownHost != null) {
+        return "Suggested update: ${unknownHost.displayName} does not report full Host Bridge version metadata."
+    }
+
+    val protocolMismatch = onlineHosts.firstOrNull { it.protocolVersion != relayProtocol }
+    if (protocolMismatch != null) {
+        return "Suggested update: ${protocolMismatch.displayName} protocol ${protocolMismatch.protocolVersion} differs from Relay protocol $relayProtocol."
+    }
+
+    val bridgeMismatch = onlineHosts.firstOrNull { it.bridgeVersion != relayVersion }
+    if (bridgeMismatch != null) {
+        return "Suggested update: Relay v$relayVersion and ${bridgeMismatch.displayName} v${bridgeMismatch.bridgeVersion} differ."
+    }
+
+    return null
+}
+
 private fun stageTone(stage: SessionStage): NoticeTone {
     return when (stage.severity.lowercase()) {
         "success" -> NoticeTone.Positive
@@ -4425,6 +4517,7 @@ private val AmberStroke = Color(0xFF5E4316)
 private const val MAX_PROMPT_ATTACHMENTS = 4
 private const val MAX_PROMPT_IMAGE_BYTES = 1_100_000
 private const val MAX_PROMPT_QUEUE_DEPTH = 5
+private const val ANDROID_PROTOCOL_VERSION = "1"
 
 private fun stageAccent(stage: SessionStage): Color {
     return when (stage.severity.lowercase()) {
