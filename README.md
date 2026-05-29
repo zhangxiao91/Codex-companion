@@ -267,6 +267,53 @@ On push, pull request, or manual workflow dispatch it:
 
 This is intentionally continuous delivery, not automatic deployment. Server Relay and Host Bridge are not restarted by CI yet, so a failed or bad build cannot interrupt an active Codex session.
 
+### Download CI APK artifacts
+
+Every successful CI run uploads `codex-mobile-companion-debug-apk`.
+
+From the GitHub UI:
+
+1. Open the repository Actions tab.
+2. Open the latest successful `CI` workflow run.
+3. Download the `codex-mobile-companion-debug-apk` artifact.
+4. Install the APK on Android.
+
+From a machine with GitHub CLI:
+
+```powershell
+gh auth login
+npm run artifact:apk
+```
+
+The APK downloads to `.relay/artifacts/latest-apk/` by default.
+
+Useful options:
+
+```powershell
+npm run artifact:apk -- --branch master
+npm run artifact:apk -- --run <github-actions-run-id>
+npm run artifact:apk -- --dest .relay/artifacts/manual
+```
+
+### GitHub Releases
+
+Release builds live in `.github/workflows/release.yml`.
+
+To publish a release APK:
+
+```powershell
+git tag v0.1.0-alpha.1
+git push origin v0.1.0-alpha.1
+```
+
+The Release workflow builds the debug APK, uploads it as an Actions artifact, then creates or updates a GitHub Release and attaches:
+
+```text
+codex-mobile-companion-<tag>-debug.apk
+```
+
+Use Actions artifacts for fast internal iteration. Use GitHub Releases when you want a stable APK link for a known tag.
+
 Node/Relay/Bridge version metadata:
 
 - Relay `/health` now includes `version.relay` and `version.protocol`

@@ -42,6 +42,7 @@ jobs:
           node --check tools/update-common.mjs
           node --check tools/server-update.mjs
           node --check tools/bridge-update.mjs
+          node --check tools/download-ci-apk.mjs
 
       - name: Verify relay health
         timeout-minutes: 4

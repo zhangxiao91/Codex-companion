@@ -1,0 +1,109 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to create/update, for example v0.1.0-alpha.1'
+        required: true
+        type: string
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: write
+
+jobs:
+  android-release-artifact:
+    name: Android release artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install Node dependencies
+        timeout-minutes: 5
+        run: npm ci
+
+      - name: Node syntax checks
+        timeout-minutes: 3
+        run: |
+          node --check relay/service/server.mjs
+          node --check bridge/host-bridge/index.mjs
+          node --check bridge/host-bridge/codex-adapter.mjs
+          node --check tools/update-common.mjs
+          node --check tools/server-update.mjs
+          node --check tools/bridge-update.mjs
+          node --check tools/download-ci-apk.mjs
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Install Android SDK packages
+        run: |
+          SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Make Gradle executable
+        run: chmod +x android/gradlew
+
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Run unit tests
+        working-directory: android
+        run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
+
+      - name: Prepare release files
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          mkdir -p dist
+          cp android/app/build/outputs/apk/debug/app-debug.apk "dist/codex-mobile-companion-${TAG}-debug.apk"
+          cat > dist/RELEASE_NOTES.md <<EOF
+          Codex Mobile Companion ${TAG}
+
+          Commit: ${GITHUB_SHA}
+
+          This release contains the Android debug APK produced by CI.
+          EOF
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: codex-mobile-companion-release-apk
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/*.apk --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/*.apk --title "$RELEASE_TAG" --notes-file dist/RELEASE_NOTES.md
+          fi
+

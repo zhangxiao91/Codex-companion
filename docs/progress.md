@@ -4912,3 +4912,35 @@ Result:
 server:update dry-run completed.
 bridge:update dry-run completed.
 ```
+
+## 2026-05-30: CI artifact and release retrieval flow
+
+Completed:
+
+- Added `.github/workflows/release.yml`.
+- Release workflow runs on:
+  - tag push matching `v*`;
+  - manual workflow dispatch with a tag input.
+- Release workflow builds the Android debug APK, runs unit tests, uploads the APK as an Actions artifact, and creates or updates a GitHub Release with the APK attached.
+- Added `tools/download-ci-apk.mjs`.
+- Added `npm run artifact:apk` to download the latest successful CI APK artifact through GitHub CLI.
+- README now documents:
+  - downloading CI artifacts from GitHub UI;
+  - downloading CI artifacts with `npm run artifact:apk`;
+  - publishing release APKs by pushing a `v*` tag.
+- CI syntax checks now cover `tools/download-ci-apk.mjs`.
+
+Verification:
+
+```powershell
+node --check tools/download-ci-apk.mjs
+npm run artifact:apk -- --dry-run --run 1
+node -e "JSON.parse(require('fs').readFileSync('package.json','utf8'))"
+```
+
+Result:
+
+```text
+artifact:apk dry-run completed.
+package json ok.
+```
