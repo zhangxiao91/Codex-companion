@@ -50,6 +50,22 @@ class RelayStateReducersTest {
     }
 
     @Test
+    fun buildSyncStateTreatsRestoredCachedSessionsAsConfirmed() {
+        val sessions = listOf(session("cached-a"), session("cached-b"))
+        val syncState = RelayStateReducers.buildSyncState(
+            sessions = sessions,
+            confirmedSessionIds = sessions.map { it.sessionId }.toSet(),
+            pendingTimelineSyncIds = emptySet(),
+            connectionStatus = "Online",
+            timelineLoadingEarlier = false
+        )
+
+        assertFalse(syncState.active)
+        assertEquals(0, syncState.pendingSessionCount)
+        assertEquals(2, syncState.confirmedSessionCount)
+    }
+
+    @Test
     fun buildSyncStateIncludesPendingTimelineWork() {
         val syncState = RelayStateReducers.buildSyncState(
             sessions = listOf(session("a"), session("b")),
@@ -94,6 +110,45 @@ class RelayStateReducersTest {
         assertEquals(0, syncState.pendingSessionCount)
         assertEquals(1, syncState.confirmedSessionCount)
         assertEquals("", syncState.summary)
+    }
+
+    @Test
+    fun buildSyncStateCarriesIncrementalIndexCounters() {
+        val syncState = RelayStateReducers.buildSyncState(
+            sessions = listOf(session("a"), session("b")),
+            confirmedSessionIds = setOf("a", "b"),
+            pendingTimelineSyncIds = emptySet(),
+            connectionStatus = "Online",
+            timelineLoadingEarlier = false,
+            dirtySessionCount = 2,
+            unchangedSessionCount = 48,
+            prioritySessionCount = 6
+        )
+
+        assertEquals(2, syncState.dirtySessionCount)
+        assertEquals(48, syncState.unchangedSessionCount)
+        assertEquals(6, syncState.prioritySessionCount)
+    }
+
+    @Test
+    fun prioritySyncSessionsPrefersSelectedActiveWarningThenRecentAndSkipsArchived() {
+        val sessions = listOf(
+            session("old", status = "completed", updatedAt = "2026-05-20T00:00:00Z"),
+            session("archived-active", status = "running", updatedAt = "2026-05-27T00:00:00Z"),
+            session("selected", status = "completed", updatedAt = "2026-05-18T00:00:00Z"),
+            session("warning", status = "waiting_for_input", updatedAt = "2026-05-22T00:00:00Z"),
+            session("active", status = "running", updatedAt = "2026-05-21T00:00:00Z"),
+            session("recent", status = "completed", updatedAt = "2026-05-26T00:00:00Z")
+        )
+
+        val priority = RelayStateReducers.prioritySyncSessions(
+            sessions = sessions,
+            selectedSessionId = "selected",
+            archivedSessionIds = setOf("archived-active"),
+            limit = 4
+        )
+
+        assertEquals(listOf("selected", "warning", "active", "recent"), priority.map { it.sessionId })
     }
 
     @Test

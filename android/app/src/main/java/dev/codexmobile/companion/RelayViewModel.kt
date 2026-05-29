@@ -19,13 +19,17 @@ class RelayViewModel(
     private val relayClient = RelayClient(this)
     private val initialSessions = cacheStore.sessions()
     private val initialApprovals = cacheStore.approvals()
-    private val confirmedSessionIds = mutableSetOf<String>()
+    private val confirmedSessionIds = cacheStore.confirmedSessionIds()
+        .plus(initialSessions.map { it.sessionId })
+        .toMutableSet()
     private val pendingTimelineSyncIds = cacheStore.pendingTimelineSyncIds().toMutableSet()
     private val timelineSyncInFlightIds = mutableSetOf<String>()
     private val timelineSyncQueueIds = ArrayDeque<String>()
     private val timelineSyncTimeoutJobs = mutableMapOf<String, Job>()
     private var earlierTimelineTimeoutJob: Job? = null
     private val snapshotSyncedSessionIds = mutableSetOf<String>()
+    private var syncIndexMode: SyncIndexMode = SyncIndexMode.Incremental
+    private var prioritySyncIndexRequested = false
     private val _uiState = MutableStateFlow(
         RelayUiState(
             relayUrl = settings.relayUrl(),
@@ -48,13 +52,15 @@ class RelayViewModel(
         )
     )
     val uiState: StateFlow<RelayUiState> = _uiState
-    private var pendingNewChatHostId: String? = null
+    private var pendingNewChatRequestId: String? = null
     private var reconnectJob: Job? = null
     private var reconnectAttempt = 0
     private var lastForegroundRefreshAtMillis = 0L
 
     fun connect(preservePendingAcks: Boolean = false) {
         reconnectJob?.cancel()
+        prioritySyncIndexRequested = false
+        syncIndexMode = SyncIndexMode.Incremental
         _uiState.update {
             it.copy(
                 connectionStatus = "Connecting",
@@ -281,6 +287,12 @@ class RelayViewModel(
             cacheStore.saveArchivedSessionIds(archived)
             if (state.deviceToken.isNotBlank()) {
                 relayClient.updateSessionArchive(sessionId, false)
+                requestSessionSyncIndex(
+                    includeClean = true,
+                    includeArchived = true,
+                    mode = SyncIndexMode.ArchiveConfirm,
+                    sessionIds = listOf(sessionId)
+                )
             }
             state.copy(
                 archivedSessionIds = archived,
@@ -299,6 +311,12 @@ class RelayViewModel(
             cacheStore.saveArchivedSessionIds(emptySet())
             if (state.deviceToken.isNotBlank()) {
                 sessionIds.forEach { sessionId -> relayClient.updateSessionArchive(sessionId, false) }
+                requestSessionSyncIndex(
+                    includeClean = true,
+                    includeArchived = true,
+                    mode = SyncIndexMode.ArchiveConfirm,
+                    sessionIds = sessionIds
+                )
             }
             state.copy(
                 archivedSessionIds = emptySet(),
@@ -419,12 +437,13 @@ class RelayViewModel(
             return
         }
 
-        pendingNewChatHostId = hostId
-        val sent = relayClient.createNewChat(hostId)
+        val requestId = java.util.UUID.randomUUID().toString()
+        pendingNewChatRequestId = requestId
+        val sent = relayClient.createNewChat(hostId, requestId)
         if (sent) {
             _uiState.update { it.copy(lastError = null, lastHealthCheck = "Creating new chat on $hostId") }
         } else {
-            pendingNewChatHostId = null
+            pendingNewChatRequestId = null
         }
     }
 
@@ -554,7 +573,7 @@ class RelayViewModel(
     override fun onConnected() {
         reconnectJob?.cancel()
         reconnectAttempt = 0
-        confirmedSessionIds.clear()
+        confirmedSessionIds.addAll(_uiState.value.sessions.map { it.sessionId })
         pendingTimelineSyncIds.clear()
         timelineSyncInFlightIds.clear()
         snapshotSyncedSessionIds.clear()
@@ -566,7 +585,7 @@ class RelayViewModel(
                 lastConnectedAt = Instant.now().toString(),
                 syncState = buildSyncState(
                     active = it.sessions.isNotEmpty(),
-                    summary = if (it.sessions.isEmpty()) "" else "Relay connected, syncing sessions"
+                    summary = if (it.sessions.isEmpty()) "" else "Relay connected, syncing priority sessions"
                 ),
                 confirmedSessionIds = confirmedSessionIds.toSet(),
                 pendingTimelineSyncIds = pendingTimelineSyncIds.toSet(),
@@ -599,12 +618,12 @@ class RelayViewModel(
         }
     }
 
-    override fun onSessionSnapshot(session: CodexSession) {
+    override fun onSessionSnapshot(session: CodexSession, clientRequestId: String?) {
         val isNewlyConfirmed = confirmedSessionIds.add(session.sessionId)
         if (isNewlyConfirmed) {
             persistSessionSyncMarkers()
         }
-        val shouldSelectNewChat = pendingNewChatHostId == session.hostId
+        val shouldSelectNewChat = !clientRequestId.isNullOrBlank() && clientRequestId == pendingNewChatRequestId
         _uiState.update { state ->
             val sessions = listOf(session) + state.sessions.filter { it.sessionId != session.sessionId }
             val selectedSessionId = if (shouldSelectNewChat) {
@@ -612,15 +631,27 @@ class RelayViewModel(
             } else {
                 state.selectedSessionId ?: session.sessionId
             }
+            val archivedSessionIds = if (shouldSelectNewChat) {
+                state.archivedSessionIds - session.sessionId
+            } else {
+                state.archivedSessionIds
+            }
+            if (shouldSelectNewChat) {
+                cacheStore.saveArchivedSessionIds(archivedSessionIds)
+                if (state.deviceToken.isNotBlank()) {
+                    relayClient.updateSessionArchive(session.sessionId, false)
+                }
+            }
             state.copy(
                 sessions = sessions,
                 selectedSessionId = selectedSessionId,
+                archivedSessionIds = archivedSessionIds,
                 confirmedSessionIds = confirmedSessionIds.toSet(),
                 pendingTimelineSyncIds = pendingTimelineSyncIds.toSet()
             )
         }
         if (shouldSelectNewChat) {
-            pendingNewChatHostId = null
+            pendingNewChatRequestId = null
         }
         val state = _uiState.value
         cacheStore.saveSessions(state.sessions)
@@ -774,6 +805,7 @@ class RelayViewModel(
         nextCursor: String?
     ) {
         val now = Instant.now().toString()
+        val responseMode = syncIndexMode
         val immediateAckEntries = mutableListOf<SessionSyncEntry>()
         _uiState.update { state ->
             val sessions = mergeSessions(state.sessions, entries.map { it.session })
@@ -814,10 +846,24 @@ class RelayViewModel(
                 lastSyncIndexAt = now,
                 lastSyncIndexDirtyCount = entries.count { it.dirty },
                 lastSyncIndexUnchangedCount = unchangedCount,
-                lastHealthCheck = when {
-                    entries.isEmpty() -> "Relay sync index clean"
-                    else -> "Relay sync index: ${entries.count { it.dirty }} update(s)"
-                },
+                syncState = buildSyncState(
+                    active = pendingTimelineSyncIds.isNotEmpty(),
+                    summary = syncIndexSummary(
+                        mode = responseMode,
+                        dirtyCount = entries.count { it.dirty },
+                        unchangedCount = unchangedCount,
+                        entryCount = entries.size
+                    ),
+                    dirtySessionCount = entries.count { it.dirty },
+                    unchangedSessionCount = unchangedCount,
+                    prioritySessionCount = if (responseMode == SyncIndexMode.Priority) entries.size else 0
+                ),
+                lastHealthCheck = syncIndexSummary(
+                    mode = responseMode,
+                    dirtyCount = entries.count { it.dirty },
+                    unchangedCount = unchangedCount,
+                    entryCount = entries.size
+                ),
                 lastError = null
             )
         }
@@ -833,6 +879,10 @@ class RelayViewModel(
         updateSyncState()
         if (hasMore && !nextCursor.isNullOrBlank()) {
             _uiState.update { it.copy(lastHealthCheck = "More Relay sync index pages available") }
+        }
+        val priorityRequested = maybeRequestPrioritySyncIndex(entries, responseMode)
+        if (!priorityRequested) {
+            syncIndexMode = SyncIndexMode.Incremental
         }
     }
 
@@ -895,7 +945,7 @@ class RelayViewModel(
 
     fun refreshAllSessions() {
         if (_uiState.value.syncIndexSupported) {
-            requestSessionSyncIndex()
+            requestSessionSyncIndex(includeClean = true, mode = SyncIndexMode.Full)
         } else {
             syncIncrementalKnownSessions()
         }
@@ -910,16 +960,25 @@ class RelayViewModel(
         super.onCleared()
     }
 
+    private enum class SyncIndexMode {
+        Incremental,
+        Priority,
+        ArchiveConfirm,
+        Full
+    }
+
     private companion object {
         const val MAX_TIMELINE_ITEMS_PER_SESSION = 10000
         const val MAX_APPROVAL_ITEMS = 50
         const val MAX_NOTIFICATION_ITEMS = 200
         const val TIMELINE_PAGE_SIZE = 80
+        const val SYNC_INDEX_PAGE_LIMIT = 80
+        const val PRIORITY_SYNC_INDEX_LIMIT = 12
         const val MAX_RECONNECT_DELAY_MS = 30_000L
         const val FOREGROUND_REFRESH_INTERVAL_MS = 30_000L
         const val TIMELINE_SYNC_TIMEOUT_MS = 20_000L
         const val MAX_TIMELINE_SYNC_IN_FLIGHT = 1
-        const val MAX_INCREMENTAL_AUTO_SYNC_SESSIONS = 8
+        const val MAX_INCREMENTAL_AUTO_SYNC_SESSIONS = 4
 
         fun isValidRelayUrl(url: String): Boolean =
             url.startsWith("ws://") || url.startsWith("wss://")
@@ -942,6 +1001,31 @@ class RelayViewModel(
                 }
             }.getOrNull()
         }
+
+        fun syncIndexCheckingSummary(mode: SyncIndexMode): String =
+            when (mode) {
+                SyncIndexMode.Incremental -> "Checking recent updates"
+                SyncIndexMode.Priority -> "Refreshing priority sessions"
+                SyncIndexMode.ArchiveConfirm -> "Confirming archive state"
+                SyncIndexMode.Full -> "Refreshing all sessions"
+            }
+
+        fun syncIndexSummary(
+            mode: SyncIndexMode,
+            dirtyCount: Int,
+            unchangedCount: Int,
+            entryCount: Int
+        ): String =
+            when (mode) {
+                SyncIndexMode.Priority -> "Priority refresh: $entryCount session${if (entryCount == 1) "" else "s"}"
+                SyncIndexMode.ArchiveConfirm -> "Archive state refreshed"
+                SyncIndexMode.Full -> "Full refresh: $entryCount session${if (entryCount == 1) "" else "s"}, $unchangedCount unchanged"
+                SyncIndexMode.Incremental -> if (dirtyCount == 0 && entryCount == 0) {
+                    "Up to date: $unchangedCount unchanged"
+                } else {
+                    "Updates: $dirtyCount changed, $unchangedCount unchanged"
+                }
+            }
     }
 
     private fun latestCursorFor(sessionId: String): String? = _uiState.value.timeline
@@ -1051,24 +1135,61 @@ class RelayViewModel(
         updateSyncState()
     }
 
-    private fun requestSessionSyncIndex() {
+    private fun requestSessionSyncIndex(
+        includeClean: Boolean = false,
+        includeArchived: Boolean = false,
+        mode: SyncIndexMode = SyncIndexMode.Incremental,
+        sessionIds: List<String> = emptyList()
+    ) {
         if (_uiState.value.deviceToken.isBlank()) {
             return
         }
+        syncIndexMode = mode
         val sent = relayClient.requestSessionSyncIndex(
             selectedSessionId = _uiState.value.selectedSessionId,
-            includeArchived = true,
-            includeClean = true
+            limit = if (mode == SyncIndexMode.Priority) PRIORITY_SYNC_INDEX_LIMIT else SYNC_INDEX_PAGE_LIMIT,
+            includeArchived = includeArchived || mode == SyncIndexMode.Full,
+            includeClean = includeClean,
+            sessionIds = sessionIds
         )
         if (sent) {
             _uiState.update {
                 it.copy(
-                    syncState = buildSyncState(active = true, summary = "Checking Relay sync index"),
-                    lastHealthCheck = "Checking Relay sync index",
+                    syncState = buildSyncState(active = true, summary = syncIndexCheckingSummary(mode)),
+                    lastHealthCheck = syncIndexCheckingSummary(mode),
                     lastError = null
                 )
             }
         }
+    }
+
+    private fun maybeRequestPrioritySyncIndex(entries: List<SessionSyncEntry>, responseMode: SyncIndexMode): Boolean {
+        if (prioritySyncIndexRequested || responseMode != SyncIndexMode.Incremental) {
+            return false
+        }
+        val prioritySessionIds = RelayStateReducers.prioritySyncSessions(
+            sessions = _uiState.value.sessions,
+            selectedSessionId = _uiState.value.selectedSessionId,
+            archivedSessionIds = _uiState.value.archivedSessionIds,
+            limit = PRIORITY_SYNC_INDEX_LIMIT
+        ).map { it.sessionId }
+
+        if (prioritySessionIds.isEmpty()) {
+            return false
+        }
+
+        val returnedIds = entries.map { it.session.sessionId }.toSet()
+        if (prioritySessionIds.all { it in returnedIds }) {
+            return false
+        }
+
+        prioritySyncIndexRequested = true
+        requestSessionSyncIndex(
+            includeClean = true,
+            mode = SyncIndexMode.Priority,
+            sessionIds = prioritySessionIds
+        )
+        return true
     }
 
     private fun mergeSessions(current: List<CodexSession>, incoming: List<CodexSession>): List<CodexSession> {
@@ -1306,7 +1427,10 @@ class RelayViewModel(
         active: Boolean,
         summary: String = "",
         pendingSessionCount: Int = _uiState.value.sessions.count { it.sessionId !in liveConfirmedSessionIds() } + pendingTimelineSyncIds.size,
-        totalSessionCount: Int = _uiState.value.sessions.size
+        totalSessionCount: Int = _uiState.value.sessions.size,
+        dirtySessionCount: Int = _uiState.value.lastSyncIndexDirtyCount,
+        unchangedSessionCount: Int = _uiState.value.lastSyncIndexUnchangedCount,
+        prioritySessionCount: Int = _uiState.value.syncState.prioritySessionCount
     ): SyncState = RelayStateReducers.buildSyncState(
         sessions = _uiState.value.sessions,
         confirmedSessionIds = confirmedSessionIds,
@@ -1316,7 +1440,10 @@ class RelayViewModel(
         activeOverride = active,
         summaryOverride = summary,
         pendingSessionCountOverride = pendingSessionCount,
-        totalSessionCountOverride = totalSessionCount
+        totalSessionCountOverride = totalSessionCount,
+        dirtySessionCount = dirtySessionCount,
+        unchangedSessionCount = unchangedSessionCount,
+        prioritySessionCount = prioritySessionCount
     )
 
     private fun mergeTimelineEvents(current: List<TimelineItem>, incoming: List<TimelineItem>): List<TimelineItem> {

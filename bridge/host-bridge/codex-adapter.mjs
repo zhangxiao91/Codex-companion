@@ -201,6 +201,21 @@ export class MockCodexAdapter {
       })
     ].slice(0, options.limit ?? 1);
   }
+
+  async refreshSessions() {
+    return [this.session];
+  }
+
+  async createEphemeralSession(options = {}) {
+    const sessionId = options.session_id ?? `mock-session-${Date.now()}`;
+    this.session = {
+      ...this.session,
+      session_id: sessionId,
+      summary: options.ephemeral === false ? 'Mock persistent mobile session.' : 'Mock ephemeral mobile session.',
+      updated_at: new Date().toISOString()
+    };
+    return this.session;
+  }
 }
 
 export class AppServerCodexAdapter {
@@ -214,6 +229,7 @@ export class AppServerCodexAdapter {
     this.pendingApprovals = new Map();
     this.nextId = 1;
     this.cachedSessions = [];
+    this.sessionSignatures = new Map();
     this.activeTurnsByThread = new Map();
     this.promptQueuesByThread = new Map();
     this.queueStorePath = resolve(process.env.CMC_PROMPT_QUEUE_STORE_PATH ?? '.relay/prompt-queue-state.json');
@@ -289,15 +305,29 @@ export class AppServerCodexAdapter {
     return this.cachedSessions.find((item) => item.session_id === sessionId) ?? null;
   }
 
-  async refreshSessions() {
+  async refreshSessions(options = {}) {
     const response = await this.request('thread/list', {
-      limit: 20,
+      limit: sessionListLimit(),
       archived: false,
       useStateDbOnly: true
     });
 
-    this.cachedSessions = response.data.map((thread) => mapThreadToSession(thread, this.hostId));
-    return this.cachedSessions;
+    const sessions = response.data.map((thread) => mapThreadToSession(thread, this.hostId));
+    this.cachedSessions = sessions;
+    if (!options.emitChangesOnly) {
+      this.sessionSignatures = new Map(sessions.map((session) => [session.session_id, sessionSignature(session)]));
+      return this.cachedSessions;
+    }
+
+    const changed = [];
+    for (const session of sessions) {
+      const signature = sessionSignature(session);
+      if (this.sessionSignatures.get(session.session_id) !== signature) {
+        changed.push(session);
+      }
+      this.sessionSignatures.set(session.session_id, signature);
+    }
+    return changed;
   }
 
   async sendPrompt(sessionId, draft) {
@@ -633,6 +663,7 @@ export class AppServerCodexAdapter {
 
     const session = mapThreadToSession(response.thread, this.hostId);
     this.cachedSessions = [session, ...this.cachedSessions.filter((item) => item.session_id !== session.session_id)];
+    this.sessionSignatures.set(session.session_id, sessionSignature(session));
     return session;
   }
 
@@ -1319,4 +1350,22 @@ function findLatestVsCodeCodexCli(userProfile) {
     .reverse();
 
   return candidates[0];
+}
+
+function sessionListLimit() {
+  const parsed = Number.parseInt(process.env.CMC_SESSION_LIST_LIMIT ?? '50', 10);
+  return Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), 200) : 50;
+}
+
+function sessionSignature(session) {
+  return JSON.stringify({
+    session_id: session.session_id,
+    updated_at: session.updated_at,
+    status: session.status,
+    summary: session.summary,
+    project_name: session.project_name,
+    repo_path: session.repo_path,
+    branch: session.branch,
+    stage: session.stage ?? null
+  });
 }

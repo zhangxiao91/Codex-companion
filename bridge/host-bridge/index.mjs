@@ -5,6 +5,7 @@ import {
   decodeMessage,
   encodeMessage
 } from '../../packages/protocol/index.mjs';
+import { CMC_PROTOCOL_VERSION, CMC_VERSION } from '../../packages/protocol/version.mjs';
 import { createCodexAdapter } from './codex-adapter.mjs';
 import { handleGitRequest } from './git-adapter.mjs';
 import { createHostIdentityStore } from './host-identity-store.mjs';
@@ -22,10 +23,12 @@ let hostDeviceToken = process.env.RELAY_HOST_DEVICE_TOKEN
   ?? '';
 const hostId = process.env.HOST_ID ?? 'local-dev-host';
 const displayName = process.env.HOST_NAME ?? 'Local Development Host';
-const bridgeVersion = '0.0.1';
+const bridgeVersion = CMC_VERSION;
 const powerController = createPowerController(hostId, displayName);
 let socket;
 let heartbeatTimer;
+let sessionPollTimer;
+let sessionPollInFlight = false;
 let reconnectTimer;
 let reconnectAttempt = 0;
 const adapter = createCodexAdapter(hostId, {
@@ -72,6 +75,7 @@ async function handleOpen(currentSocket) {
     display_name: displayName,
     kind: 'local_pc',
     bridge_version: bridgeVersion,
+    protocol_version: CMC_PROTOCOL_VERSION,
     capabilities: ['session.list', 'session.prompt', 'session.prompt.queue', 'session.prompt.edit', 'session.turn.interrupt', 'timeline.event', 'git.status', 'git.diff', ...powerController.capabilities()]
   });
 
@@ -90,6 +94,7 @@ async function handleOpen(currentSocket) {
   }
 
   startHeartbeat();
+  startSessionPolling();
 }
 
 async function handleMessage(currentSocket, event) {
@@ -263,7 +268,10 @@ async function handleMessage(currentSocket, event) {
       console.log(`[bridge] received ${ephemeral ? 'ephemeral' : 'persistent'} session create request for host ${hostId}`);
       const session = await adapter.createEphemeralSession(createOptions);
       console.log(`[bridge] created ${ephemeral ? 'ephemeral' : 'persistent'} session ${session.session_id}`);
-      send(MessageType.SessionSnapshot, { session });
+      send(MessageType.SessionSnapshot, {
+        session,
+        client_request_id: message.payload.client_request_id ?? null
+      });
       return;
     }
 
@@ -290,6 +298,7 @@ function handleClose(currentSocket, event) {
   }
 
   stopHeartbeat();
+  stopSessionPolling();
   socket = undefined;
   const reason = event.reason ? ` reason=${event.reason}` : '';
   console.log(`[bridge] disconnected from relay code=${event.code} was_clean=${event.wasClean}${reason}`);
@@ -326,7 +335,8 @@ function startHeartbeat() {
   heartbeatTimer = setInterval(() => {
     const heartbeatSent = send(MessageType.HostHeartbeat, {
       host_id: hostId,
-      bridge_version: bridgeVersion
+      bridge_version: bridgeVersion,
+      protocol_version: CMC_PROTOCOL_VERSION
     });
     const statusSent = send(MessageType.PowerStatus, powerController.status());
     if (!heartbeatSent || !statusSent) {
@@ -340,6 +350,44 @@ function stopHeartbeat() {
   if (heartbeatTimer) {
     clearInterval(heartbeatTimer);
     heartbeatTimer = undefined;
+  }
+}
+
+function startSessionPolling() {
+  stopSessionPolling();
+  const intervalMs = Number.parseInt(process.env.CMC_SESSION_POLL_INTERVAL_MS ?? '5000', 10);
+  if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+    return;
+  }
+  sessionPollTimer = setInterval(() => {
+    pollSessions().catch((error) => {
+      console.error(`[bridge] session poll failed: ${error.message}`);
+    });
+  }, intervalMs);
+}
+
+function stopSessionPolling() {
+  if (sessionPollTimer) {
+    clearInterval(sessionPollTimer);
+    sessionPollTimer = undefined;
+  }
+}
+
+async function pollSessions() {
+  if (sessionPollInFlight || socket?.readyState !== WebSocket.OPEN || typeof adapter.refreshSessions !== 'function') {
+    return;
+  }
+  sessionPollInFlight = true;
+  try {
+    const changedSessions = await adapter.refreshSessions({ emitChangesOnly: true });
+    for (const session of changedSessions) {
+      send(MessageType.SessionSnapshot, { session });
+    }
+    if (changedSessions.length > 0) {
+      console.log(`[bridge] session poll broadcast ${changedSessions.length} changed session(s)`);
+    }
+  } finally {
+    sessionPollInFlight = false;
   }
 }
 

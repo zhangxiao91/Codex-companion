@@ -10,6 +10,7 @@ import {
   encodeMessage,
   requirePayloadField
 } from '../../packages/protocol/index.mjs';
+import { CMC_PROTOCOL_VERSION, CMC_VERSION } from '../../packages/protocol/version.mjs';
 import { createIdentityStore, snapshotIdentityState } from './identity-store.mjs';
 import { deriveSessionStage } from './session-stage.mjs';
 import { createRelaySqliteStore } from './sqlite-store.mjs';
@@ -292,6 +293,10 @@ function createHealthPayload(request) {
     return {
       ok: true,
       service: 'codex-mobile-companion-relay',
+      version: {
+        relay: CMC_VERSION,
+        protocol: CMC_PROTOCOL_VERSION
+      },
       auth_required: true,
       detail: 'Set X-Relay-Dev-Token to receive detailed diagnostics.',
       checked_at: new Date().toISOString()
@@ -304,6 +309,10 @@ function createHealthPayload(request) {
   return {
     ok: true,
     service: 'codex-mobile-companion-relay',
+    version: {
+      relay: CMC_VERSION,
+      protocol: CMC_PROTOCOL_VERSION
+    },
     auth_required: authRequired,
     listen: {
       host,
@@ -985,6 +994,12 @@ function handleHostHeartbeat(connection, message) {
 
   host.last_seen_at = new Date().toISOString();
   host.status = 'online';
+  if (message.payload.bridge_version) {
+    host.bridge_version = message.payload.bridge_version;
+  }
+  if (message.payload.protocol_version) {
+    host.protocol_version = message.payload.protocol_version;
+  }
   persistIdentityState();
   broadcastHostSnapshot(host.host_id);
 }
@@ -1388,7 +1403,10 @@ function handleSessionSnapshot(connection, message) {
   relayStore.saveSession(session);
 
   console.log(`[relay] session snapshot: ${session.session_id}`);
-  broadcastToClients(createMessage(MessageType.SessionSnapshot, { session }));
+  broadcastToClients(createMessage(MessageType.SessionSnapshot, {
+    session,
+    client_request_id: message.payload.client_request_id ?? null
+  }));
   emitNotificationForSessionStage(session);
 }
 

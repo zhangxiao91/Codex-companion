@@ -4691,3 +4691,143 @@ Result:
 BUILD SUCCESSFUL
 BUILD SUCCESSFUL
 ```
+
+## 2026-05-27: MVP stabilization v1 loading and IA pass
+
+Completed:
+
+- Started MVP stabilization v1 with two focused goals: faster reconnect/startup sync and cleaner Android information architecture.
+- Optimized Android sync index usage:
+  - normal reconnect now requests dirty sync-index entries instead of always asking Relay for clean/full session state;
+  - a second small priority sync-index request refreshes selected, active, warning, and recent sessions;
+  - manual full refresh still requests clean/all visible data;
+  - automatic timeline syncing now caps background page fetches more aggressively so selected/active work gets bandwidth first.
+- Preserved cached-session usability:
+  - restored local sessions are treated as confirmed enough to remain visible while dirty/priority sessions refresh in the background;
+  - sync status now carries changed/unchanged/priority counters for clearer UI feedback.
+- Cleaned Android main-session information architecture:
+  - detail screen now has Back, Chats, and a compact status/tools entry instead of a dense row of text actions;
+  - added a left-edge floating session button for quick drawer access;
+  - sync/request notices render compactly in inbox and session detail;
+  - drawer overview changed from loose shortcut rows to compact metrics for hosts, approvals, archived sessions, and branch;
+  - replaced several non-ASCII separators/icons with ASCII-safe text to avoid mojibake in Android UI.
+
+Verification so far:
+
+```powershell
+npm run verify:relay-sync-index
+cd android
+.\gradlew.bat :app:assembleDebug --no-daemon --stacktrace
+.\gradlew.bat :app:testDebugUnitTest --no-daemon --stacktrace
+```
+
+Result:
+
+```text
+[verify] Relay sync index and ack persistence verified.
+BUILD SUCCESSFUL
+BUILD SUCCESSFUL
+```
+
+Known notes:
+
+- This is the first stabilization pass, not a full visual redesign. It reduces startup sync pressure and removes obvious main-screen clutter while keeping the existing Compose file structure.
+- The local shell did not expose `adb` on PATH during this pass; use Android SDK `platform-tools\adb.exe` or Android Studio terminal to install the generated debug APK if needed.
+
+## 2026-05-29: New chat, archive restore, and Codex App session pickup fixes
+
+Completed:
+
+- Fixed mobile New Chat selection so Android now sends a `client_request_id` with `session.create`.
+- Relay preserves that `client_request_id` when forwarding the create request to Host Bridge and when broadcasting the resulting `session.snapshot`.
+- Android only treats the matching snapshot as the newly-created mobile chat, selects it, and explicitly clears any local/cloud archive state for that session.
+- Restore from Archive now asks Relay for a targeted archived-inclusive sync index after the optimistic restore, so stale per-device archive state is corrected quickly.
+- Host Bridge now polls Codex App Server for new/changed sessions every 5 seconds by default and broadcasts changed snapshots to Relay.
+- Raised Codex App Server session list reads to an env-configurable default of 50 via `CMC_SESSION_LIST_LIMIT`.
+
+Verification:
+
+```powershell
+npm run verify:session-create-routing
+npm run verify:relay-cloud-archive-pin
+npm run verify:relay-sync-index
+npm run verify:state-sync-regressions
+node --check relay/service/server.mjs
+node --check bridge/host-bridge/codex-adapter.mjs
+node --check bridge/host-bridge/index.mjs
+cd android
+.\gradlew.bat :app:assembleDebug --no-daemon --stacktrace
+.\gradlew.bat :app:testDebugUnitTest --no-daemon --stacktrace
+```
+
+Result:
+
+```text
+[verify] Session create routing preserves persistent mobile New Chat and legacy ephemeral clients.
+[verify] Relay cloud archive/pin state verified.
+[verify] Relay sync index and ack persistence verified.
+[verify] State sync stale timeline and restored stage regressions verified.
+BUILD SUCCESSFUL
+BUILD SUCCESSFUL
+```
+
+Notes:
+
+- This addresses the three reported causes: newly-created sessions being mistaken for archived/stale snapshots, restore being overwritten by stale cloud state, and Codex App-created conversations only appearing after bridge restart or slow refresh.
+- ADB was available but no device was listed, so the debug APK was not installed automatically.
+
+## 2026-05-29: CI/CD v1 foundation
+
+Completed:
+
+- Added `.github/workflows/ci.yml` as the first continuous delivery workflow.
+- CI now runs on push, pull request, and manual dispatch.
+- Added `npm run ci:node` as the local/CI shared Node verification entrypoint.
+- CI Node job runs syntax checks plus the core Relay/Bridge verification suite.
+- CI Android job installs JDK 17 and Android SDK 36/build-tools 36.0.0, then runs:
+  - `./gradlew :app:assembleDebug --no-daemon --stacktrace`
+  - `./gradlew :app:testDebugUnitTest --no-daemon --stacktrace`
+- CI uploads `android/app/build/outputs/apk/debug/app-debug.apk` as `codex-mobile-companion-debug-apk`.
+- Added `packages/protocol/version.mjs` so Node-side services share a single project/protocol version source.
+- Relay `/health` now exposes `version.relay` and `version.protocol`.
+- Host Bridge registers and heartbeats with package `bridge_version` plus `protocol_version`.
+- Android parses and displays Host Bridge/protocol version metadata in host rows.
+
+Verification:
+
+```powershell
+npm run ci:node
+npm run verify:relay-health
+node --check tools/verify-relay-health.mjs
+node --check relay/service/server.mjs
+node --check bridge/host-bridge/index.mjs
+node --check packages/protocol/version.mjs
+cd android
+.\gradlew.bat :app:assembleDebug --no-daemon --stacktrace
+.\gradlew.bat :app:testDebugUnitTest --no-daemon --stacktrace
+```
+
+Result:
+
+```text
+[verify] Relay health endpoint verified.
+[verify] Relay dev-token guard verified.
+[verify] Relay pairing/host/device token separation verified.
+[verify] Relay sync index and ack persistence verified.
+[verify] Relay cloud archive/pin state verified.
+[verify] State sync stale timeline and restored stage regressions verified.
+[verify] Session create routing preserves persistent mobile New Chat and legacy ephemeral clients.
+[verify] Relay timeline cache cursor replay verified.
+[verify] Relay notification events for approval, completion, needs-input, and host-offline verified.
+[verify] Host device trust verified.
+[verify] Server Relay persisted config verified.
+[verify] Windows Host Bridge service helper verified.
+BUILD SUCCESSFUL
+BUILD SUCCESSFUL
+```
+
+Notes:
+
+- This is continuous delivery only. CI does not restart the server Relay, Windows Host Bridge, or install APKs onto real devices yet.
+- ADB was available but no device was listed, so the newly built debug APK was not installed automatically.
+- Next deployment step should be update scripts that consume CI/release artifacts and restart server/bridge only after checking active session state.

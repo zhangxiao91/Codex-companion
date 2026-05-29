@@ -66,7 +66,10 @@ internal object RelayStateReducers {
         activeOverride: Boolean? = null,
         summaryOverride: String? = null,
         pendingSessionCountOverride: Int? = null,
-        totalSessionCountOverride: Int? = null
+        totalSessionCountOverride: Int? = null,
+        dirtySessionCount: Int = 0,
+        unchangedSessionCount: Int = 0,
+        prioritySessionCount: Int = 0
     ): SyncState {
         val liveConfirmed = liveConfirmedSessionIds(sessions, confirmedSessionIds)
         val pendingSessions = sessions.count { it.sessionId !in liveConfirmed }
@@ -88,9 +91,42 @@ internal object RelayStateReducers {
             pendingSessionCount = pendingCount,
             confirmedSessionCount = sessions.count { it.sessionId in liveConfirmed },
             totalSessionCount = totalCount,
+            dirtySessionCount = dirtySessionCount,
+            unchangedSessionCount = unchangedSessionCount,
+            prioritySessionCount = prioritySessionCount,
             summary = summary
         )
     }
+
+    fun prioritySyncSessions(
+        sessions: List<CodexSession>,
+        selectedSessionId: String?,
+        archivedSessionIds: Set<String>,
+        limit: Int
+    ): List<CodexSession> =
+        sessions
+            .asSequence()
+            .filterNot { it.sessionId in archivedSessionIds }
+            .sortedWith(
+                compareByDescending<CodexSession> { it.sessionId == selectedSessionId }
+                    .thenByDescending { sessionSyncPriority(it, selectedSessionId) }
+                    .thenByDescending { parseIsoMillis(it.updatedAt) }
+            )
+            .take(limit.coerceAtLeast(0))
+            .toList()
+
+    private fun sessionSyncPriority(session: CodexSession, selectedSessionId: String?): Int =
+        when {
+            session.sessionId == selectedSessionId -> 5
+            session.stage.severity == "warning" -> 4
+            session.stage.severity == "active" -> 3
+            session.status == "running" -> 3
+            session.status == "waiting_for_input" -> 2
+            else -> 0
+        }
+
+    private fun parseIsoMillis(raw: String): Long =
+        runCatching { java.time.Instant.parse(raw).toEpochMilli() }.getOrDefault(0L)
 
     fun mergeTimelineEvents(
         current: List<TimelineItem>,

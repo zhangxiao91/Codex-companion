@@ -44,6 +44,14 @@ try {
     throw new Error(`Unexpected service: ${health.service}`);
   }
 
+  if (typeof health.version?.relay !== 'string' || health.version.relay.length === 0) {
+    throw new Error('Health endpoint is missing version.relay.');
+  }
+
+  if (health.version?.protocol !== 1) {
+    throw new Error(`Unexpected protocol version: ${health.version?.protocol}`);
+  }
+
   if (health.listen?.port !== Number.parseInt(relayPort, 10)) {
     throw new Error(`Unexpected health listen port: ${health.listen?.port}`);
   }

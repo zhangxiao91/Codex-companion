@@ -504,7 +504,7 @@ private fun InboxScreen(
             onNewChat = onNewChat,
             onMore = { actionsOpen = true }
         )
-        MainStatusNotice(uiState)
+        MainStatusNotice(uiState, compact = true)
         InboxMetricRow(uiState)
         if (!onNotificationsEnabled() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             NotificationPermissionStrip {
@@ -662,7 +662,7 @@ private fun InboxTopBar(
 }
 
 @Composable
-private fun MainStatusNotice(uiState: RelayUiState) {
+private fun MainStatusNotice(uiState: RelayUiState, compact: Boolean = false) {
     val message = uiState.lastError ?: uiState.lastHealthCheck
     val requestState = uiState.relayRequestState
     val requestHistory = uiState.relayRequestHistory
@@ -673,11 +673,12 @@ private fun MainStatusNotice(uiState: RelayUiState) {
     }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (syncState.active) {
-            SyncStatusStrip(syncState)
+            SyncStatusStrip(syncState, compact = compact)
         }
         if (requestState.phase.isNotBlank()) {
             RelayRequestStatusStrip(
                 state = requestState,
+                compact = compact,
                 historyCount = requestHistory.size,
                 historyOpen = historyOpen,
                 onHistoryToggle = { historyOpen = !historyOpen }
@@ -702,35 +703,41 @@ private fun MainStatusNotice(uiState: RelayUiState) {
 }
 
 @Composable
-private fun SyncStatusStrip(syncState: SyncState) {
+private fun SyncStatusStrip(syncState: SyncState, compact: Boolean = false) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = NoticeTone.Warning.background.copy(alpha = 0.62f),
-        shape = RoundedCornerShape(16.dp),
-        border = BorderStroke(1.dp, NoticeTone.Warning.foreground.copy(alpha = 0.24f))
+        color = if (compact) ControlBlack.copy(alpha = 0.72f) else NoticeTone.Warning.background.copy(alpha = 0.62f),
+        shape = RoundedCornerShape(if (compact) 99.dp else 16.dp),
+        border = BorderStroke(1.dp, if (compact) HairlineDark else NoticeTone.Warning.foreground.copy(alpha = 0.24f))
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+            modifier = Modifier.padding(horizontal = if (compact) 12.dp else 12.dp, vertical = if (compact) 7.dp else 9.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     text = syncState.summary.ifBlank { "Syncing sessions" },
-                    color = NoticeTone.Warning.foreground,
-                    style = MaterialTheme.typography.bodySmall,
+                    color = if (compact) SecondaryText else NoticeTone.Warning.foreground,
+                    style = if (compact) MaterialTheme.typography.labelMedium else MaterialTheme.typography.bodySmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Text(
-                    text = "Confirmed ${syncState.confirmedSessionCount}/${syncState.totalSessionCount} / pending ${syncState.pendingSessionCount}",
-                    color = NoticeTone.Warning.foreground.copy(alpha = 0.72f),
-                    style = MaterialTheme.typography.labelSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                if (!compact) {
+                    Text(
+                        text = syncDetailText(syncState),
+                        color = NoticeTone.Warning.foreground.copy(alpha = 0.72f),
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
-            Text("Syncing", color = NoticeTone.Warning.foreground, style = MaterialTheme.typography.labelSmall)
+            Text(
+                text = if (compact) syncCompactCount(syncState) else "Syncing",
+                color = if (compact) TertiaryText else NoticeTone.Warning.foreground,
+                style = MaterialTheme.typography.labelSmall
+            )
         }
     }
 }
@@ -876,6 +883,32 @@ private fun RelayRequestHistoryRow(state: RelayRequestState) {
     }
 }
 
+private fun syncDetailText(syncState: SyncState): String {
+    val parts = mutableListOf<String>()
+    parts.add("Confirmed ${syncState.confirmedSessionCount}/${syncState.totalSessionCount}")
+    if (syncState.pendingSessionCount > 0) {
+        parts.add("pending ${syncState.pendingSessionCount}")
+    }
+    if (syncState.dirtySessionCount > 0) {
+        parts.add("changed ${syncState.dirtySessionCount}")
+    }
+    if (syncState.prioritySessionCount > 0) {
+        parts.add("priority ${syncState.prioritySessionCount}")
+    }
+    if (syncState.unchangedSessionCount > 0) {
+        parts.add("${syncState.unchangedSessionCount} unchanged")
+    }
+    return parts.joinToString(" / ")
+}
+
+private fun syncCompactCount(syncState: SyncState): String =
+    when {
+        syncState.pendingSessionCount > 0 -> "${syncState.pendingSessionCount} pending"
+        syncState.dirtySessionCount > 0 -> "${syncState.dirtySessionCount} changed"
+        syncState.prioritySessionCount > 0 -> "${syncState.prioritySessionCount} priority"
+        else -> "syncing"
+    }
+
 private fun relayRequestPhaseLabel(phase: String): String = when (phase) {
     "waiting_ack" -> "Waiting for Relay"
     "retrying" -> "Retrying"
@@ -901,8 +934,8 @@ private fun InboxActionSheet(
             .padding(horizontal = 18.dp, vertical = 22.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Text("Control", color = PrimaryText, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-        Text("Low-frequency actions stay here so the inbox can stay calm.", color = SecondaryText, style = MaterialTheme.typography.bodySmall)
+        Text("Workspace", color = PrimaryText, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+        Text("Connection, hosts, archived sessions, and diagnostics live here.", color = SecondaryText, style = MaterialTheme.typography.bodySmall)
         ActionSheetButton(
             title = "Start a new chat",
             detail = "Create a fresh Codex session on the active host.",
@@ -1196,8 +1229,16 @@ private fun HostNodeRow(host: HostNode) {
             Text("${host.sessionCount} session${if (host.sessionCount == 1) "" else "s"} - last seen ${formatMetaTime(host.lastSeenAt)}", color = SecondaryText, style = MaterialTheme.typography.bodySmall)
             val capabilities = host.capabilities.take(4).joinToString(" - ").ifBlank { "No capabilities reported" }
             Text(capabilities, color = TertiaryText, style = MaterialTheme.typography.labelMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (host.bridgeVersion.isNotBlank() || host.kind.isNotBlank()) {
-                Text(listOf(host.kind, host.bridgeVersion).filter { it.isNotBlank() }.joinToString(" - "), color = TertiaryText, style = MaterialTheme.typography.labelSmall)
+            if (host.bridgeVersion.isNotBlank() || host.protocolVersion.isNotBlank() || host.kind.isNotBlank()) {
+                Text(
+                    listOf(
+                        host.kind,
+                        host.bridgeVersion.takeIf { it.isNotBlank() }?.let { "v$it" }.orEmpty(),
+                        host.protocolVersion.takeIf { it.isNotBlank() }?.let { "protocol $it" }.orEmpty()
+                    ).filter { it.isNotBlank() }.joinToString(" - "),
+                    color = TertiaryText,
+                    style = MaterialTheme.typography.labelSmall
+                )
             }
         }
     }
@@ -1257,41 +1298,51 @@ private fun MainSessionScreen(
             )
         }
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-                .navigationBarsPadding()
-                .imePadding()
-                .padding(horizontal = 18.dp, vertical = 18.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            MainTopBar(
-                uiState = uiState,
-                onMenu = onBackToInbox,
-                onTools = { toolsOpen = true }
-            )
-            MainStatusNotice(uiState)
-            TimelineStream(
-                uiState = uiState,
-                modifier = Modifier.weight(1f),
-                onLoadEarlier = onLoadEarlierTimeline,
-                onRefreshLatest = onRefreshTimeline
-            )
-            QuickActionBar(
-                enabled = uiState.selectedSession != null && uiState.connectionStatus == "Online",
-                onQuickPrompt = onPromptSend
-            )
-            RichChatComposer(
-                selectedSession = uiState.selectedSession,
-                timeline = uiState.timeline.filter { it.sessionId == uiState.selectedSessionId },
-                queueState = uiState.selectedPromptQueue,
-                relayRequestState = uiState.relayRequestState,
-                online = uiState.connectionStatus == "Online",
-                onPromptSend = onPromptDraftSend,
-                onPromptEdit = onPromptEdit,
-                onPromptQueue = onPromptQueue,
-                onInterruptTurn = onInterruptTurn
+        Box(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+                    .imePadding()
+                    .padding(horizontal = 18.dp, vertical = 18.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                MainTopBar(
+                    uiState = uiState,
+                    onBack = onBackToInbox,
+                    onSessions = { scope.launch { drawerState.open() } },
+                    onTools = { toolsOpen = true }
+                )
+                MainStatusNotice(uiState, compact = true)
+                TimelineStream(
+                    uiState = uiState,
+                    modifier = Modifier.weight(1f),
+                    onLoadEarlier = onLoadEarlierTimeline,
+                    onRefreshLatest = onRefreshTimeline
+                )
+                QuickActionBar(
+                    enabled = uiState.selectedSession != null && uiState.connectionStatus == "Online",
+                    onQuickPrompt = onPromptSend
+                )
+                RichChatComposer(
+                    selectedSession = uiState.selectedSession,
+                    timeline = uiState.timeline.filter { it.sessionId == uiState.selectedSessionId },
+                    queueState = uiState.selectedPromptQueue,
+                    relayRequestState = uiState.relayRequestState,
+                    online = uiState.connectionStatus == "Online",
+                    onPromptSend = onPromptDraftSend,
+                    onPromptEdit = onPromptEdit,
+                    onPromptQueue = onPromptQueue,
+                    onInterruptTurn = onInterruptTurn
+                )
+            }
+            FloatingSessionButton(
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .padding(start = 2.dp),
+                count = uiState.activeSessions.size,
+                onClick = { scope.launch { drawerState.open() } }
             )
         }
     }
@@ -1338,14 +1389,20 @@ private fun MainSessionScreen(
 }
 
 @Composable
-private fun MainTopBar(uiState: RelayUiState, onMenu: () -> Unit, onTools: () -> Unit) {
+private fun MainTopBar(
+    uiState: RelayUiState,
+    onBack: () -> Unit,
+    onSessions: () -> Unit,
+    onTools: () -> Unit
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            CircleTextButton(text = "Back", onClick = onMenu, wide = true)
+        Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            CircleTextButton(text = "Back", onClick = onBack, wide = true)
+            CircleTextButton(text = "Chats", onClick = onSessions, wide = true)
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = uiState.selectedSession?.projectName ?: "Codex",
@@ -1365,7 +1422,32 @@ private fun MainTopBar(uiState: RelayUiState, onMenu: () -> Unit, onTools: () ->
             }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            CircleTextButton(text = "Tools", onClick = onTools, wide = true)
+            StatusOrb(uiState.connectionStatus, onClick = onTools)
+        }
+    }
+}
+
+@Composable
+private fun FloatingSessionButton(modifier: Modifier = Modifier, count: Int, onClick: () -> Unit) {
+    Surface(
+        modifier = modifier
+            .height(48.dp)
+            .width(36.dp)
+            .clip(RoundedCornerShape(topEnd = 99.dp, bottomEnd = 99.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(topEnd = 99.dp, bottomEnd = 99.dp),
+        color = ControlBlack.copy(alpha = 0.94f),
+        border = BorderStroke(1.dp, HairlineDark),
+        shadowElevation = 5.dp
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                text = if (count > 99) "99+" else count.toString(),
+                color = PrimaryText,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1
+            )
         }
     }
 }
@@ -1405,10 +1487,7 @@ private fun SessionDrawer(
                 Text("Codex", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
                 StatusPill(uiState.connectionStatus, statusTone(uiState.connectionStatus))
             }
-            DrawerShortcut("Projects", "${uiState.activeSessions.map { it.hostId }.distinct().size} hosts")
-            DrawerShortcut("Approvals", "${uiState.pendingApprovals.size} pending")
-            DrawerShortcut("Archived", "${uiState.archivedSessions.size} hidden")
-            DrawerShortcut("Git", uiState.selectedGitSnapshot?.branch ?: "No snapshot")
+            DrawerOverviewGrid(uiState)
             DrawerSearchField(query = query, onQueryChange = { query = it })
             DrawerGroupingToggle(grouping = grouping, onGroupingChange = { grouping = it })
             Button(
@@ -1420,7 +1499,12 @@ private fun SessionDrawer(
             ) {
                 Text("New Chat", fontWeight = FontWeight.SemiBold)
             }
-            Text("Sessions", color = PrimaryText, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Sessions", color = PrimaryText, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
+                if (uiState.syncState.active) {
+                    Text(syncCompactCount(uiState.syncState), color = TertiaryText, style = MaterialTheme.typography.labelSmall)
+                }
+            }
             if (uiState.activeSessions.isEmpty()) {
                 Text("No live sessions. Keep Host Bridge online, then refresh.", color = SecondaryText)
                 OutlinedButton(onClick = onReconnect, border = BorderStroke(1.dp, StrokeDark)) {
@@ -1462,6 +1546,54 @@ private fun SessionDrawer(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun DrawerOverviewGrid(uiState: RelayUiState) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            DrawerMetricTile(
+                modifier = Modifier.weight(1f),
+                label = "Hosts",
+                value = "${uiState.hosts.count { it.status == "online" }}/${uiState.hosts.size}"
+            )
+            DrawerMetricTile(
+                modifier = Modifier.weight(1f),
+                label = "Approvals",
+                value = uiState.pendingApprovals.size.toString()
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            DrawerMetricTile(
+                modifier = Modifier.weight(1f),
+                label = "Archived",
+                value = uiState.archivedSessions.size.toString()
+            )
+            DrawerMetricTile(
+                modifier = Modifier.weight(1f),
+                label = "Branch",
+                value = uiState.selectedGitSnapshot?.branch ?: uiState.selectedSession?.branch ?: "-"
+            )
+        }
+    }
+}
+
+@Composable
+private fun DrawerMetricTile(modifier: Modifier = Modifier, label: String, value: String) {
+    Surface(
+        modifier = modifier.height(62.dp),
+        color = CardBlack.copy(alpha = 0.72f),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, StrokeDark)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            Text(label, color = TertiaryText, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+            Text(value, color = PrimaryText, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -1523,7 +1655,7 @@ private fun DrawerSectionHeader(title: String, detail: String = "") {
 @Composable
 private fun DrawerShortcut(text: String, detail: String) {
     Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text("•", color = PrimaryText, style = MaterialTheme.typography.headlineSmall)
+        Text("*", color = PrimaryText, style = MaterialTheme.typography.headlineSmall)
         Column {
             Text(text, color = PrimaryText, style = MaterialTheme.typography.titleMedium)
             Text(detail, color = SecondaryText, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -1553,7 +1685,7 @@ private fun DrawerSessionRow(
         ) {
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(session.projectName, color = PrimaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${session.branch} · ${session.status}", color = SecondaryText, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("${session.branch} / ${session.status}", color = SecondaryText, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text("Updated ${formatMetaTime(session.updatedAt)}", color = TertiaryText, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(session.hostId, color = TertiaryText, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
@@ -1587,7 +1719,7 @@ private fun DrawerSessionRow(session: CodexSession, selected: Boolean, onClick: 
     ) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(session.projectName, color = PrimaryText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("${session.branch} · ${session.status}", color = SecondaryText, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("${session.branch} / ${session.status}", color = SecondaryText, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text("Updated ${formatMetaTime(session.updatedAt)}", color = TertiaryText, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(session.hostId, color = TertiaryText, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
@@ -1695,7 +1827,7 @@ private fun TimelineStream(
                     shadowElevation = 6.dp
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        Text("↓", color = AppBlack, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                        Text("v", color = AppBlack, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
@@ -1772,7 +1904,7 @@ private fun TimelineBubble(event: TimelineItem) {
                 }
                 Text(bodyText, color = if (isUser) PrimaryText.copy(alpha = 0.92f) else SecondaryText, style = MaterialTheme.typography.bodyMedium)
                 Text(
-                    text = "${event.type} · ${formatMetaTime(event.createdAt)}",
+                    text = "${event.type} / ${formatMetaTime(event.createdAt)}",
                     color = if (isUser) PrimaryText.copy(alpha = 0.65f) else TertiaryText,
                     style = MaterialTheme.typography.labelSmall
                 )
@@ -1878,7 +2010,7 @@ private fun TimelineOperationRow(event: TimelineItem, expanded: Boolean, onExpan
                 Text(bodyText, color = SecondaryText, style = MaterialTheme.typography.bodySmall, maxLines = 4, overflow = TextOverflow.Ellipsis)
             }
         }
-        Text("${event.type} · ${formatMetaTime(event.createdAt)}", color = TertiaryText, style = MaterialTheme.typography.labelSmall)
+        Text("${event.type} / ${formatMetaTime(event.createdAt)}", color = TertiaryText, style = MaterialTheme.typography.labelSmall)
     }
 }
 

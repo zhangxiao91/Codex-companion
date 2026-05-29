@@ -26,6 +26,7 @@ The system now has three main pieces:
 - Use Relay-owned cloud incremental sync so reconnects check dirty sessions before requesting timeline pages
 - Send prompts to an online host
 - Queue simple follow-up prompts
+- Pick up new/updated Codex App sessions from Host Bridge polling without restarting the bridge
 - Show approval requests and completion / needs-input / host-offline notifications
 - Show Git status, diff summary, file diffs, commit confirmation, and push confirmation
 - Persist devices, hosts, sessions, timeline cache, queue state, approvals, notifications, and Git audit metadata in SQLite
@@ -153,12 +154,21 @@ Current Android builds prefer the Relay sync index when the server supports it:
 
 - Android asks Relay for `session.sync.index` after connecting.
 - Relay compares session revisions / timeline cursors against this device's last ack.
-- Android only requests timeline pages for dirty sessions or sessions the user opens.
+- Normal reconnects request dirty sessions first, then a small priority set: selected, active, needs-input, and recent sessions.
+- Android only requests timeline pages for dirty/priority sessions or sessions the user opens.
+- Manual refresh can still run a fuller clean-session refresh when needed.
 - After Room persistence, Android sends `session.sync.ack`.
 - Archive and pin are now stored per Android device in Relay sync state and restored from the sync index.
 - If the Relay is older and rejects the sync-index message, Android falls back to the previous local heuristic sync.
 
 This is meant to make reconnecting with dozens of sessions much faster and less timeout-prone.
+
+Host Bridge also polls Codex App Server for new or changed sessions every 5 seconds by default, then publishes changed `session.snapshot` messages to Relay. Tune with:
+
+```powershell
+$env:CMC_SESSION_POLL_INTERVAL_MS='5000'
+$env:CMC_SESSION_LIST_LIMIT='50'
+```
 
 ## Docs
 
@@ -185,6 +195,27 @@ npm run verify:rich-prompt-flow
 cd android
 .\gradlew.bat :app:assembleDebug --no-daemon
 ```
+
+## CI/CD
+
+The first CI pass lives in `.github/workflows/ci.yml`.
+
+On push, pull request, or manual workflow dispatch it:
+
+- installs Node dependencies with `npm ci`
+- runs `npm run ci:node`
+- installs Android SDK 36 / build tools 36.0.0
+- builds `:app:assembleDebug`
+- runs `:app:testDebugUnitTest`
+- uploads `app-debug.apk` as the `codex-mobile-companion-debug-apk` artifact
+
+This is intentionally continuous delivery, not automatic deployment. Server Relay and Host Bridge are not restarted by CI yet, so a failed or bad build cannot interrupt an active Codex session.
+
+Node/Relay/Bridge version metadata:
+
+- Relay `/health` now includes `version.relay` and `version.protocol`
+- Host Bridge registers and heartbeats with `bridge_version` and `protocol_version`
+- Android host rows can show bridge and protocol version metadata
 
 ## Notes
 

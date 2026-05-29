@@ -22,7 +22,7 @@ class RelayClient(
         fun onConnected()
         fun onDisconnected(reason: String)
         fun onHostSnapshot(host: HostNode)
-        fun onSessionSnapshot(session: CodexSession)
+        fun onSessionSnapshot(session: CodexSession, clientRequestId: String?)
         fun onApprovalRequest(approval: ApprovalItem)
         fun onGitSnapshot(snapshot: GitSnapshot)
         fun onGitAudit(sessionId: String, events: List<GitAuditItem>)
@@ -144,7 +144,8 @@ class RelayClient(
         selectedSessionId: String? = null,
         limit: Int = 200,
         includeArchived: Boolean = false,
-        includeClean: Boolean = false
+        includeClean: Boolean = false,
+        sessionIds: List<String> = emptyList()
     ): Boolean {
         val payload = JSONObject()
             .put("limit", limit.coerceIn(1, 500))
@@ -152,6 +153,9 @@ class RelayClient(
             .put("include_clean", includeClean)
         if (!selectedSessionId.isNullOrBlank()) {
             payload.put("selected_session_id", selectedSessionId)
+        }
+        if (sessionIds.isNotEmpty()) {
+            payload.put("session_ids", JSONArray(sessionIds.distinct().take(100)))
         }
         return send("session.sync.index", payload)
     }
@@ -232,7 +236,7 @@ class RelayClient(
         )
     }
 
-    fun createNewChat(hostId: String): Boolean {
+    fun createNewChat(hostId: String, clientRequestId: String = java.util.UUID.randomUUID().toString()): Boolean {
         return send(
             "session.create",
             JSONObject()
@@ -240,7 +244,7 @@ class RelayClient(
                 .put("ephemeral", false)
                 .put("persist_extended_history", true)
                 .put("service_name", "codex-mobile-companion")
-                .put("client_request_id", java.util.UUID.randomUUID().toString())
+                .put("client_request_id", clientRequestId)
         )
     }
 
@@ -442,9 +446,13 @@ class RelayClient(
                     parseHostSnapshot(message.getJSONObject("payload"))
                 )
 
-                "session.snapshot" -> listener.onSessionSnapshot(
-                    parseSession(message.getJSONObject("payload").getJSONObject("session"))
-                )
+                "session.snapshot" -> {
+                    val payload = message.getJSONObject("payload")
+                    listener.onSessionSnapshot(
+                        parseSession(payload.getJSONObject("session")),
+                        payload.optString("client_request_id", "").takeIf { it.isNotBlank() }
+                    )
+                }
 
                 "approval.request" -> listener.onApprovalRequest(
                     parseApproval(message.getJSONObject("payload").getJSONObject("approval"))
@@ -907,6 +915,7 @@ class RelayClient(
             sessionCount = payload.optInt("session_count", 0),
             lastSeenAt = host.optString("last_seen_at", ""),
             bridgeVersion = host.optString("bridge_version", ""),
+            protocolVersion = host.optString("protocol_version", ""),
             kind = host.optString("kind", "")
         )
     }

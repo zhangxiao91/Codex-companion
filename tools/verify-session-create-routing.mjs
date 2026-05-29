@@ -46,19 +46,23 @@ try {
 
   send(client, MessageType.SessionCreate, {
     host_id: hostId,
+    client_request_id: 'verify-create-request-001',
     ephemeral: false,
     persist_extended_history: true,
     service_name: 'codex-mobile-companion'
   }, deviceToken);
 
   const routedPersistent = await waitForMessage(host, (message) => message.type === MessageType.SessionCreate, 5000);
+  assertEqual(routedPersistent.payload.client_request_id, 'verify-create-request-001', 'session.create should route client_request_id to host');
   assertEqual(routedPersistent.payload.ephemeral, false, 'session.create should preserve ephemeral=false');
   assertEqual(routedPersistent.payload.persist_extended_history, true, 'session.create should request extended history persistence');
   send(host, MessageType.SessionSnapshot, {
-    session: session('persistent-session')
+    session: session('persistent-session'),
+    client_request_id: routedPersistent.payload.client_request_id
   }, devToken);
-  await waitForMessage(client, (message) => message.type === MessageType.SessionSnapshot
+  const createdSnapshot = await waitForMessage(client, (message) => message.type === MessageType.SessionSnapshot
     && message.payload.session.session_id === 'persistent-session', 5000);
+  assertEqual(createdSnapshot.payload.client_request_id, 'verify-create-request-001', 'session.snapshot should return client_request_id to client');
 
   send(client, MessageType.SessionCreateEphemeral, {
     host_id: hostId

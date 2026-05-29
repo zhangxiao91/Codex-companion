@@ -117,6 +117,7 @@ data class HostNode(
     val sessionCount: Int,
     val lastSeenAt: String,
     val bridgeVersion: String,
+    val protocolVersion: String,
     val kind: String
 )
 
@@ -322,5 +323,8 @@ data class SyncState(
     val pendingSessionCount: Int = 0,
     val confirmedSessionCount: Int = 0,
     val totalSessionCount: Int = 0,
+    val dirtySessionCount: Int = 0,
+    val unchangedSessionCount: Int = 0,
+    val prioritySessionCount: Int = 0,
     val summary: String = ""
 )
