@@ -4840,3 +4840,15 @@ Follow-up after first GitHub Actions run:
   - global `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`;
   - Node verification timeout increased to 35 minutes;
   - Android debug build timeout increased to 45 minutes for cold Gradle/SDK runs.
+
+Second follow-up after the 35 minute run also timed out:
+
+- Replaced the single opaque `npm run ci:node` CI step with individually named verify steps, each with its own timeout.
+- Increased the Node verification job timeout to 45 minutes, while keeping per-step timeouts short so the next failure identifies the exact slow/hung verifier.
+- Updated GitHub-maintained actions to Node 24 capable major versions:
+  - `actions/checkout@v5`;
+  - `actions/setup-node@v5`;
+  - `actions/setup-java@v5`;
+  - `gradle/actions/setup-gradle@v6`;
+  - `actions/upload-artifact@v6`.
+- Removed the third-party Android setup action and now calls the hosted runner `sdkmanager` directly through `$ANDROID_HOME`.

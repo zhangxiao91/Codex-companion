@@ -16,22 +16,77 @@ jobs:
   node-verify:
     name: Node verification
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '24'
           cache: npm
 
       - name: Install dependencies
+        timeout-minutes: 5
         run: npm ci
 
       - name: Node syntax and protocol verification
-        run: npm run ci:node
+        timeout-minutes: 3
+        run: |
+          node --check relay/service/server.mjs
+          node --check bridge/host-bridge/index.mjs
+          node --check bridge/host-bridge/codex-adapter.mjs
+          node --check packages/protocol/index.mjs
+          node --check packages/protocol/version.mjs
+
+      - name: Verify relay health
+        timeout-minutes: 4
+        run: npm run verify:relay-health
+
+      - name: Verify relay dev token
+        timeout-minutes: 4
+        run: npm run verify:relay-dev-token
+
+      - name: Verify token separation
+        timeout-minutes: 4
+        run: npm run verify:relay-token-separation
+
+      - name: Verify sync index
+        timeout-minutes: 5
+        run: npm run verify:relay-sync-index
+
+      - name: Verify archive and pin state
+        timeout-minutes: 4
+        run: npm run verify:relay-cloud-archive-pin
+
+      - name: Verify state sync regressions
+        timeout-minutes: 5
+        run: npm run verify:state-sync-regressions
+
+      - name: Verify session create routing
+        timeout-minutes: 4
+        run: npm run verify:session-create-routing
+
+      - name: Verify timeline cache
+        timeout-minutes: 4
+        run: npm run verify:relay-timeline-cache
+
+      - name: Verify notification events
+        timeout-minutes: 5
+        run: npm run verify:notification-events
+
+      - name: Verify host device trust
+        timeout-minutes: 6
+        run: npm run verify:host-device-trust
+
+      - name: Verify server relay config
+        timeout-minutes: 5
+        run: npm run verify:server-relay-config
+
+      - name: Verify Windows bridge service helper
+        timeout-minutes: 4
+        run: npm run verify:windows-bridge-service
 
   android-debug:
     name: Android debug build
@@ -40,22 +95,22 @@ jobs:
     needs: node-verify
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up JDK
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Install Android SDK packages
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+        run: |
+          SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
 
       - name: Make Gradle executable
         run: chmod +x android/gradlew
@@ -69,7 +124,7 @@ jobs:
         run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
 
       - name: Upload debug APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: codex-mobile-companion-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
@@ -78,7 +133,7 @@ jobs:
 
       - name: Upload unit test reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: android-unit-test-reports
           path: android/app/build/reports/tests/testDebugUnitTest
